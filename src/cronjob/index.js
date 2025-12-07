@@ -1,10 +1,10 @@
 import cron from "node-cron";
 import mongoose from "mongoose";
 import { MongoClient } from "mongodb";
-import { destructObjectId } from "../util";
+import { destructObjectId } from "../utils";
 import { getPostsCatesByIds } from "../api/services/post";
 import User from "../api/models/user.model";
-import { ObjectId } from "../util";
+import { ObjectId } from "../utils";
 
 export const createDailyCollectionCron = () => {
   cron.schedule("0 0 * * *", () => {

@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
-import { ObjectId } from "../../util/index.js";
+import { OK } from "../../core/success.response.js";
+import { ObjectId } from "../../utils/index.js";
 import AnalyticsModel from "../models/analytics.model.js";
 
 interface CreateEventRequest extends Request {
@@ -15,30 +16,29 @@ interface CreateEventRequest extends Request {
 }
 
 export const createEvent = async (req: CreateEventRequest, res: Response) => {
-  try {
-    const {
-      userId,
-      event,
-      payload,
-      deviceInfo,
-      browserInfo,
-      localeInfo,
-      webInfo,
-    } = req.body;
-    const newEvent = new AnalyticsModel({
-      event: event,
-      userId: ObjectId(userId),
-      payload: payload,
-      deviceInfo: deviceInfo,
-      browserInfo: browserInfo,
-      localeInfo: localeInfo,
-      webInfo: webInfo,
-    });
-    await newEvent.save();
-    res.status(200).json("OK");
-  } catch (err) {
-    console.log("createEvent: ", err);
-  }
+  const {
+    userId,
+    event,
+    payload,
+    deviceInfo,
+    browserInfo,
+    localeInfo,
+    webInfo,
+  } = req.body;
+  const newEvent = new AnalyticsModel({
+    event: event,
+    userId: ObjectId(userId),
+    payload: payload,
+    deviceInfo: deviceInfo,
+    browserInfo: browserInfo,
+    localeInfo: localeInfo,
+    webInfo: webInfo,
+  });
+  await newEvent.save();
+  new OK({
+    message: "Event created successfully",
+    metadata: {},
+  }).send(res);
 };
 
 export const getEvents = async (req: any, res: any) => {

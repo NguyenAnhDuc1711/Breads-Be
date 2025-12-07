@@ -1,8 +1,14 @@
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import { genRandomCode } from "../../Breads-Shared/util/index.js";
-import { deleteCache, getCache, setCache } from "../../redis/index.ts";
-import HTTPStatus from "../../util/httpStatus.js";
-import { ObjectId } from "../../util/index.js";
+import {
+  AuthFailureError,
+  BadRequestError,
+  NotFoundError,
+} from "../../core/error.response.js";
+import { CREATED, OK } from "../../core/success.response.js";
+import { deleteCache, getCache, setCache } from "../../dbs/redis.ts";
+import HTTPStatus from "../../utils/httpStatus.js";
+import { ObjectId } from "../../utils/index.js";
 import { crawlUser } from "../crawl.js";
 import Collection from "../models/collection.model.js";
 import Post from "../models/post.model.js";
@@ -13,209 +19,177 @@ import generateTokenAndSetCookie from "../utils/genarateTokenAndSetCookie.js";
 import { uploadFileFromBase64, validateEmailForm } from "../utils/index.js";
 
 export const getAdminAccount = async (req, res) => {
-  try {
-    let adminAccount = await User.findOne({
+  let adminAccount = await User.findOne({
+    role: Constants.USER_ROLE.ADMIN,
+  });
+  if (!adminAccount) {
+    const newAdmin = new User({
+      email: "admin@gmail.com",
+      name: "Admin",
+      username: "Admin",
+      password: "123456",
       role: Constants.USER_ROLE.ADMIN,
     });
-    if (!adminAccount) {
-      const newAdmin = new User({
-        email: "admin@gmail.com",
-        name: "Admin",
-        username: "Admin",
-        password: "123456",
-        role: Constants.USER_ROLE.ADMIN,
-      });
-      const result = await newAdmin.save();
-      return res.status(HTTPStatus.CREATED).json(result);
-    }
-    const adminCollection = await Collection.findOne(
-      { userId: adminAccount._id },
-      { postsId: 1 }
-    );
-    adminAccount.collection = adminCollection;
-    res.status(HTTPStatus.OK).json(adminAccount);
-  } catch (err) {
-    console.log(err);
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
+    const result = await newAdmin.save();
+    return res.status(HTTPStatus.CREATED).json(result);
   }
+  const adminCollection = await Collection.findOne(
+    { userId: adminAccount._id },
+    { postsId: 1 }
+  );
+  adminAccount.collection = adminCollection;
+  new OK({
+    message: "Admin account fetched successfully",
+    metadata: adminAccount,
+  }).send(res);
 };
+
 //sign up
 export const signupUser = async (req, res) => {
-  try {
-    const { name, email, username, password } = req.body;
-    const userEmail = await User.findOne({ email });
-    const userUsername = await User.findOne({ username });
-    if (userUsername?._id) {
-      return res.status(HTTPStatus.BAD_REQUEST).json({
-        errorType: "USERNAME_EXISTS",
-        error: "Tên người dùng đã tồn tại",
-      });
-    }
-    if (userEmail?._id) {
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ errorType: "EMAIL_EXISTS", error: "Email đã tồn tại" });
-    }
+  const { name, email, username, password } = req.body;
+  const userEmail = await User.findOne({ email });
+  const userUsername = await User.findOne({ username });
+  if (userUsername?._id) {
+    throw new BadRequestError("Username already exists");
+  }
+  if (userEmail?._id) {
+    throw new BadRequestError("Email already exists");
+  }
 
-    // const salt = await bcrypt.genSalt(10);
-    // const hashPassword = await bcrypt.hash(password, salt);
+  // const salt = await bcrypt.genSalt(10);
+  // const hashPassword = await bcrypt.hash(password, salt);
 
-    // const newUser = new User({
-    //   name,
-    //   email,
-    //   username,
-    //   password: password,
-    // });
-    // await newUser.save();
+  // const newUser = new User({
+  //   name,
+  //   email,
+  //   username,
+  //   password: password,
+  // });
+  // await newUser.save();
 
-    // if (newUser) {
-    //   // generateTokenAndSetCookie(newUser._id, res);
-    //   res.status(HTTPStatus.CREATED).json({ message: "Tạo mới thành công" });
-    // } else {
-    //   res
-    //     .status(HTTPStatus.BAD_REQUEST)
-    //     .json({ error: "Tạo mới không thành công" });
-    // }
-    const expireTime = 10; // Minutes
-    const code = genRandomCode();
-    const result = await sendMailService({
-      from: "mraducky@gmail.com",
-      to: email,
-      subject: "Validation for creating Breads account",
-      html: validateEmailForm(code, expireTime),
-    });
+  // if (newUser) {
+  //   // generateTokenAndSetCookie(newUser._id, res);
+  //   res.status(HTTPStatus.CREATED).json({ message: "Tạo mới thành công" });
+  // } else {
+  //   res
+  //     .status(HTTPStatus.BAD_REQUEST)
+  //     .json({ error: "Tạo mới không thành công" });
+  // }
+  const expireTime = 10; // Minutes
+  const code = genRandomCode();
+  const result = await sendMailService({
+    from: "mraducky@gmail.com",
+    to: email,
+    subject: "Validation for creating Breads account",
+    html: validateEmailForm(code, expireTime),
+  });
 
-    if (result) {
-      const keyCache = `mail_validation_${email}`;
-      await setCache(
-        keyCache,
-        JSON.stringify({ name, email, username, password, code }),
-        expireTime * 60
-      );
-      res.status(HTTPStatus.OK).json("Mail was sent");
-    }
-  } catch (err) {
-    res.status(HTTPStatus.SERVER_ERR).json({ error: "Server error" });
-    console.log("Error in Signup User", err.message);
+  if (result) {
+    const keyCache = `mail_validation_${email}`;
+    await setCache(
+      keyCache,
+      JSON.stringify({ name, email, username, password, code }),
+      expireTime * 60
+    );
+    new OK({
+      message: "Mail was sent",
+      metadata: {},
+    }).send(res);
   }
 };
 
 export const validateEmailByCode = async (req, res) => {
-  try {
-    const { email, code } = req.body;
-    const keyCache = `mail_validation_${email}`;
-    const validationMailInfo = JSON.parse(await getCache(keyCache));
-    if (validationMailInfo) {
-      if (code === validationMailInfo?.code) {
-        const { name, username, password } = validationMailInfo;
-        const newUser = new User({
-          name,
-          email,
-          username,
-          password: password,
-        });
-        await newUser.save();
+  const { email, code } = req.body;
+  const keyCache = `mail_validation_${email}`;
+  const validationMailInfo = JSON.parse(await getCache(keyCache));
+  if (validationMailInfo) {
+    if (code === validationMailInfo?.code) {
+      const { name, username, password } = validationMailInfo;
+      const newUser = new User({
+        name,
+        email,
+        username,
+        password: password,
+      });
+      await newUser.save();
 
-        if (newUser) {
-          // generateTokenAndSetCookie(newUser._id, res);
-          await deleteCache(keyCache);
-          return res
-            .status(HTTPStatus.CREATED)
-            .json({ message: "Tạo mới thành công" });
-        } else {
-          return res
-            .status(HTTPStatus.BAD_REQUEST)
-            .json({ error: "Tạo mới không thành công" });
-        }
+      if (newUser) {
+        // generateTokenAndSetCookie(newUser._id, res);
+        await deleteCache(keyCache);
+        new CREATED({
+          message: "Create new user successfully",
+          metadata: {},
+        }).send(res);
       } else {
-        return res.status(HTTPStatus.BAD_REQUEST).json({
-          errorType: "INCORRECT_CODE",
-          error: "Incorrect code",
-        });
+        throw new BadRequestError("Create new user failed");
       }
     } else {
-      return res.status(HTTPStatus.BAD_REQUEST).json({
-        errorType: "EXPIRED_CODE",
-        error: "Validation code has been expired",
-      });
+      throw new BadRequestError("Incorrect code");
     }
-  } catch (err) {
-    console.log("validateEmailByCode err: ", err);
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
+  } else {
+    throw new BadRequestError("Validation code has been expired");
   }
 };
 
 //login
 export const loginUser = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const user = await User.findOne({ email: email });
-    const isPasswordCorrect = password == user?.password;
-    // await bcrypt.compare(
-    //   password,
-    //   user?.password || ""
-    // );
+  const { email, password } = req.body;
+  const user = await User.findOne({ email: email });
+  const isPasswordCorrect = password == user?.password;
+  // await bcrypt.compare(
+  //   password,
+  //   user?.password || ""
+  // );
 
-    if (!user) {
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ error: "Tài khoản không tồn tại" });
-    }
-    if (!isPasswordCorrect) {
-      return res
-        .status(HTTPStatus.UNAUTHORIZED)
-        .json({ error: "Mật khẩu sai" });
-    }
-
-    // generateTokenAndSetCookie(user._id, res);
-    const result = await getUserInfo(user._id);
-    generateTokenAndSetCookie(user._id, res);
-
-    res.status(HTTPStatus.OK).json(result);
-  } catch (err) {
-    res.status(HTTPStatus.SERVER_ERR).json({ error: "Server error" });
-    console.log("Error in loginUser", err.message);
+  if (!user) {
+    throw new BadRequestError("Account not found");
   }
+  if (!isPasswordCorrect) {
+    throw new AuthFailureError("Wrong password");
+  }
+
+  // generateTokenAndSetCookie(user._id, res);
+  const result = await getUserInfo(user._id);
+  generateTokenAndSetCookie(user._id, res);
+
+  new OK({
+    message: "Login successfully",
+    metadata: result,
+  }).send(res);
 };
 
 // logout
 export const logoutUser = async (req, res) => {
-  try {
-    res.cookie("jwt", "", { maxAge: 1 });
-    res.status(HTTPStatus.OK).json({ message: "User log out successfully!" });
-  } catch (err) {
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
-    console.log("Error in logoutUser", err.message);
-  }
+  res.cookie("jwt", "", { maxAge: 1 });
+  new OK({
+    message: "User log out successfully",
+    metadata: {},
+  }).send(res);
 };
 
 //follow and unfollow
 export const followUser = async (req, res) => {
-  try {
-    const { userFlId, userId } = req.body;
-    if (!userFlId || !userId) {
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ error: "Empty payload" });
-    }
-    const userInfo = await User.findOne({ _id: ObjectId(userId) });
-    if (!userInfo) {
-      return res.status(HTTPStatus.NOT_FOUND).json({ error: "Invalid user" });
-    }
-    const userFollowing = JSON.parse(JSON.stringify(userInfo))?.following;
-    const isFollowing = userFollowing?.includes(userFlId);
-    if (isFollowing) {
-      await updateFollow(userId, userFlId, false, true);
-      await updateFollow(userFlId, userId, false, false);
-    } else {
-      await updateFollow(userId, userFlId, true, true);
-      await updateFollow(userFlId, userId, true, false);
-    }
-    res.status(HTTPStatus.OK).json("ok");
-  } catch (err) {
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
-    console.log("Error in followUnFollowUser", err.message);
+  const { userFlId, userId } = req.body;
+  if (!userFlId || !userId) {
+    throw new BadRequestError("Empty payload");
   }
+  const userInfo = await User.findOne({ _id: ObjectId(userId) });
+  if (!userInfo) {
+    throw new NotFoundError("User not found");
+  }
+  const userFollowing = JSON.parse(JSON.stringify(userInfo))?.following;
+  const isFollowing = userFollowing?.includes(userFlId);
+  if (isFollowing) {
+    await updateFollow(userId, userFlId, false, true);
+    await updateFollow(userFlId, userId, false, false);
+  } else {
+    await updateFollow(userId, userFlId, true, true);
+    await updateFollow(userFlId, userId, true, false);
+  }
+  new OK({
+    message: "Follow user successfully",
+    metadata: {},
+  }).send(res);
 };
 
 // update
@@ -223,422 +197,373 @@ export const updateUser = async (req, res) => {
   const payload = req.body;
   const userId = req.params.id;
 
-  try {
-    let user = await User.findById(userId);
-    if (!user)
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ error: "User not found" });
-    if (req.params.id !== userId.toString())
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ error: "You can't update other user's profile!" });
+  let user = await User.findById(userId);
+  if (!user) throw new BadRequestError("User not found");
+  if (req.params.id !== userId.toString())
+    throw new BadRequestError("You can't update other user's profile!");
 
-    // if (password) {
-    //   const salt = await bcrypt.genSalt(10);
-    //   const hashedPassword = await bcrypt.hash(password, salt);
-    //   user.password = hashedPassword;
-    // }
+  // if (password) {
+  //   const salt = await bcrypt.genSalt(10);
+  //   const hashedPassword = await bcrypt.hash(password, salt);
+  //   user.password = hashedPassword;
+  // }
 
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    for (const [key, value] of Object.entries(payload)) {
-      let valueUpdate = null;
-      switch (key) {
-        case "avatar":
-          if (value !== user.avatar) {
-            valueUpdate = await uploadFileFromBase64({
-              base64: value,
-            });
-          }
-          break;
-        case "links":
-          const checkLinks = (value as string[]).every(
-            (link) => link.match(urlRegex)?.length > 0
-          );
-          if (checkLinks) {
-            valueUpdate = value;
-          }
-          break;
-        default:
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  for (const [key, value] of Object.entries(payload)) {
+    let valueUpdate = null;
+    switch (key) {
+      case "avatar":
+        if (value !== user.avatar) {
+          valueUpdate = await uploadFileFromBase64({
+            base64: value,
+          });
+        }
+        break;
+      case "links":
+        const checkLinks = (value as string[]).every(
+          (link) => link.match(urlRegex)?.length > 0
+        );
+        if (checkLinks) {
           valueUpdate = value;
-      }
-      if (valueUpdate) {
-        user[key] = valueUpdate;
-      }
+        }
+        break;
+      default:
+        valueUpdate = value;
     }
-
-    user = await user.save();
-    const result = await getUserInfo(userId);
-    delete result.password;
-
-    res.status(HTTPStatus.OK).json(result);
-  } catch (err) {
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
-    console.log("Can't updateUser", err.message);
+    if (valueUpdate) {
+      user[key] = valueUpdate;
+    }
   }
+
+  user = await user.save();
+  const result = await getUserInfo(userId);
+  delete result.password;
+
+  new OK({
+    message: "Update user successfully",
+    metadata: result,
+  }).send(res);
 };
 
 export const changePassword = async (req, res) => {
-  try {
-    const { currentPW, newPW } = req.body;
-    const forgotPW = req.body?.forgotPW;
-    const userId = req.params.id;
-    if (!userId) {
-      return res.status(HTTPStatus.BAD_REQUEST).json({ error: "Empty userId" });
-    }
-    if ((!currentPW || !newPW) && !forgotPW) {
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ error: "Empty payload" });
-    }
-    const user = await User.findOne({ _id: ObjectId(userId) });
-    if (!user) {
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ error: "User not found" });
-    }
-    if (user.password !== currentPW && !forgotPW) {
-      return res
-        .status(HTTPStatus.UNAUTHORIZED)
-        .json({ error: "Wrong password" });
-    } else if (newPW.length < 6) {
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json("Password must be at least 6 characters");
-    } else if (currentPW === newPW && !forgotPW) {
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ error: "Nothing change" });
-    }
-    await User.updateOne(
-      { _id: ObjectId(userId) },
-      {
-        password: newPW,
-      }
-    );
-    return res.status(HTTPStatus.OK).json("Success");
-  } catch (err) {
-    console.log(err);
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
+  const { currentPW, newPW } = req.body;
+  const forgotPW = req.body?.forgotPW;
+  const userId = req.params.id;
+  if (!userId) {
+    throw new BadRequestError("Empty userId");
   }
+  if ((!currentPW || !newPW) && !forgotPW) {
+    throw new BadRequestError("Empty payload");
+  }
+  const user = await User.findOne({ _id: ObjectId(userId) });
+  if (!user) {
+    throw new BadRequestError("User not found");
+  }
+  if (user.password !== currentPW && !forgotPW) {
+    throw new AuthFailureError("Wrong password");
+  } else if (newPW.length < 6) {
+    throw new BadRequestError("Password must be at least 6 characters");
+  } else if (currentPW === newPW && !forgotPW) {
+    throw new BadRequestError("Nothing change");
+  }
+  await User.updateOne(
+    { _id: ObjectId(userId) },
+    {
+      password: newPW,
+    }
+  );
+  new OK({
+    message: "Change password successfully",
+    metadata: {},
+  }).send(res);
 };
 
 //get user profile
 
 export const getUserProfile = async (req, res) => {
   const { userId } = req.params;
-  try {
-    let user = null;
-    if (!userId) {
-      return res.status(HTTPStatus.NO_CONTENT).json({ error: "Empty payload" });
-    }
-    user = await getUserInfo(userId);
-    if (!user)
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ error: "User not found!" });
-    res.status(HTTPStatus.OK).json(user);
-  } catch (err) {
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
-    console.log("Can't be get your userProfile!!");
+  let user = null;
+  if (!userId) {
+    throw new BadRequestError("Empty payload");
   }
+  user = await getUserInfo(userId);
+  if (!user) throw new BadRequestError("User not found!");
+  res.status(HTTPStatus.OK).json(user);
 };
 
 export const getUserToFollows = async (req, res) => {
-  try {
-    const { userId, page, limit, searchValue } = req.query;
-    const isTest = req.query?.isTest ?? false;
-    if (isTest) {
-      const users = await User.find(
-        {},
-        {
-          _id: 1,
-          username: 1,
-          avatar: 1,
-        }
-      );
-      return res.status(HTTPStatus.OK).json(users);
-    }
-    if (!userId) {
-      return res.status(HTTPStatus.UNAUTHORIZED).json({ error: "Unauthorize" });
-    }
-    if (!page || !limit) {
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ error: "Need page and limit" });
-    }
-    const userInfo = await User.findOne({ _id: ObjectId(userId) });
-    const userCatesCare = userInfo?.catesCare;
-    // let userFollowed = userInfo?.following ?? [];
-    // userFollowed = userFollowed.map((id) => ObjectId(id));
-    // const invalidToFollow = [...userFollowed, ObjectId(userId)];
-    const invalidToFollow = [ObjectId(userId)];
+  const { userId, page, limit, searchValue } = req.query;
+  const isTest = req.query?.isTest ?? false;
+  if (isTest) {
+    const users = await User.find(
+      {},
+      {
+        _id: 1,
+        username: 1,
+        avatar: 1,
+      }
+    );
+    return res.status(HTTPStatus.OK).json(users);
+  }
+  if (!userId) {
+    throw new AuthFailureError("Unauthorize");
+  }
+  if (!page || !limit) {
+    throw new BadRequestError("Need page and limit");
+  }
+  const userInfo = await User.findOne({ _id: ObjectId(userId) });
+  const userCatesCare = userInfo?.catesCare;
+  // let userFollowed = userInfo?.following ?? [];
+  // userFollowed = userFollowed.map((id) => ObjectId(id));
+  // const invalidToFollow = [...userFollowed, ObjectId(userId)];
+  const invalidToFollow = [ObjectId(userId)];
 
-    const agg = [
-      {
-        $match: {
-          _id: { $nin: invalidToFollow },
-          username: { $regex: searchValue, $options: "i" },
-        },
+  const agg = [
+    {
+      $match: {
+        _id: { $nin: invalidToFollow },
+        username: { $regex: searchValue, $options: "i" },
       },
-      {
-        $addFields: {
-          matchedCategories: {
-            $filter: {
-              input: "$catesCare",
-              as: "category",
-              cond: { $in: ["$$category", userCatesCare] },
-            },
+    },
+    {
+      $addFields: {
+        matchedCategories: {
+          $filter: {
+            input: "$catesCare",
+            as: "category",
+            cond: { $in: ["$$category", userCatesCare] },
           },
         },
       },
-      {
-        $addFields: {
-          score: {
-            $add: [
-              {
-                $multiply: [
-                  { $size: { $ifNull: ["$matchedCategories", []] } },
-                  5,
-                ],
-              },
-              { $multiply: [{ $size: { $ifNull: ["$followed", []] } }, 2] },
-            ],
-          },
-        },
-      },
-      {
-        $sort: { score: -1 },
-      },
-    ];
-    const data = await getUsersByPage({
-      page,
-      limit,
-      agg,
-    });
-    res.status(HTTPStatus.OK).json(data);
-  } catch (err) {
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
-  }
-};
-
-export const handleCrawlFakeUsers = async (req, res) => {
-  try {
-    await crawlUser();
-    res.status(HTTPStatus.OK).json("Crawl success");
-  } catch (err) {
-    console.log("handleCrawlFakeUsers: ", err);
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
-  }
-};
-
-export const getUsersFollow = async (req, res) => {
-  try {
-    const { userId } = req.query;
-    if (!userId) {
-      return res.status(HTTPStatus.BAD_REQUEST).json({ error: "Empty userId" });
-    }
-    const userInfo = await User.findOne({ _id: ObjectId(userId) });
-    if (!userInfo) {
-      return res.status(HTTPStatus.NOT_FOUND).json({ error: "Invalid user" });
-    }
-    const followedUsers = await User.find(
-      {
-        _id: { $in: userInfo.followed },
-      },
-      {
-        _id: 1,
-        avatar: 1,
-        username: 1,
-        name: 1,
-        bio: 1,
-      }
-    );
-    const followingUsers = await User.find(
-      {
-        _id: { $in: userInfo.following },
-      },
-      {
-        _id: 1,
-        avatar: 1,
-        username: 1,
-        name: 1,
-        bio: 1,
-      }
-    );
-    res.status(HTTPStatus.OK).json({
-      followed: followedUsers,
-      following: followingUsers,
-    });
-  } catch (err) {
-    console.log("getUsersFollow: ", err);
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
-  }
-};
-
-export const getUsersToTag = async (req, res) => {
-  try {
-    let { userId, page, limit, searchValue } = req.query;
-    if (!userId) {
-      return res.status(HTTPStatus.UNAUTHORIZED).json({ error: "Unauthorize" });
-    }
-    if (!page) {
-      page = 1;
-    }
-    if (!limit) {
-      limit = 20;
-    }
-    const agg = [
-      {
-        $match: {
-          $and: [
+    },
+    {
+      $addFields: {
+        score: {
+          $add: [
             {
-              $or: [
-                { username: { $regex: searchValue, $options: "i" } },
-                { name: { $regex: searchValue, $options: "i" } },
+              $multiply: [
+                { $size: { $ifNull: ["$matchedCategories", []] } },
+                5,
               ],
             },
-            { _id: { $ne: ObjectId(userId) } },
+            { $multiply: [{ $size: { $ifNull: ["$followed", []] } }, 2] },
           ],
         },
       },
-    ];
-    const data = await getUsersByPage({ page, limit, agg });
-    res.status(HTTPStatus.OK).json(data);
-    return data;
-  } catch (err) {
-    console.log("getUsersToTag: ", err);
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
+    },
+    {
+      $sort: { score: -1 },
+    },
+  ];
+  const data = await getUsersByPage({
+    page,
+    limit,
+    agg,
+  });
+  new OK({
+    message: "Get users to follow successfully",
+    metadata: data,
+  }).send(res);
+};
+
+export const handleCrawlFakeUsers = async (req, res) => {
+  await crawlUser();
+  new OK({
+    message: "Crawl success",
+    metadata: {},
+  }).send(res);
+};
+
+export const getUsersFollow = async (req, res) => {
+  const { userId } = req.query;
+  if (!userId) {
+    throw new BadRequestError("Empty userId");
   }
+  const userInfo = await User.findOne({ _id: ObjectId(userId) });
+  if (!userInfo) {
+    throw new NotFoundError("Invalid user");
+  }
+  const followedUsers = await User.find(
+    {
+      _id: { $in: userInfo.followed },
+    },
+    {
+      _id: 1,
+      avatar: 1,
+      username: 1,
+      name: 1,
+      bio: 1,
+    }
+  );
+  const followingUsers = await User.find(
+    {
+      _id: { $in: userInfo.following },
+    },
+    {
+      _id: 1,
+      avatar: 1,
+      username: 1,
+      name: 1,
+      bio: 1,
+    }
+  );
+  new OK({
+    message: "Get users follow successfully",
+    metadata: {
+      followed: followedUsers,
+      following: followingUsers,
+    },
+  }).send(res);
+};
+
+export const getUsersToTag = async (req, res) => {
+  let { userId, page, limit, searchValue } = req.query;
+  if (!userId) {
+    throw new AuthFailureError("Unauthorize");
+  }
+  if (!page) {
+    page = 1;
+  }
+  if (!limit) {
+    limit = 20;
+  }
+  const agg = [
+    {
+      $match: {
+        $and: [
+          {
+            $or: [
+              { username: { $regex: searchValue, $options: "i" } },
+              { name: { $regex: searchValue, $options: "i" } },
+            ],
+          },
+          { _id: { $ne: ObjectId(userId) } },
+        ],
+      },
+    },
+  ];
+  const data = await getUsersByPage({ page, limit, agg });
+  new OK({
+    message: "Get users to tag successfully",
+    metadata: data,
+  }).send(res);
 };
 
 export const checkValidUser = async (req, res) => {
-  try {
-    const payload = req.body;
-    const userId = payload?.userId;
-    const userEmail = payload?.userEmail;
-    if (!userId && !userEmail) {
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ error: "Empty payload" });
-    }
-    const emailRegex = /\S+@\S+\.\S+/;
-    if (!emailRegex.test(userEmail)) {
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ error: "Invalid email type" });
-    }
-    const userInfo = await User.findOne({
-      $or: [{ _id: ObjectId(userId) }, { email: userEmail }],
-    });
-    if (userInfo) {
-      return res.status(HTTPStatus.OK).json(true);
-    } else {
-      return res.status(HTTPStatus.OK).json(false);
-    }
-  } catch (err) {
-    console.log("checkValidUser :", err);
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
+  const payload = req.body;
+  const userId = payload?.userId;
+  const userEmail = payload?.userEmail;
+  if (!userId && !userEmail) {
+    throw new BadRequestError("Empty payload");
+  }
+  const emailRegex = /\S+@\S+\.\S+/;
+  if (!emailRegex.test(userEmail)) {
+    throw new BadRequestError("Invalid email type");
+  }
+  const userInfo = await User.findOne({
+    $or: [{ _id: ObjectId(userId) }, { email: userEmail }],
+  });
+  if (userInfo) {
+    new OK({
+      message: "User is valid",
+      metadata: true,
+    }).send(res);
+  } else {
+    new OK({
+      message: "User is not valid",
+      metadata: false,
+    }).send(res);
   }
 };
 
 export const getUserIdFromEmail = async (req, res) => {
-  try {
-    const { userEmail } = req.body;
-    if (!userEmail) {
-      return res.status(HTTPStatus.BAD_REQUEST).json({ error: "Empty email" });
-    }
-    const userInfo = await User.findOne({
-      email: userEmail,
-    });
-    res.status(HTTPStatus.OK).json(userInfo._id);
-  } catch (err) {
-    console.log("getUserIdFromEmail: ", err);
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
+  const { userEmail } = req.body;
+  if (!userEmail) {
+    throw new BadRequestError("Empty email");
   }
+  const userInfo = await User.findOne({
+    email: userEmail,
+  });
+  new OK({
+    message: "Get user id from email successfully",
+    metadata: userInfo._id,
+  }).send(res);
 };
 
 export const getUsersPendingPost = async (req, res) => {
-  try {
-    const { userId, page, limit, searchValue } = req.body;
-    const skip = (page - 1) * limit;
-    if (!userId) {
-      return res.status(HTTPStatus.UNAUTHORIZED).json({ error: "Unauthorize" });
-    }
-    if (!page || !limit) {
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ error: "Need page and limit" });
-    }
-    const userInfo = await User.findOne({ _id: ObjectId(userId) });
-    const isAdmin = userInfo?.role === Constants.USER_ROLE.ADMIN;
-    if (!isAdmin) {
-      return res
-        .status(HTTPStatus.UNAUTHORIZED)
-        .json({ error: "Only for admin" });
-    }
-    const authorIds = (
-      await Post.find(
-        { status: Constants.POST_STATUS.PENDING },
-        { _id: 0, authorId: 1 }
-      ).lean()
-    )?.map(({ authorId }) => authorId);
-    const users = await User.find(
-      {
-        _id: { $in: authorIds },
-        username: { $regex: searchValue, $options: "i" },
-      },
-      {
-        _id: 1,
-        username: 1,
-        avatar: 1,
-      }
-    )
-      .skip(skip)
-      .limit(limit);
-    return res.status(HTTPStatus.OK).json(users);
-  } catch (err) {
-    console.log("getPostPendingUsers: ", err);
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
+  const { userId, page, limit, searchValue } = req.body;
+  const skip = (page - 1) * limit;
+  if (!userId) {
+    throw new AuthFailureError("Unauthorize");
   }
+  if (!page || !limit) {
+    throw new BadRequestError("Need page and limit");
+  }
+  const userInfo = await User.findOne({ _id: ObjectId(userId) });
+  const isAdmin = userInfo?.role === Constants.USER_ROLE.ADMIN;
+  if (!isAdmin) {
+    throw new AuthFailureError("Only for admin");
+  }
+  const authorIds = (
+    await Post.find(
+      { status: Constants.POST_STATUS.PENDING },
+      { _id: 0, authorId: 1 }
+    ).lean()
+  )?.map(({ authorId }) => authorId);
+  const users = await User.find(
+    {
+      _id: { $in: authorIds },
+      username: { $regex: searchValue, $options: "i" },
+    },
+    {
+      _id: 1,
+      username: 1,
+      avatar: 1,
+    }
+  )
+    .skip(skip)
+    .limit(limit);
+  new OK({
+    message: "Get users pending post successfully",
+    metadata: users,
+  }).send(res);
 };
 
 export const getUsersWithStatus = async (req, res) => {
-  try {
-    const { userId, page, limit, searchValue } = req.query;
-    if (!userId) {
-      return res.status(HTTPStatus.BAD_REQUEST).json({ error: "Empty userId" });
-    }
-    const userInfo = await User.findOne({
-      _id: ObjectId(userId),
-    });
-    const isAdmin = userInfo.role === Constants.USER_ROLE.ADMIN;
-    if (!isAdmin) {
-      return res
-        .status(HTTPStatus.UNAUTHORIZED)
-        .json("You don't have access to this");
-    }
-    let agg = searchValue
-      ? [
-          {
-            $match: {
-              username: { $regex: searchValue, $options: "i" },
-            },
+  const { userId, page, limit, searchValue } = req.query;
+  if (!userId) {
+    return res.status(HTTPStatus.BAD_REQUEST).json({ error: "Empty userId" });
+  }
+  const userInfo = await User.findOne({
+    _id: ObjectId(userId),
+  });
+  const isAdmin = userInfo.role === Constants.USER_ROLE.ADMIN;
+  if (!isAdmin) {
+    return res
+      .status(HTTPStatus.UNAUTHORIZED)
+      .json("You don't have access to this");
+  }
+  let agg = searchValue
+    ? [
+        {
+          $match: {
+            username: { $regex: searchValue, $options: "i" },
           },
-        ]
-      : [];
-    const data = await getUsersByPage({
-      page,
-      limit,
-      agg,
-    });
-    const count = await User.countDocuments(agg);
-    res.status(HTTPStatus.OK).json({
+        },
+      ]
+    : [];
+  const data = await getUsersByPage({
+    page,
+    limit,
+    agg,
+  });
+  const count = await User.countDocuments(agg);
+  console.log("count: ", count);
+  new OK({
+    message: "Get users with status successfully",
+    metadata: {
       count,
       users: data,
-    });
-  } catch (err) {
-    console.log("getUsersWithStatus: ", err);
-    res.status(HTTPStatus.SERVER_ERR).json({ error: err.message });
-  }
+    },
+  }).send(res);
 };

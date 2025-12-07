@@ -1,7 +1,7 @@
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import PageConstant from "../../Breads-Shared/Constants/PageConstants.js";
 import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
-import { destructObjectId, ObjectId } from "../../util/index.js";
+import { destructObjectId, ObjectId } from "../../utils/index.js";
 import Category from "../models/category.model.js";
 import Collection from "../models/collection.model.js";
 import Post from "../models/post.model.js";

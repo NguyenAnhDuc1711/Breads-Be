@@ -5,7 +5,7 @@ import {
   getCountKeyAnalyticValue,
   getDatesInRange,
   getOSFromUserAgent,
-} from "../../util/index.js";
+} from "../../utils/index.js";
 
 const getUserActiveData = (datesData, dateRange) => {
   const result = dateRange.map((date) => {

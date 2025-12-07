@@ -13,6 +13,7 @@ import {
 import { crawlPosts } from "../crawl.js";
 import protectRoute from "../middlewares/protectRoute.js";
 import Post from "../models/post.model.js";
+import asyncHandler from "../../helpers/asyncHandler.js";
 
 const router = express.Router();
 const {
@@ -25,14 +26,14 @@ const {
   UPDATE_POST_STATUS,
 } = POST_PATH;
 
-router.get(GET_ALL, getPosts);
-router.get("/:id", getPost);
+router.get(GET_ALL, asyncHandler(getPosts));
+router.get("/:id", asyncHandler(getPost));
 router.post(CREATE, createPost);
-router.delete("/:id", deletePost);
-router.put(UPDATE, updatePost);
-router.post(LIKE + ":id", protectRoute, likeUnlikePost);
-router.put(TICK_SURVEY, tickPostSurvey);
-router.post(CRAWL_POST, crawlPosts);
-router.post(UPDATE_POST_STATUS, updatePostStatus);
+router.delete("/:id", asyncHandler(deletePost));
+router.put(UPDATE, asyncHandler(updatePost));
+router.post(LIKE + ":id", protectRoute, asyncHandler(likeUnlikePost));
+router.put(TICK_SURVEY, asyncHandler(tickPostSurvey));
+router.post(CRAWL_POST, asyncHandler(crawlPosts));
+router.post(UPDATE_POST_STATUS, asyncHandler(updatePostStatus));
 
 export default router;

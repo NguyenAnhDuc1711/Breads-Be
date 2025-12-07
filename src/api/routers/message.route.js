@@ -1,14 +1,15 @@
 import express from "express";
 import { MESSAGE_PATH } from "../../Breads-Shared/APIConfig.js";
+import asyncHandler from "../../helpers/asyncHandler.js";
 import {
   getConversationById,
   getConversationByUsersId,
   getConversationFiles,
   getConversationLinks,
   getConversationMedia,
-  searchMsg,
   handleFakeConversations,
   handleFakeConversationsMsgs,
+  searchMsg,
 } from "../controllers/message.controller.js";
 import protectRoute from "../middlewares/protectRoute.js";
 
@@ -27,14 +28,38 @@ const {
 router.post(
   GET_CONVERSATION_BY_USERS_ID,
   protectRoute,
-  getConversationByUsersId
+  asyncHandler(getConversationByUsersId)
 );
-router.get(GET_CONVERSATION_BY_ID, protectRoute, getConversationById);
-router.post(GET_CONVERSATION_MEDIA, protectRoute, getConversationMedia);
-router.post(GET_CONVERSATION_FILES, protectRoute, getConversationFiles);
-router.post(GET_CONVERSATION_LINKS, protectRoute, getConversationLinks);
-router.post(SEARCH, protectRoute, searchMsg);
-router.post(FAKE_CONVERSATIONS, protectRoute, handleFakeConversations);
-router.post(FAKE_CONVERSATIONS_MSGS, protectRoute, handleFakeConversationsMsgs);
+router.get(
+  GET_CONVERSATION_BY_ID,
+  protectRoute,
+  asyncHandler(getConversationById)
+);
+router.post(
+  GET_CONVERSATION_MEDIA,
+  protectRoute,
+  asyncHandler(getConversationMedia)
+);
+router.post(
+  GET_CONVERSATION_FILES,
+  protectRoute,
+  asyncHandler(getConversationFiles)
+);
+router.post(
+  GET_CONVERSATION_LINKS,
+  protectRoute,
+  asyncHandler(getConversationLinks)
+);
+router.post(SEARCH, protectRoute, asyncHandler(searchMsg));
+router.post(
+  FAKE_CONVERSATIONS,
+  protectRoute,
+  asyncHandler(handleFakeConversations)
+);
+router.post(
+  FAKE_CONVERSATIONS_MSGS,
+  protectRoute,
+  asyncHandler(handleFakeConversationsMsgs)
+);
 
 export default router;

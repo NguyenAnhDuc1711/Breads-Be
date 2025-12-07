@@ -1,7 +1,7 @@
 import Notification from "../../api/models/notification.model.js";
 import User from "../../api/models/user.model.js";
 import { NOTIFICATION_PATH, Route } from "../../Breads-Shared/APIConfig.js";
-import { ObjectId } from "../../util/index.js";
+import { ObjectId } from "../../utils/index.js";
 import { getUserSocketByUserId } from "../services/user.js";
 export default class NotificationController {
   static create = async (payload, socket, io) => {

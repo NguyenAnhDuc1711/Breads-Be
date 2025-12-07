@@ -1,11 +1,10 @@
+import axios from "axios";
 import fs from "fs";
 import path from "path";
+import HTTPStatus from "../../utils/httpStatus.js";
 import Category from "../models/category.model.js";
 import Post from "../models/post.model.js";
 import User from "../models/user.model.js";
-import HTTPStatus from "../../util/httpStatus.js";
-import axios from "axios";
-import { ObjectId } from "../../util/index.js";
 
 export const importCategoriesFromJson = async (req, res) => {
   try {

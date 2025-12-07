@@ -9,7 +9,7 @@ import { uploadFileFromBase64 } from "../../api/utils/index.js";
 import { MESSAGE_PATH, Route } from "../../Breads-Shared/APIConfig.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import { previewLinkKey } from "../../Breads-Shared/util/index.js";
-import { ObjectId, destructObjectId } from "../../util/index.js";
+import { ObjectId, destructObjectId } from "../../utils/index.js";
 import { sendToSpecificUser } from "../services/message.js";
 
 const { TEXT, MEDIA, FILE, SETTING } = Constants.MSG_TYPE;

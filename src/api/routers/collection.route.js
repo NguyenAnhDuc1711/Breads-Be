@@ -1,4 +1,4 @@
-import express from "express";
+import { Router } from "express";
 import {
   addPostToCollection,
   getUserCollection,
@@ -6,12 +6,13 @@ import {
 } from "../controllers/collection.controller.js";
 // import protectRoute from "../middlewares/protectRoute.js";
 import { COLLECTION_PATH } from "../../Breads-Shared/APIConfig.js";
+import asyncHandler from "../../helpers/asyncHandler.ts";
 
-const router = express.Router();
+const router = Router();
 const { ADD, REMOVE } = COLLECTION_PATH;
 
-router.get("/:userId", getUserCollection);
-router.patch(ADD, addPostToCollection);
-router.patch(REMOVE, removePostFromCollection);
+router.get("/:userId", asyncHandler(getUserCollection));
+router.patch(ADD, asyncHandler(addPostToCollection));
+router.patch(REMOVE, asyncHandler(removePostFromCollection));
 
 export default router;

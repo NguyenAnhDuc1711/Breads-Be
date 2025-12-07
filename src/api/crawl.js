@@ -6,7 +6,7 @@ import Post from "./models/post.model.js";
 import SurveyOption from "./models/surveyOption.model.js";
 import User from "./models/user.model.js";
 import { getImgUnsplash, randomAvatar } from "./utils/index.js";
-import { destructObjectId, ObjectId } from "../util/index.js";
+import { destructObjectId, ObjectId } from "../utils/index.js";
 import Conversation from "./models/conversation.model.js";
 import Message from "./models/message.model.js";
 

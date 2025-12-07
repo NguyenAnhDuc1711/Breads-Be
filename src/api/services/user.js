@@ -1,4 +1,4 @@
-import { ObjectId } from "../../util/index.js";
+import { ObjectId } from "../../utils/index.js";
 import Collection from "../models/collection.model.js";
 import User from "../models/user.model.js";
 

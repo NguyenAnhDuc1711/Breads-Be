@@ -1,20 +1,18 @@
 import cookieParser from "cookie-parser";
 import cors from "cors";
-import express from "express";
+import express, { NextFunction, Request, Response } from "express";
 import helmet from "helmet";
-import connectDB from "./api/db/connectDB.js";
+import router from "./api/routers/index.js";
 import {
   createDailyCollectionCron,
   updateUsersCatesCron,
 } from "./cronjob/index.js";
-import router from "./api/routers/index.js";
-import {
-  assignRandomCategoriesToUsers,
-  getPostsWithContent,
-} from "./api/controllers/categories.controller.js";
+import instanceMongoDB from "./dbs/mongodb.ts";
+import initRedis from "./dbs/redis.ts";
 // Connect to MongoDB
-connectDB();
 
+instanceMongoDB.connect();
+initRedis();
 const app = express();
 
 app.use(express.json({ limit: "50mb" })); // to prase  Json data in the req.body
@@ -35,6 +33,26 @@ const corOption = {
 app.use(cors(corOption));
 
 app.use("/api", router);
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const error = new Error("Not found");
+  (error as any).status = 404;
+  next(error as any);
+});
+
+app.use((err, req, res, next) => {
+  const isDevEnv = process.env.NODE_ENV === "dev";
+  const statusCode = err.status || 500;
+  const response = {
+    status: "error",
+    code: statusCode,
+    message: err.message || "Internal Server Error",
+  };
+  if (isDevEnv) {
+    (response as any).stack = err.stack;
+  }
+  return res.status(statusCode).json(response);
+});
 
 createDailyCollectionCron();
 updateUsersCatesCron();

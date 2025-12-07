@@ -1,5 +1,5 @@
 import jwt from "jsonwebtoken";
-import HTTPStatus from "../../util/httpStatus.js";
+import HTTPStatus from "../../utils/httpStatus.js";
 import User from "../models/user.model.js";
 
 const protectRoute = async (req, res, next) => {

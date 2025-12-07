@@ -9,3 +9,18 @@ const server = app.listen(PORT, () => {
 });
 
 initSocket(server, app);
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception: ", err);
+  process.exit(1);
+});
+
+process.on("SIGINT", () => {
+  server.getConnections((err, count) => {
+    console.log("Open connections:", count);
+  });
+  server.close(() => {
+    console.log("All connections closed");
+  });
+  process.exit(1);
+});

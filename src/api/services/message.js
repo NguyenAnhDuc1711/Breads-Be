@@ -1,5 +1,5 @@
 import Conversation from "../models/conversation.model.js";
-import { ObjectId, destructObjectId } from "../../util/index.js";
+import { ObjectId, destructObjectId } from "../../utils/index.js";
 
 export const getConversationInfo = async ({ conversationId, userId }) => {
   try {
