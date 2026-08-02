@@ -6,6 +6,7 @@ import { getCache } from "../../dbs/redis.ts";
 import HTTPStatus from "../../utils/httpStatus.js";
 import { ObjectId } from "../../utils/index.js";
 import Category from "../models/category.model.js";
+import Like from "../models/like.model.js";
 import Link from "../models/link.model.js";
 import Post from "../models/post.model.js";
 import SurveyOption from "../models/surveyOption.model.js";
@@ -108,7 +109,7 @@ export const createPost = async (req, res) => {
         process.env.PYTHON_SERVER + "/search",
         {
           query: content,
-        }
+        },
       );
       console.log("relatedCategories: ", relatedCategories);
       if (relatedCategories?.length) {
@@ -118,7 +119,7 @@ export const createPost = async (req, res) => {
               $in: relatedCategories,
             },
           },
-          { _id: 1 }
+          { _id: 1 },
         );
         categories = catesQuery?.map(({ _id }) => _id);
       }
@@ -151,7 +152,10 @@ export const createPost = async (req, res) => {
       addNew: true,
     });
   }
-  const result = await getPostDetail({ postId: postSaved._id });
+  const result = await getPostDetail({
+    postId: postSaved._id,
+    viewerId: authorId,
+  });
   new CREATED({
     message: "Create post successfully",
     metadata: result,
@@ -161,7 +165,11 @@ export const createPost = async (req, res) => {
 //get post
 export const getPost = async (req, res) => {
   const postId = ObjectId(req.params.id);
-  const post = await getPostDetail({ postId, getFullInfo: true });
+  const post = await getPostDetail({
+    postId,
+    getFullInfo: true,
+    viewerId: req.viewerId,
+  });
   if (!post) {
     return res.status(HTTPStatus.NOT_FOUND).json({ error: "Post not found!" });
   }
@@ -192,7 +200,7 @@ export const deletePost = async (req, res) => {
       { _id: { $in: repliesId } },
       {
         status: Constants.POST_STATUS.DELETED,
-      }
+      },
     );
   }
   await Post.updateMany(
@@ -203,13 +211,13 @@ export const deletePost = async (req, res) => {
       $pull: {
         replies: postId,
       },
-    }
+    },
   );
   await Post.updateMany(
     { "quote._id": postId },
     {
       quote: {},
-    }
+    },
   );
   await Post.updateOne(
     {
@@ -217,7 +225,7 @@ export const deletePost = async (req, res) => {
     },
     {
       status: Constants.POST_STATUS.DELETED,
-    }
+    },
   );
   new OK({
     message: "Post deleted successfully!",
@@ -278,16 +286,20 @@ export const likeUnlikePost = async (req, res) => {
   if (!post) {
     return res.status(HTTPStatus.NOT_FOUND).json({ error: "Post not found" });
   }
-  const userLikedPost = post.likes.includes(userId);
+  const existingLike = await Like.findOne({
+    postId: ObjectId(postId),
+    userId: ObjectId(userId),
+  });
   let returnMsg = "";
-  if (userLikedPost) {
+  if (existingLike) {
     //unlike post
-    await Post.updateOne({ _id: postId }, { $pull: { likes: userId } });
+    await Like.deleteOne({ _id: existingLike._id });
+    await Post.updateOne({ _id: post._id }, { $inc: { likesCount: -1 } });
     returnMsg = "Post unliked successfully";
   } else {
     //like post
-    post.likes.push(userId);
-    await post.save();
+    await Like.create({ postId: ObjectId(postId), userId: ObjectId(userId) });
+    await Post.updateOne({ _id: post._id }, { $inc: { likesCount: 1 } });
     returnMsg = "Post liked successfully!";
   }
 
@@ -318,7 +330,7 @@ export const getPosts = async (req, res) => {
   const data = await getPostsIdByFilter(payload);
   let result = [];
   if (data?.length) {
-    result = await Promise.all(data.map((id) => getPostDetail({ postId: id })));
+    result = await getPostDetail({ postIds: data, viewerId: userId });
   }
   // let newCacheFeed;
   // if (cacheFeed) {
@@ -346,14 +358,14 @@ export const tickPostSurvey = async (req, res) => {
       { _id: ObjectId(optionId) },
       {
         $push: { usersId: userId },
-      }
+      },
     );
   } else {
     await SurveyOption.updateOne(
       { _id: ObjectId(optionId) },
       {
         $pull: { usersId: userId },
-      }
+      },
     );
   }
   new OK({
@@ -382,7 +394,7 @@ export const updatePostStatus = async (req, res) => {
     },
     {
       status: status,
-    }
+    },
   );
   new OK({
     message: "OK",

@@ -3,12 +3,19 @@ import PageConstant from "../../Breads-Shared/Constants/PageConstants.js";
 import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
 import { destructObjectId, ObjectId } from "../../utils/index.js";
 import Category from "../models/category.model.js";
-import Collection from "../models/collection.model.js";
+import Follow from "../models/follow.model.js";
+import Like from "../models/like.model.js";
 import Post from "../models/post.model.js";
+import SavedPost from "../models/savedPost.model.js";
 import SurveyOption from "../models/surveyOption.model.js";
 import User from "../models/user.model.js";
 
-export const getPostDetail = async ({ postId, getFullInfo = false }) => {
+export const getPostDetail = async ({
+  postId = "",
+  postIds = [],
+  getFullInfo = false,
+  viewerId = null,
+}) => {
   try {
     const getRelativeProp = [
       {
@@ -30,7 +37,7 @@ export const getPostDetail = async ({ postId, getFullInfo = false }) => {
                 avatar: 1,
                 bio: 1,
                 name: 1,
-                followed: 1,
+                followersCount: 1,
               },
             },
           ],
@@ -66,7 +73,11 @@ export const getPostDetail = async ({ postId, getFullInfo = false }) => {
 
     const agg = [
       {
-        $match: { _id: ObjectId(postId) },
+        $match: {
+          _id: postIds?.length
+            ? { $in: postIds.map((id) => ObjectId(id)) }
+            : ObjectId(postId),
+        },
       },
       {
         $lookup: {
@@ -108,15 +119,15 @@ export const getPostDetail = async ({ postId, getFullInfo = false }) => {
       result.parentPostInfo = result.parentPostInfo[0];
       const parentPostInfo = result.parentPostInfo;
       const userInfo = await User.findOne(
-        { _id: parentPostInfo.authorId },
+        { _id: ObjectId(parentPostInfo.authorId) },
         {
           _id: 1,
           avatar: 1,
           name: 1,
           username: 1,
           bio: 1,
-          followed: 1,
-        }
+          followersCount: 1,
+        },
       );
       if (parentPostInfo?.survey.length) {
         const surveyOptions = await SurveyOption.find({
@@ -136,10 +147,10 @@ export const getPostDetail = async ({ postId, getFullInfo = false }) => {
         delete result.parentPostInfo;
       }
     }
-    const childrenPost = await Post.find({ parentPost: result?._id });
-    if (result) {
-      result.repostNum = childrenPost?.length ?? 0;
-    }
+    result.repostNum = await Post.countDocuments({ parentPost: result?._id });
+    result.likedByMe = viewerId
+      ? !!(await Like.exists({ postId: result._id, userId: ObjectId(viewerId) }))
+      : false;
     return result;
   } catch (err) {
     console.log("getPostDetail: ", err);
@@ -215,10 +226,11 @@ export const getForYouPostsId = async ({ userId, skip, limit }) => {
     _id: ObjectId(userId),
   });
   const userCatesCare = userInfo?.catesCare ?? [];
+  const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
   const data = await Post.aggregate([
     {
       $match: {
-        type: { $ne: "reply" },
+        type: { $in: [CREATE, EDIT, REPOST] },
         authorId: { $ne: ObjectId(userId) },
       },
     },
@@ -243,7 +255,7 @@ export const getForYouPostsId = async ({ userId, skip, limit }) => {
                 15,
               ],
             },
-            { $multiply: [{ $size: { $ifNull: ["$usersLike", []] } }, 3] },
+            { $multiply: [{ $ifNull: ["$likesCount", 0] }, 3] },
             { $multiply: [{ $size: { $ifNull: ["$replies", []] } }, 3] },
             { $multiply: [{ $size: { $ifNull: ["$media", []] } }, 2] },
             { $size: { $ifNull: ["$survey", []] } },
@@ -289,11 +301,13 @@ export const getPostsIdByFilter = async (payload) => {
     let sort = { createdAt: -1 };
     switch (filter.page) {
       case PageConstant.SAVED:
+        // Order by when the post was saved, not when it was created.
         data = (
-          await Collection.findOne({ userId: ObjectId(userId) })
+          await SavedPost.find({ userId: ObjectId(userId) })
+            .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
-        )?.postsId;
+        ).map(({ postId }) => postId);
         break;
       case PageConstant.USER || PageConstant.FRIEND:
         const value = filter.value;
@@ -313,15 +327,22 @@ export const getPostsIdByFilter = async (payload) => {
         };
         break;
       case PageConstant.FOLLOWING:
-        const userInfo = await User.findOne({ _id: userId });
-        const userFollowing = JSON.parse(JSON.stringify(userInfo)).following;
+        const followingIds = (
+          await Follow.find({ followerId: ObjectId(userId) }, { followeeId: 1 })
+        ).map(({ followeeId }) => followeeId);
         query = {
           type: { $ne: PostConstants.ACTIONS.REPLY },
-          authorId: { $in: userFollowing },
+          authorId: { $in: followingIds },
         };
         break;
       case PageConstant.LIKED:
-        query = { usersLike: userId };
+        // Order by when the post was liked, not when it was created.
+        data = (
+          await Like.find({ userId: ObjectId(userId) })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+        ).map(({ postId }) => postId);
         break;
       case PageConstant.ADMIN.POSTS_VALIDATION:
         query = getQueryPostValidation(filter);
@@ -363,7 +384,7 @@ export const handleReplyForParentPost = async ({
       {
         _id: parentId,
       },
-      action
+      action,
     );
   } catch (err) {
     console.log("handleReplyForParentPost: ", err);
@@ -373,17 +394,15 @@ export const handleReplyForParentPost = async ({
 export const getUsersTagInfo = async ({ usersTagId }) => {
   try {
     const usersTagInfo = await User.find(
-      {
-        _id: { $in: usersTagId },
-      },
+      { _id: { $in: usersTagId } },
       {
         _id: 1,
         avatar: 1,
         name: 1,
         username: 1,
         bio: 1,
-        followed: 1,
-      }
+        followersCount: 1,
+      },
     );
     return usersTagInfo;
   } catch (err) {
@@ -403,10 +422,10 @@ export const getPostsCatesByIds = async ({ postIds }) => {
         {
           _id: 0,
           categories: 1,
-        }
+        },
       )
     )?.map(({ categories }) =>
-      categories.map((cateId) => destructObjectId(cateId))
+      categories.map((cateId) => destructObjectId(cateId)),
     );
     const cateIds = [...new Set(postsCates.flat())];
     return cateIds;

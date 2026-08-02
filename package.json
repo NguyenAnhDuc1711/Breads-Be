@@ -7,7 +7,13 @@
   "scripts": {
     "dev": "npx tsx watch src/server.ts",
     "start": "ts-node-dev src/server.ts",
-    "crawl-data": "node src/api/crawl.js"
+    "crawl-data": "node src/api/crawl.js",
+    "migrate:follow-like": "node src/api/migrations/migrateFollowLike.js",
+    "migrate:saved-posts": "node src/api/migrations/migrateSavedPosts.js",
+    "migrate:backfill-like-follow-counts": "npx tsx src/api/migrations/backfillLikeFollowCounts.js",
+    "seed:celebrity-follows": "node src/api/seed/seedCelebrityFollows.js",
+    "seed:fake-data": "npx tsx src/api/seed/index.js",
+    "k6:history": "node test/scripts/build-history.js"
   },
   "keywords": [],
   "author": "",
@@ -33,6 +39,7 @@
     "uuid": "^10.0.0"
   },
   "devDependencies": {
+    "@faker-js/faker": "^10.5.0",
     "@types/express": "^5.0.0",
     "nodemon": "^3.1.4",
     "tsx": "^4.19.2",

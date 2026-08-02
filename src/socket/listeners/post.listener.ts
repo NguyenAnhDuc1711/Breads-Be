@@ -4,7 +4,7 @@ import PostController from "../controllers/post.controller.js";
 
 const PostListener = (socket: Socket, io: Server) => {
   socket.on(Route.POST + POST_PATH.LIKE, (payload: any) =>
-    PostController.likePost(payload, io)
+    PostController.likePost(payload, socket, io)
   );
 };
 

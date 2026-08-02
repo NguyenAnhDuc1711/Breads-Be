@@ -9,6 +9,7 @@ import {
 } from "./cronjob/index.js";
 import instanceMongoDB from "./dbs/mongodb.ts";
 import initRedis from "./dbs/redis.ts";
+import ALLOWED_ORIGINS from "./utils/allowedOrigins.ts";
 // Connect to MongoDB
 
 instanceMongoDB.connect();
@@ -20,11 +21,7 @@ app.use(express.urlencoded({ extended: false })); // to prase from data in the r
 app.use(cookieParser());
 app.use(helmet());
 const corOption = {
-  origin: [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://localhost:3002",
-  ],
+  origin: ALLOWED_ORIGINS,
   methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
   preflightContinue: false,
   optionsSuccessStatus: 204,

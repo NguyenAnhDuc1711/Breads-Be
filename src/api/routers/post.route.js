@@ -11,6 +11,7 @@ import {
   updatePostStatus,
 } from "../controllers/post.controller.js";
 import { crawlPosts } from "../crawl.js";
+import optionalAuth from "../middlewares/optionalAuth.js";
 import protectRoute from "../middlewares/protectRoute.js";
 import Post from "../models/post.model.js";
 import asyncHandler from "../../helpers/asyncHandler.js";
@@ -27,7 +28,7 @@ const {
 } = POST_PATH;
 
 router.get(GET_ALL, asyncHandler(getPosts));
-router.get("/:id", asyncHandler(getPost));
+router.get("/:id", optionalAuth, asyncHandler(getPost));
 router.post(CREATE, createPost);
 router.delete("/:id", asyncHandler(deletePost));
 router.put(UPDATE, asyncHandler(updatePost));

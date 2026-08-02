@@ -3,4 +3,5 @@ export default class Model {
   static NOTIFICATION = "notifications";
   static CONVERSATION = "conversations";
   static MESSAGE = "messages";
+  static LIKE = "likes";
 }

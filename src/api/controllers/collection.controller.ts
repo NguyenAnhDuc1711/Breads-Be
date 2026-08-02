@@ -2,15 +2,20 @@ import PageConstant from "../../Breads-Shared/Constants/PageConstants.js";
 import { CREATED, OK } from "../../core/success.response.js";
 import { BadRequestError } from "../../core/error.response.js";
 import { ObjectId } from "../../utils/index.js";
-import Collection from "../models/collection.model.js";
+import SavedPost from "../models/savedPost.model.js";
 import { getPostDetail, getPostsIdByFilter } from "../services/post.js";
 
 export const getUserCollection = async (req, res) => {
   const userId = req.params.userId;
-  const data = await Collection.findOne({ userId: ObjectId(userId) });
+  const savedPosts = await SavedPost.find({ userId: ObjectId(userId) }).sort({
+    createdAt: -1,
+  });
   new OK({
     message: "User collection fetched successfully",
-    metadata: data,
+    metadata: {
+      userId,
+      postsId: savedPosts.map(({ postId }) => postId),
+    },
   }).send(res);
 };
 
@@ -19,33 +24,25 @@ export const addPostToCollection = async (req, res) => {
   if (!userId || !postId) {
     throw new BadRequestError("Empty payload");
   }
-  const isValidCollection = await Collection.findOne({
+  const existing = await SavedPost.findOne({
     userId: ObjectId(userId),
+    postId: ObjectId(postId),
   });
-  if (isValidCollection) {
-    await Collection.findOneAndUpdate(
-      {
-        userId: ObjectId(userId),
-      },
-      {
-        $push: { postsId: postId },
-      }
-    );
+  if (existing) {
     new OK({
       message: "Post added to collection successfully",
       metadata: {},
     }).send(res);
-  } else {
-    const newCollection = new Collection({
-      userId: ObjectId(userId),
-      postsId: [postId],
-    });
-    await newCollection.save();
-    new CREATED({
-      message: "Post added to collection successfully",
-      metadata: {},
-    }).send(res);
+    return;
   }
+  await SavedPost.create({
+    userId: ObjectId(userId),
+    postId: ObjectId(postId),
+  });
+  new CREATED({
+    message: "Post added to collection successfully",
+    metadata: {},
+  }).send(res);
 };
 
 export const removePostFromCollection = async (req, res) => {
@@ -53,14 +50,10 @@ export const removePostFromCollection = async (req, res) => {
   if (!userId || !postId) {
     throw new BadRequestError("Empty payload");
   }
-  await Collection.findOneAndUpdate(
-    {
-      userId: ObjectId(userId),
-    },
-    {
-      $pull: { postsId: postId },
-    }
-  );
+  await SavedPost.deleteOne({
+    userId: ObjectId(userId),
+    postId: ObjectId(postId),
+  });
   const result = [];
   const postsId = await getPostsIdByFilter({
     filter: { page: PageConstant.SAVED },

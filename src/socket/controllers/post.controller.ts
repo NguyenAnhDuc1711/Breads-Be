@@ -6,40 +6,46 @@ import {
   Route,
 } from "../../Breads-Shared/APIConfig.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
-import {
-  destructObjectId,
-  getCollection,
-  ObjectId,
-} from "../../utils/index.js";
+import { getCollection, ObjectId } from "../../utils/index.js";
 import Model from "../../utils/ModelName.js";
 import { sendToSpecificUser } from "../services/message.js";
-import { Server } from "socket.io";
+import { Server, Socket } from "socket.io";
 
 export default class PostController {
-  static likePost = async (payload: any, io: Server) => {
+  static likePost = async (payload: any, socket: Socket, io: Server) => {
     const { userId, postId } = payload;
+    const authenticatedUserId = (socket as any).user?.userId;
+    if (!authenticatedUserId || authenticatedUserId !== userId) {
+      return;
+    }
     const postInfo = await getCollection(Model.POST).findOne({
       _id: ObjectId(postId),
     });
     if (postInfo) {
-      const usersLike = postInfo.usersLike.map((id) => destructObjectId(id));
-      const query: any = !usersLike?.includes(userId)
-        ? {
-            $push: { usersLike: ObjectId(userId) },
-          }
-        : {
-            $pull: { usersLike: ObjectId(userId) },
-          };
-      await getCollection(Model.POST).updateOne(
-        {
-          _id: ObjectId(postId),
-        },
-        query
+      const existingLike = await getCollection(Model.LIKE).findOne({
+        postId: ObjectId(postId),
+        userId: ObjectId(userId),
+      });
+      const likedBefore = !!existingLike;
+      if (likedBefore) {
+        await getCollection(Model.LIKE).deleteOne({ _id: existingLike._id });
+      } else {
+        await getCollection(Model.LIKE).insertOne({
+          postId: ObjectId(postId),
+          userId: ObjectId(userId),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }
+      const updatedPost = await getCollection(Model.POST).findOneAndUpdate(
+        { _id: ObjectId(postId) },
+        { $inc: { likesCount: likedBefore ? -1 : 1 } },
+        { returnDocument: "after" },
       );
-      const likedBefore = usersLike?.includes(userId);
-      const updateList = likedBefore
-        ? usersLike.filter((id) => id !== userId)
-        : [...usersLike, userId];
+      const likesCount =
+        (updatedPost as any)?.likesCount ??
+        (updatedPost as any)?.value?.likesCount ??
+        0;
       //Handle send notification
       if (likedBefore) {
         const validNotification = await Notification.findOne({
@@ -134,7 +140,7 @@ export default class PostController {
         }
       }
       io.emit(Route.POST + POST_PATH.GET_ONE, {
-        usersLike: updateList,
+        likesCount,
         postId,
       });
     }

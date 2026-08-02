@@ -26,4 +26,15 @@ dist-ssr
 
 
 .env
+
+# k6 stress test reports (generated per run)
+test/results/*
+!test/results/.gitkeep
+
+.claude
+.ccpm
+skill
+AGENTS.md
+CLAUDE.md
+GEMINI.md
 breads-438916-f08a8a647f08.json

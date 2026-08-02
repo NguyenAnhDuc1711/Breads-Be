@@ -2,9 +2,10 @@ import "dotenv/config";
 import app from "./app.ts";
 import { initSocket } from "./socket/socket.ts";
 
-const PORT = process.env.PORT || 8080;
+const PORT = Number(process.env.PORT) || 8080;
+const HOST = "0.0.0.0";
 
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`Server started at on port:${PORT}`);
 });
 

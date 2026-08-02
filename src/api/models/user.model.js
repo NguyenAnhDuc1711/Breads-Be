@@ -30,20 +30,6 @@ const userSchema = mongoose.Schema(
       default:
         "https://as2.ftcdn.net/v2/jpg/04/10/43/77/1000_F_410437733_hdq4Q3QOH9uwh0mcqAhRFzOKfrCR24Ta.jpg",
     },
-    followed: [
-      {
-        type: ObjectId,
-        default: [],
-        required: false,
-      },
-    ],
-    following: [
-      {
-        type: ObjectId,
-        default: [],
-        required: false,
-      },
-    ],
     bio: {
       type: String,
       default: "",
@@ -82,6 +68,14 @@ const userSchema = mongoose.Schema(
         required: false,
       },
     ],
+    followersCount: {
+      type: Number,
+      default: 0,
+    },
+    followingCount: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,

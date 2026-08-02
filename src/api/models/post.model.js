@@ -1,6 +1,8 @@
 import mongoose from "mongoose";
-import { Constants } from "../../Breads-Shared/Constants/index.js";
+import PostConstants from "../../Breads-Shared/Constants/PostConstants";
+import { Constants } from "../../Breads-Shared/Constants";
 
+const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
 const ObjectId = mongoose.Schema.Types.ObjectId;
 
 const postStatus = Object.values(Constants.POST_STATUS);
@@ -20,13 +22,6 @@ const postSchema = mongoose.Schema(
       type: Array,
       required: false,
     },
-    usersLike: [
-      {
-        type: ObjectId,
-        ref: "User",
-        default: [],
-      },
-    ],
     replies: [
       {
         type: ObjectId,
@@ -38,7 +33,6 @@ const postSchema = mongoose.Schema(
       type: ObjectId,
       ref: "Post",
       required: false,
-      default: null,
     },
     survey: [
       {
@@ -89,10 +83,35 @@ const postSchema = mongoose.Schema(
         required: false,
       },
     ],
+    likesCount: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,
-  }
+  },
+);
+
+postSchema.index(
+  { parentPost: 1 },
+  {
+    sparse: true,
+  },
+);
+postSchema.index(
+  {
+    type: 1,
+    authorId: 1,
+    createdAt: -1,
+  },
+  {
+    partialFilterExpression: {
+      type: {
+        $in: [CREATE, EDIT, REPOST],
+      },
+    },
+  },
 );
 
 const Post = mongoose.model("Post", postSchema);

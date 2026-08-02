@@ -10,12 +10,14 @@ import { deleteCache, getCache, setCache } from "../../dbs/redis.ts";
 import HTTPStatus from "../../utils/httpStatus.js";
 import { ObjectId } from "../../utils/index.js";
 import { crawlUser } from "../crawl.js";
-import Collection from "../models/collection.model.js";
+import Follow from "../models/follow.model.js";
 import Post from "../models/post.model.js";
+import SavedPost from "../models/savedPost.model.js";
 import User from "../models/user.model.js";
-import { getUserInfo, getUsersByPage, updateFollow } from "../services/user.js";
+import { getUserInfo, getUsersByPage, toggleFollow } from "../services/user.js";
 import { sendMailService } from "../services/util.js";
 import generateTokenAndSetCookie from "../utils/genarateTokenAndSetCookie.js";
+import bcrypt from "bcryptjs";
 import { uploadFileFromBase64, validateEmailForm } from "../utils/index.js";
 
 export const getAdminAccount = async (req, res) => {
@@ -33,11 +35,14 @@ export const getAdminAccount = async (req, res) => {
     const result = await newAdmin.save();
     return res.status(HTTPStatus.CREATED).json(result);
   }
-  const adminCollection = await Collection.findOne(
+  const savedPosts = await SavedPost.find(
     { userId: adminAccount._id },
-    { postsId: 1 }
-  );
-  adminAccount.collection = adminCollection;
+    { postId: 1 }
+  ).sort({ createdAt: -1 });
+  adminAccount.collection = {
+    userId: adminAccount._id,
+    postsId: savedPosts.map(({ postId }) => postId),
+  };
   new OK({
     message: "Admin account fetched successfully",
     metadata: adminAccount,
@@ -105,11 +110,12 @@ export const validateEmailByCode = async (req, res) => {
   if (validationMailInfo) {
     if (code === validationMailInfo?.code) {
       const { name, username, password } = validationMailInfo;
+      const hashedPassword = await bcrypt.hash(password, 10);
       const newUser = new User({
         name,
         email,
         username,
-        password: password,
+        password: hashedPassword,
       });
       await newUser.save();
 
@@ -135,15 +141,25 @@ export const validateEmailByCode = async (req, res) => {
 export const loginUser = async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ email: email });
-  const isPasswordCorrect = password == user?.password;
-  // await bcrypt.compare(
-  //   password,
-  //   user?.password || ""
-  // );
 
   if (!user) {
     throw new BadRequestError("Account not found");
   }
+
+  let isPasswordCorrect = false;
+  if (user.password) {
+    if (user.password.startsWith("$2a$") || user.password.startsWith("$2b$")) {
+      isPasswordCorrect = await bcrypt.compare(password, user.password);
+    } else {
+      // Legacy plain-text password fallback and auto-upgrade
+      if (password === user.password) {
+        isPasswordCorrect = true;
+        const hashedPassword = await bcrypt.hash(password, 10);
+        await User.updateOne({ _id: user._id }, { password: hashedPassword });
+      }
+    }
+  }
+
   if (!isPasswordCorrect) {
     throw new AuthFailureError("Wrong password");
   }
@@ -177,15 +193,7 @@ export const followUser = async (req, res) => {
   if (!userInfo) {
     throw new NotFoundError("User not found");
   }
-  const userFollowing = JSON.parse(JSON.stringify(userInfo))?.following;
-  const isFollowing = userFollowing?.includes(userFlId);
-  if (isFollowing) {
-    await updateFollow(userId, userFlId, false, true);
-    await updateFollow(userFlId, userId, false, false);
-  } else {
-    await updateFollow(userId, userFlId, true, true);
-    await updateFollow(userFlId, userId, true, false);
-  }
+  await toggleFollow(userId, userFlId);
   new OK({
     message: "Follow user successfully",
     metadata: {},
@@ -259,17 +267,28 @@ export const changePassword = async (req, res) => {
   if (!user) {
     throw new BadRequestError("User not found");
   }
-  if (user.password !== currentPW && !forgotPW) {
+  let isCurrentPWCorrect = false;
+  if (user.password) {
+    if (user.password.startsWith("$2a$") || user.password.startsWith("$2b$")) {
+      isCurrentPWCorrect = await bcrypt.compare(currentPW, user.password);
+    } else {
+      isCurrentPWCorrect = user.password === currentPW;
+    }
+  }
+
+  if (!isCurrentPWCorrect && !forgotPW) {
     throw new AuthFailureError("Wrong password");
   } else if (newPW.length < 6) {
     throw new BadRequestError("Password must be at least 6 characters");
   } else if (currentPW === newPW && !forgotPW) {
     throw new BadRequestError("Nothing change");
   }
+
+  const hashedNewPW = await bcrypt.hash(newPW, 10);
   await User.updateOne(
     { _id: ObjectId(userId) },
     {
-      password: newPW,
+      password: hashedNewPW,
     }
   );
   new OK({
@@ -278,15 +297,27 @@ export const changePassword = async (req, res) => {
   }).send(res);
 };
 
-//get user profile
+// get current authenticated user profile
+export const getMe = async (req, res) => {
+  if (!req.user?._id) {
+    throw new AuthFailureError("Unauthorized");
+  }
+  const user = await getUserInfo(req.user._id);
+  if (!user) throw new BadRequestError("User not found!");
+  new OK({
+    message: "Get current user profile successfully",
+    metadata: user,
+  }).send(res);
+};
 
+//get user profile
 export const getUserProfile = async (req, res) => {
   const { userId } = req.params;
   let user = null;
   if (!userId) {
     throw new BadRequestError("Empty payload");
   }
-  user = await getUserInfo(userId);
+  user = await getUserInfo(userId, { includeRelations: false });
   if (!user) throw new BadRequestError("User not found!");
   res.status(HTTPStatus.OK).json(user);
 };
@@ -346,7 +377,7 @@ export const getUserToFollows = async (req, res) => {
                 5,
               ],
             },
-            { $multiply: [{ $size: { $ifNull: ["$followed", []] } }, 2] },
+            { $multiply: [{ $ifNull: ["$followersCount", 0] }, 2] },
           ],
         },
       },
@@ -383,9 +414,15 @@ export const getUsersFollow = async (req, res) => {
   if (!userInfo) {
     throw new NotFoundError("Invalid user");
   }
+  const followerIds = (
+    await Follow.find({ followeeId: ObjectId(userId) }, { followerId: 1 })
+  ).map(({ followerId }) => followerId);
+  const followeeIds = (
+    await Follow.find({ followerId: ObjectId(userId) }, { followeeId: 1 })
+  ).map(({ followeeId }) => followeeId);
   const followedUsers = await User.find(
     {
-      _id: { $in: userInfo.followed },
+      _id: { $in: followerIds },
     },
     {
       _id: 1,
@@ -397,7 +434,7 @@ export const getUsersFollow = async (req, res) => {
   );
   const followingUsers = await User.find(
     {
-      _id: { $in: userInfo.following },
+      _id: { $in: followeeIds },
     },
     {
       _id: 1,

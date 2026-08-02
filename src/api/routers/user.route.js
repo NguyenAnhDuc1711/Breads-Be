@@ -4,6 +4,7 @@ import {
   checkValidUser,
   followUser,
   getAdminAccount,
+  getMe,
   getUserIdFromEmail,
   getUserProfile,
   getUsersFollow,
@@ -24,6 +25,7 @@ import asyncHandler from "../../helpers/asyncHandler.js";
 
 const router = express.Router();
 const {
+  ME,
   ADMIN,
   PROFILE,
   USERS_TO_FOLLOW,
@@ -43,6 +45,7 @@ const {
   VALIDATE_USER_EMAIL,
 } = USER_PATH;
 
+router.get(ME, protectRoute, asyncHandler(getMe));
 router.get(USERS_FOLLOW, asyncHandler(getUsersFollow));
 router.get(ADMIN, asyncHandler(getAdminAccount));
 router.get(PROFILE + ":userId", asyncHandler(getUserProfile));
