@@ -1,6 +1,7 @@
 import axios from "axios";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
+import { IPost } from "../../Breads-Shared/Types/index.js";
 import { CREATED, OK } from "../../core/success.response.js";
 import { getCache } from "../../dbs/redis.ts";
 import HTTPStatus from "../../utils/httpStatus.js";
@@ -165,7 +166,7 @@ export const createPost = async (req, res) => {
 //get post
 export const getPost = async (req, res) => {
   const postId = ObjectId(req.params.id);
-  const post = await getPostDetail({
+  const post: IPost | null = await getPostDetail({
     postId,
     getFullInfo: true,
     viewerId: req.viewerId,

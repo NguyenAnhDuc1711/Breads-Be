@@ -1,4 +1,5 @@
 import { Constants } from "../../Breads-Shared/Constants/index.js";
+import { IUser } from "../../Breads-Shared/Types/index.js";
 import { genRandomCode } from "../../Breads-Shared/util/index.js";
 import {
   AuthFailureError,
@@ -302,7 +303,7 @@ export const getMe = async (req, res) => {
   if (!req.user?._id) {
     throw new AuthFailureError("Unauthorized");
   }
-  const user = await getUserInfo(req.user._id);
+  const user: IUser | null = await getUserInfo(req.user._id);
   if (!user) throw new BadRequestError("User not found!");
   new OK({
     message: "Get current user profile successfully",
