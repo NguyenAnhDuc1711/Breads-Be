@@ -8,11 +8,14 @@ import { getConversationInfo } from "../../api/services/message.js";
 import { uploadFileFromBase64 } from "../../api/utils/index.js";
 import { MESSAGE_PATH, Route } from "../../Breads-Shared/APIConfig.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
-import { previewLinkKey } from "../../Breads-Shared/util/index.js";
 import { ObjectId, destructObjectId } from "../../utils/index.js";
 import { sendToSpecificUser } from "../services/message.js";
 
 const { TEXT, MEDIA, FILE, SETTING } = Constants.MSG_TYPE;
+const previewLinkKey = (process.env.LINKPREVIEW_API_KEYS ?? "")
+  .split(",")
+  .map((key) => key.trim())
+  .filter(Boolean);
 
 export default class MessageController {
   static async sendMessage(payload: any, cb: Function, io: Server) {

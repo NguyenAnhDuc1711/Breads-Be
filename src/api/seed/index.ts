@@ -2,9 +2,9 @@
 // external API calls, unlike crawl.js), batched inserts, bounded memory.
 //
 // Usage:
-//   node src/api/seed/index.js --users=1000000 --posts=2000000
-//   node src/api/seed/index.js --posts=500000 --users=0        # reuse existing fake_ users
-//   node src/api/seed/index.js --users=100000 --posts=200000 --reset
+//   npx tsx src/api/seed/index.ts --users=1000000 --posts=2000000
+//   npx tsx src/api/seed/index.ts --posts=500000 --users=0        # reuse existing fake_ users
+//   npx tsx src/api/seed/index.ts --users=100000 --posts=200000 --reset
 //
 // Flags:
 //   --users=N          number of fake users to insert (required unless --users=0)
@@ -44,7 +44,7 @@ const run = async () => {
 
   if (args.users === undefined || args.posts === undefined) {
     console.log(
-      "Usage: node src/api/seed/index.js --users=<N> --posts=<N> [--batchSize=2000] [--authorPool=300000] [--reset]"
+      "Usage: npx tsx src/api/seed/index.ts --users=<N> --posts=<N> [--batchSize=2000] [--authorPool=300000] [--reset]"
     );
     process.exit(1);
   }

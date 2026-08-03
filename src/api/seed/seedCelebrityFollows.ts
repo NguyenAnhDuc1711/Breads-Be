@@ -11,7 +11,7 @@
 // (followerId, followeeId) pairs are possible since each pair is only ever
 // considered once.
 //
-// Usage: node src/api/seed/seedCelebrityFollows.js
+// Usage: npx tsx src/api/seed/seedCelebrityFollows.ts
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import Follow from "../models/follow.model.js";

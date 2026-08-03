@@ -16,20 +16,19 @@ export const getPostDetail = async ({
   getFullInfo = false,
   viewerId = null,
 }) => {
+  const isBulk = postIds && postIds.length > 0;
   try {
+    const targetIds = isBulk
+      ? postIds.map((id) => ObjectId(id))
+      : [ObjectId(postId)];
+
     const getRelativeProp = [
       {
         $lookup: {
           from: "users",
           let: { searchId: { $toObjectId: "$authorId" } },
           pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $eq: ["$$searchId", "$_id"],
-                },
-              },
-            },
+            { $match: { $expr: { $eq: ["$$searchId", "$_id"] } } },
             {
               $project: {
                 _id: 1,
@@ -71,32 +70,19 @@ export const getPostDetail = async ({
       },
     ];
 
-    const agg = [
-      {
-        $match: {
-          _id: postIds?.length
-            ? { $in: postIds.map((id) => ObjectId(id)) }
-            : ObjectId(postId),
-        },
-      },
+    const agg: any[] = [
+      { $match: { _id: { $in: targetIds } } },
       {
         $lookup: {
           from: "posts",
           let: { searchId: { $toObjectId: "$parentPost" } },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $eq: ["$$searchId", "$_id"],
-                },
-              },
-            },
-          ],
+          pipeline: [{ $match: { $expr: { $eq: ["$$searchId", "$_id"] } } }],
           as: "parentPostInfo",
         },
       },
       ...getRelativeProp,
     ];
+
     if (getFullInfo) {
       agg.push({
         $lookup: {
@@ -108,53 +94,82 @@ export const getPostDetail = async ({
         },
       });
     }
-    let result = (await Post.aggregate(agg))?.[0];
-    if (result?.usersTag?.length > 0) {
-      const usersTagInfo = await getUsersTagInfo({
-        usersTagId: result?.usersTag,
-      });
-      result.usersTagInfo = usersTagInfo;
-    }
-    if (result?.parentPostInfo?.length > 0) {
-      result.parentPostInfo = result.parentPostInfo[0];
-      const parentPostInfo = result.parentPostInfo;
-      const userInfo = await User.findOne(
-        { _id: ObjectId(parentPostInfo.authorId) },
-        {
-          _id: 1,
-          avatar: 1,
-          name: 1,
-          username: 1,
-          bio: 1,
-          followersCount: 1,
-        },
+
+    const posts = await Post.aggregate(agg);
+    if (!posts || posts.length === 0) return isBulk ? [] : null;
+
+    // 1. Lấy danh sách ID đã được viewer like (chỉ 1 query batch cho tất cả bài)
+    let likedPostSet = new Set<string>();
+    if (viewerId) {
+      const likedDocs = await Like.find(
+        { userId: ObjectId(viewerId), postId: { $in: targetIds } },
+        { postId: 1 },
       );
-      if (parentPostInfo?.survey.length) {
-        const surveyOptions = await SurveyOption.find({
-          _id: { $in: parentPostInfo.survey },
-        });
-        parentPostInfo.survey = surveyOptions;
-      }
-      if (parentPostInfo?.usersTag?.length > 0) {
-        const usersTagInfo = await getUsersTagInfo({
-          usersTagId: parentPostInfo?.usersTag,
-        });
-        parentPostInfo.usersTagInfo = usersTagInfo;
-      }
-      parentPostInfo.authorInfo = userInfo;
-    } else {
-      if (result?.parentPostInfo) {
-        delete result.parentPostInfo;
-      }
+      likedPostSet = new Set(likedDocs.map((doc) => doc.postId.toString()));
     }
-    result.repostNum = await Post.countDocuments({ parentPost: result?._id });
-    result.likedByMe = viewerId
-      ? !!(await Like.exists({ postId: result._id, userId: ObjectId(viewerId) }))
-      : false;
-    return result;
+
+    // 2. Đếm số repost cho tất cả bài trong 1 query duy nhất
+    const repostCounts = await Post.aggregate([
+      { $match: { parentPost: { $in: targetIds } } },
+      { $group: { _id: "$parentPost", count: { $sum: 1 } } },
+    ]);
+    const repostMap = new Map(
+      repostCounts.map((item) => [item._id.toString(), item.count]),
+    );
+
+    // 3. Populate thông tin cho từng bài
+    const enrichedPosts = await Promise.all(
+      posts.map(async (result) => {
+        if (result?.usersTag?.length > 0) {
+          result.usersTagInfo = await getUsersTagInfo({
+            usersTagId: result.usersTag,
+          });
+        }
+
+        if (result?.parentPostInfo?.length > 0) {
+          result.parentPostInfo = result.parentPostInfo[0];
+          const parentPostInfo = result.parentPostInfo;
+          parentPostInfo.authorInfo = await User.findOne(
+            { _id: ObjectId(parentPostInfo.authorId) },
+            {
+              _id: 1,
+              avatar: 1,
+              name: 1,
+              username: 1,
+              bio: 1,
+              followersCount: 1,
+            },
+          );
+          if (parentPostInfo?.survey?.length) {
+            parentPostInfo.survey = await SurveyOption.find({
+              _id: { $in: parentPostInfo.survey },
+            });
+          }
+          if (parentPostInfo?.usersTag?.length > 0) {
+            parentPostInfo.usersTagInfo = await getUsersTagInfo({
+              usersTagId: parentPostInfo.usersTag,
+            });
+          }
+        } else {
+          delete result.parentPostInfo;
+        }
+
+        result.repostNum = repostMap.get(result._id.toString()) || 0;
+        result.likedByMe = likedPostSet.has(result._id.toString());
+        return result;
+      }),
+    );
+
+    // 4. Giữ đúng thứ tự sắp xếp (score sort) ban đầu của targetIds
+    if (isBulk) {
+      const postMap = new Map(enrichedPosts.map((p) => [p._id.toString(), p]));
+      return postIds.map((id) => postMap.get(id.toString())).filter(Boolean);
+    }
+
+    return enrichedPosts[0] || null;
   } catch (err) {
-    console.log("getPostDetail: ", err);
-    return null;
+    console.log("getPostDetail err: ", err);
+    return isBulk ? [] : null;
   }
 };
 

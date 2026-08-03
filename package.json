@@ -7,12 +7,12 @@
   "scripts": {
     "dev": "npx tsx watch src/server.ts",
     "start": "ts-node-dev src/server.ts",
-    "crawl-data": "node src/api/crawl.js",
-    "migrate:follow-like": "node src/api/migrations/migrateFollowLike.js",
-    "migrate:saved-posts": "node src/api/migrations/migrateSavedPosts.js",
-    "migrate:backfill-like-follow-counts": "npx tsx src/api/migrations/backfillLikeFollowCounts.js",
-    "seed:celebrity-follows": "node src/api/seed/seedCelebrityFollows.js",
-    "seed:fake-data": "npx tsx src/api/seed/index.js",
+    "crawl-data": "npx tsx src/api/crawl.ts",
+    "migrate:follow-like": "npx tsx src/api/migrations/migrateFollowLike.ts",
+    "migrate:saved-posts": "npx tsx src/api/migrations/migrateSavedPosts.ts",
+    "migrate:backfill-like-follow-counts": "npx tsx src/api/migrations/backfillLikeFollowCounts.ts",
+    "seed:celebrity-follows": "npx tsx src/api/seed/seedCelebrityFollows.ts",
+    "seed:fake-data": "npx tsx src/api/seed/index.ts",
     "k6:history": "node test/scripts/build-history.js"
   },
   "keywords": [],
