@@ -1,5 +1,7 @@
+import { POST_PATH, Route } from "../../../Breads-Shared/APIConfig.js";
 import PostConstants from "../../../Breads-Shared/Constants/PostConstants.js";
 import { getRedisInstance } from "../../../dbs/redis.ts";
+import { getAllSockets } from "../../../socket/services/user.ts";
 import { ObjectId } from "../../../utils/index.js";
 import Follow from "../../models/follow.model.js";
 import Post from "../../models/post.model.js";
@@ -82,7 +84,8 @@ export const getActiveFollowerIds = async (
  */
 export const fanoutPostToFollowers = async (params: {
   post: any;
-  /** Chưa dùng cho tới 030/T9 (socket emit); có sẵn trong chữ ký để 030 không phải đổi call-site. */
+  /** Socket.IO server instance (`req.app.get("socket_io")`), dùng cho real-time push 030/T9 khi
+   * `FEED_CONFIG.socketEnabled === true`; bỏ qua toàn bộ nhánh socket nếu không truyền. */
   io?: any;
 }): Promise<void> => {
   const { post } = params;
@@ -117,7 +120,40 @@ export const fanoutPostToFollowers = async (params: {
   // đều nằm trong helper của 001 — không dựng pipeline ở đây.
   await zAddPostForUsers(followerIds, postId, new Date(post.createdAt).getTime());
 
-  // [030/T9 chèn vào đây: if (FEED_CONFIG.socketEnabled) -> getAllSockets(params.io) MỘT lần -> emit]
+  // [030/T9] Real-time push cho follower đang online (FR-10). Mặc định TẮT (REDUCE-2) — xem
+  // `FEED_CONFIG.socketEnabled`. Registry chỉ được quét ĐÚNG MỘT LẦN cho cả lượt fan-out (build
+  // `Map<userId, socketId>` rồi tra cứu) — KHÔNG lặp per-follower việc quét toàn registry, việc đó
+  // biến 1 post thành N lượt quét (vi phạm NFR-2).
+  if (FEED_CONFIG.socketEnabled && params.io && followerIds.length) {
+    try {
+      const sockets = await getAllSockets(params.io); // đúng một lần cho cả lượt fan-out
+      const byUser = new Map<string, string>();
+      for (const sk of sockets ?? []) {
+        const d: any = sk?.data ?? sk;
+        if (d?.userId) byUser.set(String(d.userId), String(d.id ?? sk.id));
+      }
+      let emitted = 0;
+      const event = Route.POST + POST_PATH.NEW_FROM_FOLLOWEE;
+      for (const uid of followerIds) {
+        const socketId = byUser.get(String(uid));
+        if (socketId) {
+          params.io
+            .to(socketId)
+            .emit(event, { postId, authorId: String(post.authorId) });
+          emitted++;
+        }
+      }
+      console.log("[feed-socket]", {
+        postId,
+        online: emitted,
+        followers: followerIds.length,
+        socketScans: 1,
+      });
+    } catch (err) {
+      // Lỗi socket không được làm hỏng fan-out ZSET đã ghi xong ở trên (không throw/reject ở đây).
+      console.error("[feed-socket] error", err);
+    }
+  }
 
   // [plan-review TEST-3] Fan-out là fire-and-forget nên không có điểm hoàn thành quan sát được từ
   // bên ngoài; dòng log này là cách duy nhất kiểm chứng SC-6 mà không phải đua với `redis-cli
