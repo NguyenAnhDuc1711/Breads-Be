@@ -9,6 +9,7 @@ import Post from "../models/post.model.js";
 import SavedPost from "../models/savedPost.model.js";
 import SurveyOption from "../models/surveyOption.model.js";
 import User from "../models/user.model.js";
+import { getForYouFeed } from "./feed/index.ts";
 
 export const getPostDetail = async ({
   postId = "",
@@ -271,17 +272,17 @@ const getQueryPostValidation = (filter) => {
   return query;
 };
 
-export const getForYouPostsId = async ({ userId, skip, limit }) => {
-  const userInfo = await User.findOne({
-    _id: ObjectId(userId),
-  });
-  const userCatesCare = userInfo?.catesCare ?? [];
+/**
+ * Fallback phổ quát để dựng pool candidate (không phải nhánh celebrity).
+ * Không có `$skip`: pool cố định theo `limit`, phân trang được áp **sau khi chấm điểm**
+ * ở `getForYouFeed` (AD-4).
+ */
+export const getCandidatesFromMongo = async ({ userId, limit }) => {
   const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
   const data = await Post.aggregate([
     {
       $match: {
         type: { $in: [CREATE, EDIT, REPOST] },
-        authorId: { $ne: ObjectId(userId) },
       },
     },
     {
@@ -290,42 +291,12 @@ export const getForYouPostsId = async ({ userId, skip, limit }) => {
       },
     },
     {
-      $skip: skip,
+      $match: {
+        authorId: { $ne: ObjectId(userId) },
+      },
     },
     {
       $limit: parseInt(limit),
-    },
-    {
-      $addFields: {
-        matchedCategories: {
-          $filter: {
-            input: "$categories",
-            as: "category",
-            cond: { $in: ["$$category", userCatesCare] },
-          },
-        },
-      },
-    },
-    {
-      $addFields: {
-        score: {
-          $add: [
-            {
-              $multiply: [
-                { $size: { $ifNull: ["$matchedCategories", []] } },
-                15,
-              ],
-            },
-            { $multiply: [{ $ifNull: ["$likesCount", 0] }, 3] },
-            { $multiply: [{ $size: { $ifNull: ["$replies", []] } }, 3] },
-            { $multiply: [{ $size: { $ifNull: ["$media", []] } }, 2] },
-            { $size: { $ifNull: ["$survey", []] } },
-          ],
-        },
-      },
-    },
-    {
-      $sort: { score: -1 },
     },
     {
       $project: {
@@ -407,7 +378,7 @@ export const getPostsIdByFilter = async (payload) => {
         sort = { createdAt: 1 };
         break;
       default:
-        data = await getForYouPostsId({ userId, skip, limit });
+        data = await getForYouFeed({ userId, skip, limit });
         break;
     }
     if (
@@ -430,12 +401,8 @@ export const handleReplyForParentPost = async ({
 }) => {
   try {
     const action = addNew
-      ? {
-          $push: { replies: replyId },
-        }
-      : {
-          $pull: { replies: replyId },
-        };
+      ? { $push: { replies: replyId }, $inc: { engagementScore: 3 } }
+      : { $pull: { replies: replyId }, $inc: { engagementScore: -3 } };
     await Post.updateOne(
       {
         _id: parentId,

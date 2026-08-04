@@ -22,11 +22,12 @@ const REDIS_CONNECT_TIMEOUT = 10000,
 
 const handleTimeoutError = () => {
   connectionTimeout = setTimeout(() => {
-    // throw new RedisErrorResponse({
-    //   message: REDIS_CONNECT_MESSAGE.message.en,
-    //   statusCode: REDIS_CONNECT_MESSAGE.code,
-    // });
-    throw new Error(REDIS_CONNECT_MESSAGE.message.en);
+    console.error(
+      "[redis] connect timeout after",
+      REDIS_CONNECT_TIMEOUT,
+      "ms —",
+      REDIS_CONNECT_MESSAGE.message.en
+    );
   }, REDIS_CONNECT_TIMEOUT);
 };
 
@@ -53,6 +54,11 @@ const initRedis = () => {
   const instanceRedis = new Redis({
     host: process.env.REDIS_HOST || "localhost",
     port: Number(process.env.REDIS_PORT || 6379),
+    // Default (true) queues commands while disconnected and lets them hang
+    // until reconnect/timeout — observed 19-29s stalls under fanout load
+    // with Redis unreachable. Fail fast instead so the non-throwing
+    // feed/zset.ts helpers' try/catch can do their job immediately.
+    enableOfflineQueue: false,
   });
   handleEventConnection({ connectionRedis: instanceRedis });
   client.instanceConnect = instanceRedis;
@@ -102,5 +108,5 @@ const clearCache = async (): Promise<"OK"> => {
   return redisInstance.flushall();
 };
 
-export { setCache, getCache, deleteCache, clearCache };
+export { setCache, getCache, deleteCache, clearCache, getRedisInstance };
 export default initRedis;

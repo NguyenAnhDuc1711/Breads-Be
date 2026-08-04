@@ -3,7 +3,6 @@ import { Constants } from "../../Breads-Shared/Constants/index.js";
 import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
 import { IPost } from "../../Breads-Shared/Types/index.js";
 import { CREATED, OK } from "../../core/success.response.js";
-import { getCache } from "../../dbs/redis.ts";
 import HTTPStatus from "../../utils/httpStatus.js";
 import { ObjectId } from "../../utils/index.js";
 import Category from "../models/category.model.js";
@@ -12,6 +11,7 @@ import Link from "../models/link.model.js";
 import Post from "../models/post.model.js";
 import SurveyOption from "../models/surveyOption.model.js";
 import User from "../models/user.model.js";
+import { fanoutPostToFollowers } from "../services/feed/fanout.ts";
 import {
   getPostDetail,
   getPostsIdByFilter,
@@ -146,6 +146,13 @@ export const createPost = async (req, res) => {
   }
   const newPost = new Post(newPostPayload);
   const postSaved = await newPost.save();
+  // Fan-out-on-write (FR-5). KHÔNG `await`: NFR-2 cấm fan-out chặn response — một tác giả gần
+  // ngưỡng celebrity sẽ làm response treo hàng giây. `.catch()` là bắt buộc: rejection không bắt
+  // chỉ rơi vào handler `unhandledRejection` toàn cục (001), mất hết ngữ cảnh.
+  fanoutPostToFollowers({
+    post: postSaved,
+    io: req.app.get("socket_io"),
+  }).catch((e) => console.log("[feed-fanout] error", e));
   if (parentPost && action === PostConstants.ACTIONS.REPLY) {
     await handleReplyForParentPost({
       parentId: parentPost,
@@ -212,6 +219,7 @@ export const deletePost = async (req, res) => {
       $pull: {
         replies: postId,
       },
+      $inc: { engagementScore: -3 },
     },
   );
   await Post.updateMany(
@@ -295,12 +303,18 @@ export const likeUnlikePost = async (req, res) => {
   if (existingLike) {
     //unlike post
     await Like.deleteOne({ _id: existingLike._id });
-    await Post.updateOne({ _id: post._id }, { $inc: { likesCount: -1 } });
+    await Post.updateOne(
+      { _id: post._id },
+      { $inc: { likesCount: -1, engagementScore: -3 } },
+    );
     returnMsg = "Post unliked successfully";
   } else {
     //like post
     await Like.create({ postId: ObjectId(postId), userId: ObjectId(userId) });
-    await Post.updateOne({ _id: post._id }, { $inc: { likesCount: 1 } });
+    await Post.updateOne(
+      { _id: post._id },
+      { $inc: { likesCount: 1, engagementScore: 3 } },
+    );
     returnMsg = "Post liked successfully!";
   }
 
@@ -315,34 +329,15 @@ export const getPosts = async (req, res) => {
   const filter = payload?.filter;
   const pageFilter = filter?.page;
   const userId = payload.userId;
-  const page = payload.page;
-  const cacheKey = `feed:${pageFilter}:${userId}`;
-  const cacheFeed = await getCache(cacheKey);
   const isAdminPage = pageFilter?.includes("admin");
   if (isAdminPage) {
     payload.isAdminPage = true;
   }
-  // if (cacheFeed && !isAdminPage) {
-  //   const numberFeedPageCached = (cacheFeed as any)?.length;
-  //   if (Number(page) <= numberFeedPageCached) {
-  //     return res.status(HTTPStatus.OK).json(cacheFeed?.[page - 1]);
-  //   }
-  // }
   const data = await getPostsIdByFilter(payload);
   let result = [];
   if (data?.length) {
     result = await getPostDetail({ postIds: data, viewerId: userId });
   }
-  // let newCacheFeed;
-  // if (cacheFeed) {
-  //   newCacheFeed = [...(cacheFeed as any), result];
-  // } else {
-  //   newCacheFeed = result?.length ? [result] : [];
-  // }
-  // if (!isAdminPage) {
-  //   const numberHourExpireCache = 1;
-  //   await setCache(cacheKey, newCacheFeed, numberHourExpireCache * 60 * 60);
-  // }
   new OK({
     message: "Get posts successfully",
     metadata: result,

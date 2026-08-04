@@ -6,11 +6,13 @@
   "type": "module",
   "scripts": {
     "dev": "npx tsx watch src/server.ts",
+    "test": "node --test src/api/services/feed/*.test.ts",
     "start": "ts-node-dev src/server.ts",
     "crawl-data": "npx tsx src/api/crawl.ts",
     "migrate:follow-like": "npx tsx src/api/migrations/migrateFollowLike.ts",
     "migrate:saved-posts": "npx tsx src/api/migrations/migrateSavedPosts.ts",
     "migrate:backfill-like-follow-counts": "npx tsx src/api/migrations/backfillLikeFollowCounts.ts",
+    "migrate:backfill-engagement-score": "npx tsx src/api/migrations/backfillEngagementScore.ts",
     "seed:celebrity-follows": "npx tsx src/api/seed/seedCelebrityFollows.ts",
     "seed:fake-data": "npx tsx src/api/seed/index.ts",
     "k6:history": "node test/scripts/build-history.js"
