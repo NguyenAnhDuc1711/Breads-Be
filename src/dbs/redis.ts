@@ -54,6 +54,11 @@ const initRedis = () => {
   const instanceRedis = new Redis({
     host: process.env.REDIS_HOST || "localhost",
     port: Number(process.env.REDIS_PORT || 6379),
+    // Default (true) queues commands while disconnected and lets them hang
+    // until reconnect/timeout — observed 19-29s stalls under fanout load
+    // with Redis unreachable. Fail fast instead so the non-throwing
+    // feed/zset.ts helpers' try/catch can do their job immediately.
+    enableOfflineQueue: false,
   });
   handleEventConnection({ connectionRedis: instanceRedis });
   client.instanceConnect = instanceRedis;
