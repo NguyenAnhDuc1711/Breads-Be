@@ -272,16 +272,11 @@ const getQueryPostValidation = (filter) => {
 };
 
 export const getForYouPostsId = async ({ userId, skip, limit }) => {
-  const userInfo = await User.findOne({
-    _id: ObjectId(userId),
-  });
-  const userCatesCare = userInfo?.catesCare ?? [];
   const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
   const data = await Post.aggregate([
     {
       $match: {
         type: { $in: [CREATE, EDIT, REPOST] },
-        authorId: { $ne: ObjectId(userId) },
       },
     },
     {
@@ -290,42 +285,15 @@ export const getForYouPostsId = async ({ userId, skip, limit }) => {
       },
     },
     {
+      $match: {
+        authorId: { $ne: ObjectId(userId) },
+      },
+    },
+    {
       $skip: skip,
     },
     {
       $limit: parseInt(limit),
-    },
-    {
-      $addFields: {
-        matchedCategories: {
-          $filter: {
-            input: "$categories",
-            as: "category",
-            cond: { $in: ["$$category", userCatesCare] },
-          },
-        },
-      },
-    },
-    {
-      $addFields: {
-        score: {
-          $add: [
-            {
-              $multiply: [
-                { $size: { $ifNull: ["$matchedCategories", []] } },
-                15,
-              ],
-            },
-            { $multiply: [{ $ifNull: ["$likesCount", 0] }, 3] },
-            { $multiply: [{ $size: { $ifNull: ["$replies", []] } }, 3] },
-            { $multiply: [{ $size: { $ifNull: ["$media", []] } }, 2] },
-            { $size: { $ifNull: ["$survey", []] } },
-          ],
-        },
-      },
-    },
-    {
-      $sort: { score: -1 },
     },
     {
       $project: {
@@ -430,12 +398,8 @@ export const handleReplyForParentPost = async ({
 }) => {
   try {
     const action = addNew
-      ? {
-          $push: { replies: replyId },
-        }
-      : {
-          $pull: { replies: replyId },
-        };
+      ? { $push: { replies: replyId }, $inc: { engagementScore: 3 } }
+      : { $pull: { replies: replyId }, $inc: { engagementScore: -3 } };
     await Post.updateOne(
       {
         _id: parentId,

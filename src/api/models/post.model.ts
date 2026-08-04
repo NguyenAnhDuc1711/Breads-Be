@@ -87,6 +87,10 @@ const postSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    engagementScore: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,
@@ -113,6 +117,10 @@ postSchema.index(
       },
     },
   },
+);
+postSchema.index(
+  { type: 1, createdAt: -1 },
+  { partialFilterExpression: { type: { $in: [CREATE, EDIT, REPOST] } } },
 );
 
 const Post = mongoose.model("Post", postSchema);
