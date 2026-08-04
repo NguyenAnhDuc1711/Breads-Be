@@ -212,6 +212,7 @@ export const deletePost = async (req, res) => {
       $pull: {
         replies: postId,
       },
+      $inc: { engagementScore: -3 },
     },
   );
   await Post.updateMany(
@@ -295,12 +296,18 @@ export const likeUnlikePost = async (req, res) => {
   if (existingLike) {
     //unlike post
     await Like.deleteOne({ _id: existingLike._id });
-    await Post.updateOne({ _id: post._id }, { $inc: { likesCount: -1 } });
+    await Post.updateOne(
+      { _id: post._id },
+      { $inc: { likesCount: -1, engagementScore: -3 } },
+    );
     returnMsg = "Post unliked successfully";
   } else {
     //like post
     await Like.create({ postId: ObjectId(postId), userId: ObjectId(userId) });
-    await Post.updateOne({ _id: post._id }, { $inc: { likesCount: 1 } });
+    await Post.updateOne(
+      { _id: post._id },
+      { $inc: { likesCount: 1, engagementScore: 3 } },
+    );
     returnMsg = "Post liked successfully!";
   }
 
