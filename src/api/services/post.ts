@@ -9,6 +9,7 @@ import Post from "../models/post.model.js";
 import SavedPost from "../models/savedPost.model.js";
 import SurveyOption from "../models/surveyOption.model.js";
 import User from "../models/user.model.js";
+import { getForYouFeed } from "./feed/index.ts";
 
 export const getPostDetail = async ({
   postId = "",
@@ -271,7 +272,12 @@ const getQueryPostValidation = (filter) => {
   return query;
 };
 
-export const getForYouPostsId = async ({ userId, skip, limit }) => {
+/**
+ * Fallback phổ quát để dựng pool candidate (không phải nhánh celebrity).
+ * Không có `$skip`: pool cố định theo `limit`, phân trang được áp **sau khi chấm điểm**
+ * ở `getForYouFeed` (AD-4).
+ */
+export const getCandidatesFromMongo = async ({ userId, limit }) => {
   const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
   const data = await Post.aggregate([
     {
@@ -288,9 +294,6 @@ export const getForYouPostsId = async ({ userId, skip, limit }) => {
       $match: {
         authorId: { $ne: ObjectId(userId) },
       },
-    },
-    {
-      $skip: skip,
     },
     {
       $limit: parseInt(limit),
@@ -375,7 +378,7 @@ export const getPostsIdByFilter = async (payload) => {
         sort = { createdAt: 1 };
         break;
       default:
-        data = await getForYouPostsId({ userId, skip, limit });
+        data = await getForYouFeed({ userId, skip, limit });
         break;
     }
     if (
