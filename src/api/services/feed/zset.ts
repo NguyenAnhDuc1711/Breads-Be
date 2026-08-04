@@ -12,6 +12,26 @@ const client = (op: string) => {
   return r;
 };
 
+// ioredis's pipeline.exec() resolves with a [error, result][] tuple array —
+// it does NOT reject the whole pipeline just because some commands failed
+// (only a connection-level failure to send does, which enableOfflineQueue:
+// false already turns into a rejection our try/catch handles). Without this
+// check, individual command errors inside an otherwise-resolved pipeline
+// were being silently swallowed.
+const logPipelineErrors = (
+  op: string,
+  results: [Error | null, unknown][] | null
+): void => {
+  if (!results) return;
+  const errors = results.filter(([err]) => err);
+  if (errors.length > 0) {
+    console.error(
+      `[feed-zset] ${op}: ${errors.length}/${results.length} command(s) failed:`,
+      errors.map(([err]) => err?.message)
+    );
+  }
+};
+
 const chunk = <T>(arr: T[], size: number): T[][] => {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) {
@@ -64,7 +84,8 @@ export const zAddPostForUsers = async (
         pipeline.zremrangebyrank(key, 0, -(FEED_CONFIG.zsetMaxSize + 1));
         pipeline.expire(key, FEED_CONFIG.activeWindowDays * 86400);
       }
-      await pipeline.exec();
+      const results = await pipeline.exec();
+      logPipelineErrors("zAddPostForUsers", results);
     } catch (err) {
       console.error("[feed-zset] zAddPostForUsers failed:", err);
     }
@@ -83,14 +104,16 @@ export const zReplaceUserFeed = async (
     const pipeline = r.pipeline();
     pipeline.del(key);
     if (entries.length === 0) {
-      await pipeline.exec();
+      const results = await pipeline.exec();
+      logPipelineErrors("zReplaceUserFeed", results);
       return;
     }
     const zaddArgs = entries.flatMap(({ postId, scoreMs }) => [scoreMs, postId]);
     pipeline.zadd(key, ...zaddArgs);
     pipeline.zremrangebyrank(key, 0, -(FEED_CONFIG.zsetMaxSize + 1));
     pipeline.expire(key, FEED_CONFIG.activeWindowDays * 86400);
-    await pipeline.exec();
+    const results = await pipeline.exec();
+    logPipelineErrors("zReplaceUserFeed", results);
   } catch (err) {
     console.error("[feed-zset] zReplaceUserFeed failed:", err);
   }
