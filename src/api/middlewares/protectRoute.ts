@@ -2,6 +2,10 @@ import jwt from "jsonwebtoken";
 import HTTPStatus from "../../utils/httpStatus.js";
 import User from "../models/user.model.js";
 
+// Avoid writing to the DB on every single request; only refresh the
+// timestamp once it's gone stale.
+const LAST_ACTIVE_THROTTLE_MS = 5 * 60 * 1000;
+
 const protectRoute = async (req, res, next) => {
   try {
     const token =
@@ -18,6 +22,16 @@ const protectRoute = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const user = await User.findById(decoded.userId).select("-password");
     req.user = user;
+
+    if (
+      user &&
+      (!user.lastActiveAt ||
+        Date.now() - user.lastActiveAt.getTime() > LAST_ACTIVE_THROTTLE_MS)
+    ) {
+      User.updateOne({ _id: user._id }, { lastActiveAt: new Date() }).catch(
+        (err) => console.log("Error updating lastActiveAt", err.message)
+      );
+    }
 
     next();
   } catch (err) {

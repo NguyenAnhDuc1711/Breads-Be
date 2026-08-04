@@ -76,7 +76,38 @@ export const getPostDetail = async ({
         $lookup: {
           from: "posts",
           let: { searchId: { $toObjectId: "$parentPost" } },
-          pipeline: [{ $match: { $expr: { $eq: ["$$searchId", "$_id"] } } }],
+          pipeline: [
+            { $match: { $expr: { $eq: ["$$searchId", "$_id"] } } },
+            {
+              $lookup: {
+                from: "users",
+                let: { authorSearchId: { $toObjectId: "$authorId" } },
+                pipeline: [
+                  { $match: { $expr: { $eq: ["$$authorSearchId", "$_id"] } } },
+                  {
+                    $project: {
+                      _id: 1,
+                      username: 1,
+                      avatar: 1,
+                      bio: 1,
+                      name: 1,
+                      followersCount: 1,
+                    },
+                  },
+                ],
+                as: "authorInfo",
+              },
+            },
+            { $unwind: { path: "$authorInfo", preserveNullAndEmptyArrays: true } },
+            {
+              $lookup: {
+                from: "surveyoptions",
+                localField: "survey",
+                foreignField: "_id",
+                as: "survey",
+              },
+            },
+          ],
           as: "parentPostInfo",
         },
       },
@@ -95,72 +126,76 @@ export const getPostDetail = async ({
       });
     }
 
-    const posts = await Post.aggregate(agg);
+    // 1. Chạy song song 3 truy vấn độc lập: Aggregation chính, Check Like, và Đếm Repost
+    const [posts, likedDocs, repostCounts] = await Promise.all([
+      Post.aggregate(agg),
+      viewerId
+        ? Like.find(
+            { userId: ObjectId(viewerId), postId: { $in: targetIds } },
+            { postId: 1 },
+          )
+        : Promise.resolve([]),
+      Post.aggregate([
+        { $match: { parentPost: { $in: targetIds } } },
+        { $group: { _id: "$parentPost", count: { $sum: 1 } } },
+      ]),
+    ]);
+
     if (!posts || posts.length === 0) return isBulk ? [] : null;
 
-    // 1. Lấy danh sách ID đã được viewer like (chỉ 1 query batch cho tất cả bài)
-    let likedPostSet = new Set<string>();
-    if (viewerId) {
-      const likedDocs = await Like.find(
-        { userId: ObjectId(viewerId), postId: { $in: targetIds } },
-        { postId: 1 },
-      );
-      likedPostSet = new Set(likedDocs.map((doc) => doc.postId.toString()));
-    }
-
-    // 2. Đếm số repost cho tất cả bài trong 1 query duy nhất
-    const repostCounts = await Post.aggregate([
-      { $match: { parentPost: { $in: targetIds } } },
-      { $group: { _id: "$parentPost", count: { $sum: 1 } } },
-    ]);
+    const likedPostSet = new Set(likedDocs.map((doc) => doc.postId.toString()));
     const repostMap = new Map(
       repostCounts.map((item) => [item._id.toString(), item.count]),
     );
 
-    // 3. Populate thông tin cho từng bài
-    const enrichedPosts = await Promise.all(
-      posts.map(async (result) => {
-        if (result?.usersTag?.length > 0) {
-          result.usersTagInfo = await getUsersTagInfo({
-            usersTagId: result.usersTag,
-          });
+    // 2. Gom tất cả usersTag IDs từ bài chính lẫn bài cha để query batch 1 lần duy nhất
+    const allUserTagIdsSet = new Set<string>();
+    posts.forEach((result) => {
+      if (result?.usersTag?.length) {
+        result.usersTag.forEach((id: any) => allUserTagIdsSet.add(id.toString()));
+      }
+      if (result?.parentPostInfo?.[0]?.usersTag?.length) {
+        result.parentPostInfo[0].usersTag.forEach((id: any) =>
+          allUserTagIdsSet.add(id.toString()),
+        );
+      }
+    });
+
+    let userTagMap = new Map<string, any>();
+    if (allUserTagIdsSet.size > 0) {
+      const userTagIds = Array.from(allUserTagIdsSet).map((id) => ObjectId(id));
+      const userTagInfos = await getUsersTagInfo({ usersTagId: userTagIds });
+      if (userTagInfos && userTagInfos.length > 0) {
+        userTagMap = new Map(userTagInfos.map((u: any) => [u._id.toString(), u]));
+      }
+    }
+
+    // 3. Map dữ liệu vào từng bài hoàn toàn in-memory (0 DB round-trip)
+    const enrichedPosts = posts.map((result) => {
+      if (result?.usersTag?.length > 0) {
+        result.usersTagInfo = result.usersTag
+          .map((id: any) => userTagMap.get(id.toString()))
+          .filter(Boolean);
+      }
+
+      if (result?.parentPostInfo?.length > 0) {
+        result.parentPostInfo = result.parentPostInfo[0];
+        const parentPostInfo = result.parentPostInfo;
+        if (parentPostInfo?.usersTag?.length > 0) {
+          parentPostInfo.usersTagInfo = parentPostInfo.usersTag
+            .map((id: any) => userTagMap.get(id.toString()))
+            .filter(Boolean);
         }
+      } else {
+        delete result.parentPostInfo;
+      }
 
-        if (result?.parentPostInfo?.length > 0) {
-          result.parentPostInfo = result.parentPostInfo[0];
-          const parentPostInfo = result.parentPostInfo;
-          parentPostInfo.authorInfo = await User.findOne(
-            { _id: ObjectId(parentPostInfo.authorId) },
-            {
-              _id: 1,
-              avatar: 1,
-              name: 1,
-              username: 1,
-              bio: 1,
-              followersCount: 1,
-            },
-          );
-          if (parentPostInfo?.survey?.length) {
-            parentPostInfo.survey = await SurveyOption.find({
-              _id: { $in: parentPostInfo.survey },
-            });
-          }
-          if (parentPostInfo?.usersTag?.length > 0) {
-            parentPostInfo.usersTagInfo = await getUsersTagInfo({
-              usersTagId: parentPostInfo.usersTag,
-            });
-          }
-        } else {
-          delete result.parentPostInfo;
-        }
+      result.repostNum = repostMap.get(result._id.toString()) || 0;
+      result.likedByMe = likedPostSet.has(result._id.toString());
+      return result;
+    });
 
-        result.repostNum = repostMap.get(result._id.toString()) || 0;
-        result.likedByMe = likedPostSet.has(result._id.toString());
-        return result;
-      }),
-    );
-
-    // 4. Giữ đúng thứ tự sắp xếp (score sort) ban đầu của targetIds
+    // 4. Giữ đúng thứ tự sắp xếp ban đầu của targetIds
     if (isBulk) {
       const postMap = new Map(enrichedPosts.map((p) => [p._id.toString(), p]));
       return postIds.map((id) => postMap.get(id.toString())).filter(Boolean);
@@ -250,6 +285,17 @@ export const getForYouPostsId = async ({ userId, skip, limit }) => {
       },
     },
     {
+      $sort: {
+        createdAt: -1,
+      },
+    },
+    {
+      $skip: skip,
+    },
+    {
+      $limit: parseInt(limit),
+    },
+    {
       $addFields: {
         matchedCategories: {
           $filter: {
@@ -280,12 +326,6 @@ export const getForYouPostsId = async ({ userId, skip, limit }) => {
     },
     {
       $sort: { score: -1 },
-    },
-    {
-      $skip: skip,
-    },
-    {
-      $limit: parseInt(limit),
     },
     {
       $project: {
@@ -324,7 +364,8 @@ export const getPostsIdByFilter = async (payload) => {
             .limit(limit)
         ).map(({ postId }) => postId);
         break;
-      case PageConstant.USER || PageConstant.FRIEND:
+      case PageConstant.USER:
+      case PageConstant.FRIEND:
         const value = filter.value;
         let type = value;
         const status = {

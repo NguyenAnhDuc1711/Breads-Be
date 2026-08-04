@@ -4,7 +4,7 @@ import { Constants } from "../../Breads-Shared/Constants/index.js";
 const ObjectId = mongoose.Schema.Types.ObjectId;
 const userStatus = Object.values(Constants.USER_STATUS);
 
-const userSchema = mongoose.Schema(
+const userSchema = new mongoose.Schema(
   {
     name: {
       type: String,
@@ -75,6 +75,10 @@ const userSchema = mongoose.Schema(
     followingCount: {
       type: Number,
       default: 0,
+    },
+    lastActiveAt: {
+      type: Date,
+      default: Date.now,
     },
   },
   {

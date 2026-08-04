@@ -9,6 +9,7 @@ import PostListener from "./listeners/post.listener.js";
 import UserListener from "./listeners/user.listener.js";
 import AnalyticsListener from "./listeners/admin.listener.js";
 import ALLOWED_ORIGINS from "../utils/allowedOrigins.js";
+import User from "../api/models/user.model.js";
 
 const parseCookieString = (cookieHeader?: string): Record<string, string> => {
   if (!cookieHeader) return {};
@@ -48,6 +49,15 @@ export const initSocket = (server: HttpServer, app: Application): void => {
     app.set("socket_io", io);
     io.on("connection", async (socket: Socket) => {
       console.log("Server is connected with socket ", socket.id);
+      const socketUserId = (socket as any).user?.userId;
+      if (socketUserId) {
+        User.updateOne(
+          { _id: socketUserId },
+          { lastActiveAt: new Date() }
+        ).catch((err) =>
+          console.log("Error updating lastActiveAt from socket", err.message)
+        );
+      }
       UserListener(socket, io);
       NotificationListener(socket, io);
       PostListener(socket, io);

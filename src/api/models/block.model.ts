@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 const ObjectId = mongoose.Schema.Types.ObjectId;
 
-const blockSchema = mongoose.Schema(
+const blockSchema = new mongoose.Schema(
   {
     blockerId: {
       type: ObjectId,

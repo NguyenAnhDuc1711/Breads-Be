@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 
 const ObjectId = mongoose.Schema.Types.ObjectId;
-const surveyOptionShema = mongoose.Schema({
+const surveyOptionShema = new mongoose.Schema({
   placeholder: {
     type: String,
   },

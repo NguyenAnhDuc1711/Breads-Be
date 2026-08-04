@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 const ObjectId = mongoose.Schema.Types.ObjectId;
 
-const followSchema = mongoose.Schema(
+const followSchema = new mongoose.Schema(
   {
     followerId: {
       type: ObjectId,

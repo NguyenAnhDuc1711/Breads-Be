@@ -5,7 +5,7 @@ const ObjectId = mongoose.Schema.Types.ObjectId;
 // Replaces the old Collection.postsId embedded array — a real per-save
 // record is required to sort "Saved" by the time each post was actually
 // saved (the array had no per-item timestamp, only insertion order).
-const savedPostSchema = mongoose.Schema(
+const savedPostSchema = new mongoose.Schema(
   {
     userId: {
       type: ObjectId,

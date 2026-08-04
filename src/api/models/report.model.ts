@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 
 const ObjectId = mongoose.Schema.Types.ObjectId;
-const reportSchema = mongoose.Schema(
+const reportSchema = new mongoose.Schema(
   {
     userId: {
       type: ObjectId,

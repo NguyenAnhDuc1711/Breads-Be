@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 const ObjectId = mongoose.Schema.Types.ObjectId;
 
-const likeSchema = mongoose.Schema(
+const likeSchema = new mongoose.Schema(
   {
     postId: {
       type: ObjectId,

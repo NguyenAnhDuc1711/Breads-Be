@@ -7,7 +7,7 @@ const ObjectId = mongoose.Schema.Types.ObjectId;
 
 const postStatus = Object.values(Constants.POST_STATUS);
 
-const postSchema = mongoose.Schema(
+const postSchema = new mongoose.Schema(
   {
     authorId: {
       type: ObjectId,
@@ -93,6 +93,7 @@ const postSchema = mongoose.Schema(
   },
 );
 
+postSchema.index({ createdAt: -1 });
 postSchema.index(
   { parentPost: 1 },
   {

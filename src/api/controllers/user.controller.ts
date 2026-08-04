@@ -38,7 +38,7 @@ export const getAdminAccount = async (req, res) => {
   }
   const savedPosts = await SavedPost.find(
     { userId: adminAccount._id },
-    { postId: 1 }
+    { postId: 1 },
   ).sort({ createdAt: -1 });
   adminAccount.collection = {
     userId: adminAccount._id,
@@ -95,7 +95,7 @@ export const signupUser = async (req, res) => {
     await setCache(
       keyCache,
       JSON.stringify({ name, email, username, password, code }),
-      expireTime * 60
+      expireTime * 60,
     );
     new OK({
       message: "Mail was sent",
@@ -230,7 +230,7 @@ export const updateUser = async (req, res) => {
         break;
       case "links":
         const checkLinks = (value as string[]).every(
-          (link) => link.match(urlRegex)?.length > 0
+          (link) => link.match(urlRegex)?.length > 0,
         );
         if (checkLinks) {
           valueUpdate = value;
@@ -290,7 +290,7 @@ export const changePassword = async (req, res) => {
     { _id: ObjectId(userId) },
     {
       password: hashedNewPW,
-    }
+    },
   );
   new OK({
     message: "Change password successfully",
@@ -333,8 +333,8 @@ export const getUserToFollows = async (req, res) => {
         _id: 1,
         username: 1,
         avatar: 1,
-      }
-    );
+      },
+    ).limit(20);
     return res.status(HTTPStatus.OK).json(users);
   }
   if (!userId) {
@@ -431,7 +431,7 @@ export const getUsersFollow = async (req, res) => {
       username: 1,
       name: 1,
       bio: 1,
-    }
+    },
   );
   const followingUsers = await User.find(
     {
@@ -443,7 +443,7 @@ export const getUsersFollow = async (req, res) => {
       username: 1,
       name: 1,
       bio: 1,
-    }
+    },
   );
   new OK({
     message: "Get users follow successfully",
@@ -545,7 +545,7 @@ export const getUsersPendingPost = async (req, res) => {
   const authorIds = (
     await Post.find(
       { status: Constants.POST_STATUS.PENDING },
-      { _id: 0, authorId: 1 }
+      { _id: 0, authorId: 1 },
     ).lean()
   )?.map(({ authorId }) => authorId);
   const users = await User.find(
@@ -557,7 +557,7 @@ export const getUsersPendingPost = async (req, res) => {
       _id: 1,
       username: 1,
       avatar: 1,
-    }
+    },
   )
     .skip(skip)
     .limit(limit);
