@@ -11,6 +11,7 @@ import Link from "../models/link.model.js";
 import Post from "../models/post.model.js";
 import SurveyOption from "../models/surveyOption.model.js";
 import User from "../models/user.model.js";
+import { fanoutPostToFollowers } from "../services/feed/fanout.ts";
 import {
   getPostDetail,
   getPostsIdByFilter,
@@ -145,6 +146,13 @@ export const createPost = async (req, res) => {
   }
   const newPost = new Post(newPostPayload);
   const postSaved = await newPost.save();
+  // Fan-out-on-write (FR-5). KHÔNG `await`: NFR-2 cấm fan-out chặn response — một tác giả gần
+  // ngưỡng celebrity sẽ làm response treo hàng giây. `.catch()` là bắt buộc: rejection không bắt
+  // chỉ rơi vào handler `unhandledRejection` toàn cục (001), mất hết ngữ cảnh.
+  fanoutPostToFollowers({
+    post: postSaved,
+    io: req.app.get("socket_io"),
+  }).catch((e) => console.log("[feed-fanout] error", e));
   if (parentPost && action === PostConstants.ACTIONS.REPLY) {
     await handleReplyForParentPost({
       parentId: parentPost,
