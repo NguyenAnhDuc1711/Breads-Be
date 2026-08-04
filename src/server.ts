@@ -12,8 +12,12 @@ const server = app.listen(PORT, HOST, () => {
 initSocket(server, app);
 
 process.on("uncaughtException", (err) => {
-  console.error("Uncaught Exception: ", err);
+  console.error("[fatal] uncaughtException:", err?.stack || err);
   process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[fatal] unhandledRejection:", (reason as any)?.stack || reason);
 });
 
 process.on("SIGINT", () => {

@@ -22,11 +22,12 @@ const REDIS_CONNECT_TIMEOUT = 10000,
 
 const handleTimeoutError = () => {
   connectionTimeout = setTimeout(() => {
-    // throw new RedisErrorResponse({
-    //   message: REDIS_CONNECT_MESSAGE.message.en,
-    //   statusCode: REDIS_CONNECT_MESSAGE.code,
-    // });
-    throw new Error(REDIS_CONNECT_MESSAGE.message.en);
+    console.error(
+      "[redis] connect timeout after",
+      REDIS_CONNECT_TIMEOUT,
+      "ms —",
+      REDIS_CONNECT_MESSAGE.message.en
+    );
   }, REDIS_CONNECT_TIMEOUT);
 };
 
@@ -102,5 +103,5 @@ const clearCache = async (): Promise<"OK"> => {
   return redisInstance.flushall();
 };
 
-export { setCache, getCache, deleteCache, clearCache };
+export { setCache, getCache, deleteCache, clearCache, getRedisInstance };
 export default initRedis;
