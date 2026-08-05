@@ -3,6 +3,14 @@ import Follow from "../models/follow.model.js";
 import SavedPost from "../models/savedPost.model.js";
 import User from "../models/user.model.js";
 
+// Without a cap, `$lookup` buffers every matching `follows` doc in memory
+// before continuing the pipeline. Celebrity accounts (see
+// seedCelebrityFollows.ts, up to 2M followers) blow past MongoDB's 100MB
+// per-lookup buffer limit, crashing `getUserInfo` on login. Local membership
+// checks ("am I following X") never need more than a bounded slice, so the
+// `pipeline` limits each lookup regardless of how large the account is.
+const FOLLOW_RELATIONS_LIMIT = 5000;
+
 // Stages that compute `followed` (follower ids) and `following` (followee ids)
 // from the Follow collection, matching the shape of the old embedded arrays.
 export const followRelationsLookupStages = (localField = "_id") => [
@@ -11,6 +19,10 @@ export const followRelationsLookupStages = (localField = "_id") => [
       from: "follows",
       localField,
       foreignField: "followeeId",
+      pipeline: [
+        { $limit: FOLLOW_RELATIONS_LIMIT },
+        { $project: { _id: 0, followerId: 1 } },
+      ],
       as: "followedByDocs",
     },
   },
@@ -19,6 +31,10 @@ export const followRelationsLookupStages = (localField = "_id") => [
       from: "follows",
       localField,
       foreignField: "followerId",
+      pipeline: [
+        { $limit: FOLLOW_RELATIONS_LIMIT },
+        { $project: { _id: 0, followeeId: 1 } },
+      ],
       as: "followingDocs",
     },
   },
