@@ -407,36 +407,36 @@ export const handleCrawlFakeUsers = async (req, res) => {
 };
 
 export const getUsersFollow = async (req, res) => {
-  const { userId } = req.query;
+  const { userId, type } = req.query;
   if (!userId) {
     throw new BadRequestError("Empty userId");
   }
+  if (type !== "followed" && type !== "following") {
+    throw new BadRequestError("Invalid type");
+  }
+  const page = Math.max(parseInt(req.query.page) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(req.query.limit) || 20, 1), 50);
+
   const userInfo = await User.findOne({ _id: ObjectId(userId) });
   if (!userInfo) {
     throw new NotFoundError("Invalid user");
   }
-  const followerIds = (
-    await Follow.find({ followeeId: ObjectId(userId) }, { followerId: 1 })
-  ).map(({ followerId }) => followerId);
-  const followeeIds = (
-    await Follow.find({ followerId: ObjectId(userId) }, { followeeId: 1 })
-  ).map(({ followeeId }) => followeeId);
-  const followedUsers = await User.find(
-    {
-      _id: { $in: followerIds },
-    },
-    {
-      _id: 1,
-      avatar: 1,
-      username: 1,
-      name: 1,
-      bio: 1,
-    },
-  );
-  const followingUsers = await User.find(
-    {
-      _id: { $in: followeeIds },
-    },
+
+  const isFollowed = type === "followed";
+  const filter = isFollowed
+    ? { followeeId: ObjectId(userId) }
+    : { followerId: ObjectId(userId) };
+  const idField = isFollowed ? "followerId" : "followeeId";
+
+  const follows = await Follow.find(filter, { [idField]: 1 })
+    .sort({ _id: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit + 1);
+  const hasMore = follows.length > limit;
+  const ids = follows.slice(0, limit).map((f) => f[idField]);
+
+  const users = await User.find(
+    { _id: { $in: ids } },
     {
       _id: 1,
       avatar: 1,
@@ -445,11 +445,16 @@ export const getUsersFollow = async (req, res) => {
       bio: 1,
     },
   );
+  const usersById = new Map(users.map((u) => [String(u._id), u]));
+  const orderedUsers = ids
+    .map((id) => usersById.get(String(id)))
+    .filter(Boolean);
+
   new OK({
     message: "Get users follow successfully",
     metadata: {
-      followed: followedUsers,
-      following: followingUsers,
+      users: orderedUsers,
+      hasMore,
     },
   }).send(res);
 };
@@ -544,7 +549,7 @@ export const getUsersPendingPost = async (req, res) => {
   }
   const authorIds = (
     await Post.find(
-      { status: Constants.POST_STATUS.PENDING },
+      { status: Constants.POST_STATUS.PRE_ACCEPT },
       { _id: 0, authorId: 1 },
     ).lean()
   )?.map(({ authorId }) => authorId);
