@@ -3,7 +3,7 @@ import { Constants } from "../../Breads-Shared/Constants/index.js";
 import Category from "../models/category.model.js";
 import Post from "../models/post.model.js";
 
-const { PUBLIC, ONLY_FOLLOWERS, ONLY_ME, PENDING } = Constants.POST_STATUS;
+const { PUBLIC, ONLY_FOLLOWERS, ONLY_ME, PRE_ACCEPT } = Constants.POST_STATUS;
 
 // Mirrors a realistic feed (mostly public) while still producing enough
 // private/followers-only/pending posts to exercise privacy/authorization
@@ -13,7 +13,7 @@ const randomStatus = () => {
   if (r < 0.8) return PUBLIC;
   if (r < 0.9) return ONLY_FOLLOWERS;
   if (r < 0.95) return ONLY_ME;
-  return PENDING;
+  return PRE_ACCEPT;
 };
 
 // picsum.photos URLs are deterministic strings, not fetched — no network

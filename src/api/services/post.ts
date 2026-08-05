@@ -214,7 +214,7 @@ const getQueryPostValidation = (filter) => {
   const postContent = filter?.postContent;
   const postType = filter?.postType;
   if (!user && !postContent && !postType) {
-    return { status: Constants.POST_STATUS.PENDING };
+    return { status: Constants.POST_STATUS.PRE_ACCEPT };
   }
   let userQuery = null;
   let postContentQuery = null;
@@ -260,7 +260,7 @@ const getQueryPostValidation = (filter) => {
       $or: postTypeConditions,
     };
   }
-  const subQueries = [{ status: Constants.POST_STATUS.PENDING }];
+  const subQueries = [{ status: Constants.POST_STATUS.PRE_ACCEPT }];
   [userQuery, postContentQuery, postTypeQuery].forEach((subQuery) => {
     if (subQuery) {
       subQueries.push(subQuery);
@@ -319,7 +319,7 @@ export const getPostsIdByFilter = async (payload) => {
         limit = 20;
       }
     }
-    const { PENDING, PUBLIC, ONLY_ME, ONLY_FOLLOWERS, DELETED } =
+    const { PRE_ACCEPT, PUBLIC, ONLY_ME, ONLY_FOLLOWERS, DELETED } =
       Constants.POST_STATUS;
     const skip = (page - 1) * limit;
     let query = {};
@@ -340,7 +340,7 @@ export const getPostsIdByFilter = async (payload) => {
         const value = filter.value;
         let type = value;
         const status = {
-          $nin: [PENDING, DELETED],
+          $nin: [PRE_ACCEPT, DELETED],
         };
         if (!value) {
           type = {

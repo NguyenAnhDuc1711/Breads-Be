@@ -74,7 +74,7 @@ const postSchema = new mongoose.Schema(
     status: {
       type: Number,
       enum: postStatus,
-      default: Constants.POST_STATUS.PENDING,
+      default: Constants.POST_STATUS.PRE_ACCEPT,
     },
     categories: [
       {
