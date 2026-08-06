@@ -13,6 +13,7 @@
     "migrate:saved-posts": "npx tsx src/api/migrations/migrateSavedPosts.ts",
     "migrate:backfill-like-follow-counts": "npx tsx src/api/migrations/backfillLikeFollowCounts.ts",
     "migrate:backfill-engagement-score": "npx tsx src/api/migrations/backfillEngagementScore.ts",
+    "migrate:post-visibility": "npx tsx src/api/migrations/migratePostVisibility.ts",
     "seed:celebrity-follows": "npx tsx src/api/seed/seedCelebrityFollows.ts",
     "seed:ordinary-follows": "npx tsx src/api/seed/seedOrdinaryFollows.ts",
     "seed:likes": "npx tsx src/api/seed/seedLikes.ts",
