@@ -19,6 +19,43 @@ import {
 } from "../services/post.js";
 import { uploadFileFromBase64 } from "../utils/index.js";
 
+/**
+ * FR-10 / Task 090 fix: một payload "giống repost" (copy nội dung bài khác vào `quote.content`)
+ * kích hoạt guard theo CẢ 3 tín hiệu độc lập — thiếu bất kỳ tín hiệu nào cũng để lọt bypass đã
+ * từng xảy ra thật (xem GAP-2, epic post-visibility verify report):
+ *   - `action=repost` (query param, Fe gửi khi user bấm nút Repost)
+ *   - `type=REPOST` (payload field — client tự gọi API có thể gửi field này mà bỏ action)
+ *   - `quote?._id` được set thủ công (client tự dựng payload `type=CREATE` + `quote`, không qua
+ *     `parentPost`/action nào cả — đây chính là bypass đã bị khai thác live trong task 090)
+ * Hàm thuần, không chạm DB — export để unit test riêng, KHÔNG phụ thuộc `createPost`.
+ */
+export const isRepostLikePayload = (payload: {
+  action?: string;
+  type?: string;
+  quote?: { _id?: any };
+}): boolean =>
+  payload.action === PostConstants.ACTIONS.REPOST ||
+  payload.type === PostConstants.ACTIONS.REPOST ||
+  !!payload.quote?._id;
+
+/**
+ * FR-10: bài được repost/quote phải tồn tại VÀ có `visibility=PUBLIC` — nếu không, nội dung
+ * riêng tư của bài gốc sẽ bị nhân bản nguyên văn vào `quote.content` của bài mới, ra ngoài mọi
+ * ràng buộc visibility (010). Nhận thẳng document đã fetch (hoặc `null`) — hàm thuần, không tự
+ * query DB — để unit test được mà không cần Mongo.
+ */
+export const validateRepostGuard = (
+  referencedPostDoc: { visibility?: number } | null | undefined,
+): { ok: true } | { ok: false; error: string } => {
+  if (!referencedPostDoc) {
+    return { ok: false, error: "Parent post not found" };
+  }
+  if (referencedPostDoc.visibility !== Constants.POST_VISIBILITY.PUBLIC) {
+    return { ok: false, error: "Cannot repost non-public content" };
+  }
+  return { ok: true };
+};
+
 //create post
 export const createPost = async (req, res) => {
   const payload = req.body;
@@ -161,11 +198,7 @@ export const createPost = async (req, res) => {
   // (ví dụ `type=CREATE` + tự set `quote: { _id, content }` thủ công, không có `parentPost`) —
   // đây vẫn đúng vector rò rỉ FR-10 mô tả (nhân bản nội dung bài non-PUBLIC ra một bài không bị
   // ràng buộc visibility gì), chỉ khác field kích hoạt so với nhánh REPOST thông thường.
-  if (
-    action === PostConstants.ACTIONS.REPOST ||
-    type === PostConstants.ACTIONS.REPOST ||
-    !!quote?._id
-  ) {
+  if (isRepostLikePayload({ action, type, quote })) {
     // FR-10: repost copy nguyên văn nội dung bài gốc sang bài mới, nên cho repost bài non-PUBLIC
     // là nhân bản nội dung riêng tư ra ngoài vòng kiểm soát visibility (010). Phải chặn ở Be —
     // ẩn nút phía Fe không đủ, mọi client/API call trực tiếp đều bypass được UI.
@@ -173,15 +206,9 @@ export const createPost = async (req, res) => {
     const parentPostDoc = await Post.findById(referencedPostId, {
       visibility: 1,
     });
-    if (!parentPostDoc) {
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ error: "Parent post not found" });
-    }
-    if (parentPostDoc.visibility !== Constants.POST_VISIBILITY.PUBLIC) {
-      return res
-        .status(HTTPStatus.BAD_REQUEST)
-        .json({ error: "Cannot repost non-public content" });
+    const guard = validateRepostGuard(parentPostDoc);
+    if (guard.ok === false) {
+      return res.status(HTTPStatus.BAD_REQUEST).json({ error: guard.error });
     }
     if (action === PostConstants.ACTIONS.REPOST) {
       newPostPayload.parentPost = parentPost;

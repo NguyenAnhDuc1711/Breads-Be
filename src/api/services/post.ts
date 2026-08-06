@@ -71,7 +71,7 @@ export const canViewPost = (
  * Lọc mảng post đã fetch theo `canViewPost`, dùng ĐÚNG 1 truy vấn `Follow` cho cả mảng
  * (và 0 truy vấn khi không có bài `ONLY_FOLLOWERS` của người khác — trường hợp phổ biến).
  */
-const filterViewablePosts = async (posts: any[], viewerId: any) => {
+export const filterViewablePosts = async (posts: any[], viewerId: any) => {
   const { PUBLIC, ONLY_FOLLOWERS } = Constants.POST_VISIBILITY;
   const authorsToCheck = posts
     .filter(

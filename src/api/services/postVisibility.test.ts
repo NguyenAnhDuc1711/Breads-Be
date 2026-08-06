@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
-import { buildVisibilityQuery, canViewPost } from "./post.ts";
+import { buildVisibilityQuery, canViewPost, filterViewablePosts } from "./post.ts";
 
 const { PUBLIC: V_PUBLIC, ONLY_FOLLOWERS, ONLY_ME } = Constants.POST_VISIBILITY;
 const { PRE_ACCEPT, PUBLIC: S_PUBLIC, DELETED } = Constants.POST_STATUS;
@@ -109,4 +109,36 @@ test("buildVisibilityQuery KHÔNG loại PRE_ACCEPT (AD-5)", async () => {
   const query: any = await buildVisibilityQuery(VIEWER, []);
   assert.deepEqual(query.status, { $ne: DELETED });
   assert.equal(JSON.stringify(query).includes(`"$nin"`), false);
+});
+
+// Task 090 fix / GAP-1 (epic-verify Phase A): `getPostDetail({getFullInfo:true})` nhúng sẵn
+// `replies` của mỗi post — bản gốc chỉ lọc visibility ở top-level, không lọc lại từng reply theo
+// visibility CỦA CHÍNH REPLY ĐÓ (reply có thể tự đổi visibility riêng sau khi tạo, khác bài gốc).
+// Hậu quả live-tested: 1 reply ONLY_ME lộ nguyên văn qua GET /posts/:id cho viewer bất kỳ. Test
+// này tái tạo đúng kịch bản đó bằng `filterViewablePosts` (hàm được tái dùng để vá) — không dùng
+// ONLY_FOLLOWERS nên không chạm `Follow.find`/DB, giữ đúng tinh thần "hàm thuần" của file này.
+test("Task 090 regression: filterViewablePosts lọc đúng reply ONLY_ME của người khác trong mảng replies nhúng sẵn", async () => {
+  const replies = [
+    { _id: "r1", authorId: AUTHOR, visibility: V_PUBLIC },
+    { _id: "r2", authorId: AUTHOR, visibility: ONLY_ME }, // reply riêng tư của người khác -> phải bị lọc
+    { _id: "r3", authorId: VIEWER, visibility: ONLY_ME }, // reply ONLY_ME của chính viewer -> phải giữ
+  ];
+  const result = await filterViewablePosts(replies, VIEWER);
+  assert.deepEqual(
+    result.map((r: any) => r._id).sort(),
+    ["r1", "r3"],
+  );
+});
+
+test("filterViewablePosts: mảng rỗng trả về rỗng, không query Follow", async () => {
+  assert.deepEqual(await filterViewablePosts([], VIEWER), []);
+});
+
+test("filterViewablePosts: tác giả tự xem mảng reply của chính mình -> thấy hết kể cả ONLY_ME", async () => {
+  const replies = [
+    { _id: "r1", authorId: VIEWER, visibility: ONLY_ME },
+    { _id: "r2", authorId: VIEWER, visibility: V_PUBLIC },
+  ];
+  const result = await filterViewablePosts(replies, VIEWER);
+  assert.equal(result.length, 2);
 });
