@@ -81,7 +81,12 @@ test("FR-3.5 [W-2]: source=mongo-fallback, trang sâu -> extend, KHÔNG phải o
     batch,
     maxSkip,
   });
-  assert.deepEqual(plan, { mode: "extend", offset: 100, n: 20 });
+  // [090] offset = 145, KHÔNG phải 100. Với mongo-fallback, servablePool = basePoolSize (300) chứ
+  // không phải basePoolSize + batch (345) — `batch` không bao giờ được cộng vào pool vì nguồn này
+  // không bao giờ blend. Trang extend đầu tiên là skip=300 (offset=batch=45), rồi +limit mỗi trang:
+  // skip=400 là trang thứ 6 -> 45 + (400 - 300) = 145. Giá trị cũ 100 tính từ ngưỡng 345 mà pool
+  // thật không bao giờ đạt tới — chính là gốc của cửa sổ chết SC-3 (xem 2 ca hồi quy bên dưới).
+  assert.deepEqual(plan, { mode: "extend", offset: 145, n: 20 });
 });
 
 test("FR-3.6 [ca bẫy US-1]: basePoolSize nhỏ (viewer follow ít) -> vẫn blend, không extend", () => {
@@ -257,6 +262,101 @@ test("FR-1+FR-3.14: batch=0, trang sâu -> extend vẫn chạy bình thường",
   assert.equal(plan.n, limit);
   assert.equal(plan.offset, Math.min(0 + (400 - 300), maxSkip));
   assert.equal(plan.offset, 100);
+});
+
+// ---- Nhóm C2 — hồi quy "cửa sổ chết" SC-3/US-2 (bug tìm thấy ở 021, sửa ở 090) ----
+//
+// Bug: ngưỡng extend từng dùng `basePoolSize + batch` cho MỌI nguồn, nhưng `mongo-fallback` luôn
+// trả `mode: "off"` nên `batch` không bao giờ thật sự vào pool phục vụ. Hệ quả đo được trên DB
+// thật (persona 671ee34db863a9a7301732af, basePoolSize=300): skip=300 và skip=320 trả `[]`.
+//
+// `servedCount` mô hình hoá đúng thứ index.ts làm: nhánh "extend" THAY THẾ trang bằng `limit` bài
+// từ Mongo; nhánh "blend"/"off" `slice(skip, skip+limit)` trên pool đã rank, và pool đó chỉ có
+// `basePoolSize + batch` phần tử khi (và chỉ khi) mode thật sự là "blend".
+const servedCount = (
+  plan: { mode: string; n: number },
+  basePool: number,
+  skip: number,
+  lim: number
+): number => {
+  if (plan.mode === "extend") return lim;
+  const truePool = plan.mode === "blend" ? basePool + batch : basePool;
+  return Math.max(0, Math.min(truePool, skip + lim) - skip);
+};
+
+test("SC-3.22 [hồi quy]: mongo-fallback skip=300/320 KHÔNG còn là off — đúng 2 trang từng trả []", () => {
+  for (const skip of [300, 320]) {
+    const plan = planDiscovery({
+      enabled: true,
+      source: "mongo-fallback",
+      basePoolSize,
+      skip,
+      limit,
+      batch,
+      maxSkip,
+    });
+    assert.equal(plan.mode, "extend", `skip=${skip} phải là extend, không phải off`);
+    assert.equal(servedCount(plan, basePoolSize, skip, limit), limit);
+  }
+});
+
+test("SC-3.23 [hồi quy]: quét skip=0..1000 -> 0 trang rỗng, CẢ mongo-fallback LẪN zset", () => {
+  for (const source of ["mongo-fallback", "zset"]) {
+    for (const basePool of [0, 3, 12, 26, 300]) {
+      for (let skip = 0; skip <= 1000; skip++) {
+        const plan = planDiscovery({
+          enabled: true,
+          source,
+          basePoolSize: basePool,
+          skip,
+          limit,
+          batch,
+          maxSkip,
+        });
+        assert.ok(
+          servedCount(plan, basePool, skip, limit) > 0,
+          `trang rỗng tại source=${source} basePoolSize=${basePool} skip=${skip} mode=${plan.mode}`
+        );
+      }
+    }
+  }
+});
+
+test("SC-4.24 [hồi quy]: mongo-fallback — offset KHÔNG bị ghim ở batch, bước đúng limit", () => {
+  // Nếu chỉ sửa ngưỡng mà quên sửa phép trừ cursor, cả 3 skip dưới đây cùng cho offset=45 -> ba
+  // trang extend TRÙNG NHAU, vỡ SC-4 vượt xa một trang ranh giới mà R-6 cho phép có chủ ý.
+  const offsets = [300, 320, 340].map(
+    (skip) =>
+      planDiscovery({
+        enabled: true,
+        source: "mongo-fallback",
+        basePoolSize,
+        skip,
+        limit,
+        batch,
+        maxSkip,
+      }).offset
+  );
+  assert.deepEqual(offsets, [45, 65, 85]);
+  assert.equal(new Set(offsets).size, 3);
+});
+
+test("SC-3.25 [hồi quy]: nhánh zset/blend giữ nguyên ngưỡng basePoolSize + batch (US-1 không bị đẩy sang extend)", () => {
+  // Chốt lại rằng bản sửa KHÔNG thu ngưỡng của nguồn cá nhân hoá về `basePoolSize` trần trụi:
+  // skip=325 (= 345 - limit) vẫn phải là blend, và viewer follow ít vẫn blend ở trang đầu.
+  assert.equal(
+    planDiscovery({ enabled: true, source: "zset", basePoolSize, skip: 325, limit, batch, maxSkip }).mode,
+    "blend"
+  );
+  assert.equal(
+    planDiscovery({ enabled: true, source: "zset", basePoolSize: 12, skip: 0, limit, batch, maxSkip }).mode,
+    "blend"
+  );
+  // ...trong khi cùng skip=325 ở mongo-fallback giờ là extend (pool thật chỉ có 300).
+  assert.equal(
+    planDiscovery({ enabled: true, source: "mongo-fallback", basePoolSize, skip: 325, limit, batch, maxSkip }).mode,
+    "extend"
+  );
 });
 
 // ---- Nhóm D — accountDiscovery ----

@@ -45,12 +45,22 @@ export const planDiscovery = ({
   batch: number;
   maxSkip: number;
 }): DiscoveryPlan => {
-  // effectivePoolSize là biến DUY NHẤT dùng cho CẢ ngưỡng chọn chế độ LẪN phép trừ cursor —
-  // đây là thứ làm ranh giới blend->extend liền mạch (trang cuối vùng blend phục vụ tới hạng
-  // effectivePoolSize, trang đầu vùng extend bắt đầu ngay tại `batch`). KHÔNG thay bằng
-  // `basePoolSize` trần trụi — sẽ đẩy viewer ít follow (US-1, basePoolSize nhỏ) sai sang nhánh
+  // servablePool là biến DUY NHẤT dùng cho CẢ ngưỡng chọn chế độ LẪN phép trừ cursor — đây là thứ
+  // làm ranh giới blend->extend liền mạch (trang cuối vùng phục vụ từ pool đi tới đúng
+  // servablePool, trang đầu vùng extend bắt đầu ngay tại `batch`). KHÔNG thay bằng `basePoolSize`
+  // trần trụi cho MỌI nguồn — sẽ đẩy viewer ít follow (US-1, basePoolSize nhỏ) sai sang nhánh
   // extend dù pool blend đã đủ chỗ (xem Key risk #1 trong task file).
-  const effectivePoolSize = basePoolSize + batch;
+  //
+  // [090] Nhưng `+ batch` CHỈ đúng khi request thật sự sẽ blend. Với `source === "mongo-fallback"`
+  // hàm luôn trả `mode: "off"` (xem early-return bên dưới), nên `batch` KHÔNG BAO GIỜ được cộng
+  // vào pool phục vụ thật — dùng chung ngưỡng `basePoolSize + batch` cho nguồn này mở ra một cửa sổ
+  // chết `skip ∈ [basePoolSize, basePoolSize + batch - limit]` (đo thật: skip=300 và skip=320 với
+  // basePoolSize=300) nơi plan nói "off" nhưng pool đã cạn, và `slice(skip, skip+limit)` trả [] —
+  // đúng triệu chứng US-2/SC-3 tuyên bố đã xoá. Phép trừ cursor phải đổi THEO: nếu chỉ đổi ngưỡng,
+  // offset bị ghim ở `batch` suốt skip=300/320/340 -> ba trang trùng nhau, vỡ SC-4 vượt xa MỘT
+  // trang ranh giới mà R-6 cho phép có chủ ý.
+  const servablePool =
+    source === "mongo-fallback" ? basePoolSize : basePoolSize + batch;
 
   if (!enabled) return { mode: "off", offset: 0, n: 0 };
 
@@ -59,13 +69,13 @@ export const planDiscovery = ({
   // blend — pool fallback vẫn bị chặn ở candidatePool, nên trang sâu vẫn cần discovery để lấp chỗ.
   // Đảo thứ tự thì viewer mongo-fallback (persona PRIMARY P1) không bao giờ được extend, và
   // slice() trên pool đã cạn sẽ trả [] vĩnh viễn ở trang sâu — đúng triệu chứng PRD tuyên bố đã xoá.
-  if (skip + limit > effectivePoolSize) {
+  if (skip + limit > servablePool) {
     return {
       mode: "extend",
       // max(0, ...): R-6 — làm bước nhảy offset nhỏ hơn limit đúng MỘT lần ở chỗ chuyển chế độ,
       // gây lặp tối đa (limit - 1) bài. Đây là ĐÚNG đặc tả, không phải bug — không được "sửa" bằng
       // cách nhớ offset đã phục vụ (đó là state, cấm theo C-4).
-      offset: Math.min(batch + Math.max(0, skip - effectivePoolSize), maxSkip),
+      offset: Math.min(batch + Math.max(0, skip - servablePool), maxSkip),
       n: limit,
     };
   }
