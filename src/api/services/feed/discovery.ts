@@ -1,15 +1,19 @@
 // Hai tầng trong file này:
-//   1. Tầng THUẦN (task 010, dưới đây): discoveryBatchSize / planDiscovery / accountDiscovery —
+//   1. Tầng THUẦN (task 010, trên): discoveryBatchSize / planDiscovery / accountDiscovery —
 //      không I/O, không import Post hay kiểu id Mongo nào. Được npm test phủ kín trực tiếp (không
 //      cần Mongo).
-//   2. Tầng I/O (task 011/T3, thêm SAU task này): `getDiscoveryCandidates` — sẽ thêm bên dưới,
-//      có thể throw theo AD-4. KHÔNG được thêm ở đây.
+//   2. Tầng I/O (task 011/T3, dưới cùng file, dưới dấu phân tách riêng): `getDiscoveryCandidates` —
+//      ĐƯỢC PHÉP throw theo AD-4, khác hợp đồng non-throwing của tầng thuần ở trên.
 //
 // W-1: `planDiscovery` KHÔNG tự đọc cấu hình toàn cục (`discoveryEnabled`/`discoveryMaxSkip`) —
 // chúng đến qua tham số `enabled`/`maxSkip`. Lý do: cấu hình đó parse lúc import (ESM cache theo
 // process), nên test case `discoveryRatio = 0 -> n = 0` không thể cache-bust được nếu hàm tự đọc.
 // Caller (index.ts, task 012) đọc cấu hình và truyền vào tham số.
 import { FEED_CONFIG } from "./config.ts";
+// [011/T3] Import riêng cho tầng I/O bên dưới — KHÔNG dùng lại cho tầng thuần ở trên.
+import PostConstants from "../../../Breads-Shared/Constants/PostConstants.js";
+import { ObjectId } from "../../../utils/index.js";
+import Post from "../../models/post.model.js";
 
 // Hàm DUY NHẤT trong file đọc FEED_CONFIG (`candidatePool`/`discoveryRatio`) — gọi ở caller (012),
 // không gọi bên trong planDiscovery. Default: ceil(300 * 0.15) = 45.
@@ -93,4 +97,67 @@ export const accountDiscovery = (
     bestRank: shown > 0 ? Math.min(...ranks) : null,
     avgRank: shown > 0 ? ranks.reduce((a, b) => a + b, 0) / shown : null,
   };
+};
+
+// ============================================================================================
+// Tầng I/O (task 011/T3) — MỘT query Mongo duy nhất mà epic feed-discovery thêm vào toàn hệ thống.
+// ============================================================================================
+
+/**
+ * getDiscoveryCandidates — nguồn candidate discovery lấp chỗ trống khi ZSET fan-out + celebrity
+ * pull-on-read không đủ. Trả `postId` dạng CHUỖI, sort `engagementScore` desc.
+ *
+ * ĐƯỢC PHÉP THROW (AD-4) — KHÔNG bọc một khối bắt-lỗi cục bộ trong hàm này, kể cả "cho nhất quán"
+ * với hợp đồng non-throwing của `zset.ts`. Lý do: SC-10 đo NFR-3 bằng cách cho hàm lấy candidate
+ * discovery reject ngay để xác nhận caller (012/T4, `index.ts`) bắt được lỗi. Nếu lỗi bị chặn ngay
+ * ở đây, nó biến thành `[]` trước khi tới call-site, và SC-10 không đo được gì. Khối bắt-lỗi bao
+ * ngoài + guard `n > 0` thuộc về call-site, không thuộc hàm này.
+ *
+ * `visibilityQuery` là THAM SỐ BẮT BUỘC, không có default, không có nhánh dựng lại bên trong
+ * (NFR-2 fail-closed) — `buildVisibilityQuery` (`post.ts:31-52`) chứa một `Follow.find`, dựng lại ở
+ * đây sẽ nhân đôi chi phí và vượt ngân sách NFR-1 (một request chỉ được 1 `Follow.find`). Bỏ quên
+ * tham số này khi gọi phải là lỗi TypeScript, không phải một query không lọc.
+ *
+ * Sort là TOTAL ORDER `{ engagementScore: -1, _id: -1 }` — `_id` là tie-break BẮT BUỘC, không phải
+ * tối ưu (AD-2/TR-1). `engagementScore` không unique (nhiều post seed cùng giá trị/0), Mongo không
+ * đảm bảo thứ tự ổn định giữa các document cùng sort key khi chỉ sort một field — `skip`/`limit`
+ * liên tiếp có thể trả document trùng và bỏ sót document khác dù dữ liệu không đổi.
+ */
+export const getDiscoveryCandidates = async ({
+  userId,
+  poolIds,
+  visibilityQuery,
+  offset,
+  n,
+}: {
+  userId: any;
+  poolIds: string[];
+  visibilityQuery: Record<string, unknown>;
+  offset: number;
+  n: number;
+}): Promise<string[]> => {
+  const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
+  const rows: { _id: unknown }[] = await Post.find(
+    {
+      // $nin với chuỗi thô loại trừ 0 phần tử một cách im lặng (so sánh string vs ObjectId luôn
+      // false) → bài trùng trong cùng một response. Cast tường minh, giống `index.ts:188`.
+      _id: { $nin: poolIds.map((id) => ObjectId(id)) },
+      // Cả ba nguồn candidate hiện có đều không chứa bài của chính chủ feed; thiếu dòng này
+      // discovery sẽ là đường DUY NHẤT đẩy bài của chính user vào "For You" của họ — cùng hành vi
+      // với `getCandidatesFromMongo` (`post.ts:436`).
+      authorId: { $ne: ObjectId(userId) },
+      // Thiếu filter này thì reply (type === REPLY) lọt vào feed gốc — nhánh celebrity
+      // (`index.ts:146-159`) lọc đúng như vậy.
+      type: { $in: [CREATE, EDIT, REPOST] },
+      ...visibilityQuery,
+    },
+    // Hàm chỉ sinh ID candidate; bước hydrate hiện có (`index.ts:187-190`) mới lấy đủ field để
+    // chấm điểm — projection rộng hơn ở đây sẽ bị vứt đi. Cùng hợp đồng với nhánh celebrity.
+    { _id: 1 },
+  )
+    .sort({ engagementScore: -1, _id: -1 }) // AD-2/TR-1: total order, không phải tối ưu
+    .skip(offset)
+    .limit(n)
+    .lean();
+  return rows.map((r) => String(r._id));
 };
