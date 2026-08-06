@@ -9,6 +9,7 @@ import {
   tickPostSurvey,
   updatePost,
   updatePostStatus,
+  updatePostVisibility,
 } from "../controllers/post.controller.js";
 import { crawlPosts } from "../crawl.js";
 import optionalAuth from "../middlewares/optionalAuth.js";
@@ -25,6 +26,7 @@ const {
   TICK_SURVEY,
   CRAWL_POST,
   UPDATE_POST_STATUS,
+  UPDATE_POST_VISIBILITY,
 } = POST_PATH;
 
 router.get(GET_ALL, optionalAuth, asyncHandler(getPosts));
@@ -36,5 +38,6 @@ router.post(LIKE + ":id", protectRoute, asyncHandler(likeUnlikePost));
 router.put(TICK_SURVEY, asyncHandler(tickPostSurvey));
 router.post(CRAWL_POST, asyncHandler(crawlPosts));
 router.post(UPDATE_POST_STATUS, asyncHandler(updatePostStatus));
+router.post(UPDATE_POST_VISIBILITY, asyncHandler(updatePostVisibility));
 
 export default router;

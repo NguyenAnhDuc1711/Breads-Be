@@ -1,4 +1,5 @@
 import { POST_PATH, Route } from "../../../Breads-Shared/APIConfig.js";
+import { Constants } from "../../../Breads-Shared/Constants/index.js";
 import PostConstants from "../../../Breads-Shared/Constants/PostConstants.js";
 import { getRedisInstance } from "../../../dbs/redis.ts";
 import { getAllSockets } from "../../../socket/services/user.ts";
@@ -97,6 +98,18 @@ export const fanoutPostToFollowers = async (params: {
 
   const t0 = Date.now();
   const postId = String(post._id);
+
+  // FR-8: bài ONLY_ME không ai khác xem được nên fan-out sinh ĐÚNG 0 ZSET write — return sớm
+  // TRƯỚC truy vấn `User.findOne` bên dưới để không tốn thêm 1 query vô ích.
+  if (post?.visibility === Constants.POST_VISIBILITY.ONLY_ME) {
+    console.log("[feed-fanout]", {
+      postId,
+      onlyMe: true,
+      zadds: 0,
+      durationMs: Date.now() - t0,
+    });
+    return;
+  }
 
   // `followersCount` đã denormalize sẵn (A-2) — tuyệt đối không `countDocuments` trong write path.
   const author: any = await User.findOne(

@@ -58,6 +58,19 @@ export const createPost = async (req, res) => {
       .status(HTTPStatus.BAD_REQUEST)
       .json({ error: `Text must be less than ${maxLength} characters` });
   }
+  // [plan-review] `visibility` do client gửi lên phải nằm trong enum — chặn ở đây thay vì để
+  // Mongoose enum ném ValidationError 500 lúc `.save()`.
+  const validVisibilityValues: number[] = Object.values(
+    Constants.POST_VISIBILITY,
+  );
+  if (
+    payload.visibility !== undefined &&
+    !validVisibilityValues.includes(payload.visibility)
+  ) {
+    return res
+      .status(HTTPStatus.BAD_REQUEST)
+      .json({ error: "Invalid visibility value" });
+  }
   let newMedia = [];
   if (media.length) {
     const urlRegex = /(https?:\/\/[^\s]+)/g;
@@ -140,9 +153,31 @@ export const createPost = async (req, res) => {
     links: linksId,
     files,
     categories,
+    visibility: payload.visibility ?? Constants.POST_VISIBILITY.PUBLIC,
   };
-  if (action === PostConstants.ACTIONS.REPOST) {
-    newPostPayload.parentPost = parentPost;
+  // Chặn theo CẢ `action` (query param) lẫn `type` (payload): client tự gọi API có thể gửi
+  // `type=REPOST` mà bỏ `?action=repost`, vẫn kèm `quote.content` copy từ bài gốc.
+  if (
+    action === PostConstants.ACTIONS.REPOST ||
+    type === PostConstants.ACTIONS.REPOST
+  ) {
+    // FR-10: repost copy nguyên văn nội dung bài gốc sang bài mới, nên cho repost bài non-PUBLIC
+    // là nhân bản nội dung riêng tư ra ngoài vòng kiểm soát visibility (010). Phải chặn ở Be —
+    // ẩn nút phía Fe không đủ, mọi client/API call trực tiếp đều bypass được UI.
+    const parentPostDoc = await Post.findById(parentPost, { visibility: 1 });
+    if (!parentPostDoc) {
+      return res
+        .status(HTTPStatus.BAD_REQUEST)
+        .json({ error: "Parent post not found" });
+    }
+    if (parentPostDoc.visibility !== Constants.POST_VISIBILITY.PUBLIC) {
+      return res
+        .status(HTTPStatus.BAD_REQUEST)
+        .json({ error: "Cannot repost non-public content" });
+    }
+    if (action === PostConstants.ACTIONS.REPOST) {
+      newPostPayload.parentPost = parentPost;
+    }
   }
   const newPost = new Post(newPostPayload);
   const postSaved = await newPost.save();
@@ -396,6 +431,44 @@ export const updatePostStatus = async (req, res) => {
     },
     {
       status: status,
+    },
+  );
+  new OK({
+    message: "OK",
+    metadata: {},
+  }).send(res);
+};
+
+// FR-3: đổi visibility sau khi đăng. Mirror `updatePostStatus` (cùng verb/shape) nhưng KHÔNG
+// đụng tới field `status` — hai field độc lập (SC-8). Quyền: tác giả bài viết, không phải admin.
+export const updatePostVisibility = async (req, res) => {
+  const { userId, postId, visibility } = req.body;
+  if (!userId || !postId) {
+    return res.status(HTTPStatus.BAD_REQUEST).json({ error: "Empty payload" });
+  }
+  const validVisibilityValues: number[] = Object.values(
+    Constants.POST_VISIBILITY,
+  );
+  if (!validVisibilityValues.includes(visibility)) {
+    return res
+      .status(HTTPStatus.BAD_REQUEST)
+      .json({ error: "Invalid visibility value" });
+  }
+  const post = await Post.findById(postId, { authorId: 1 });
+  if (!post) {
+    return res.status(HTTPStatus.NOT_FOUND).json({ error: "Post not found" });
+  }
+  if (post.authorId.toString() !== userId.toString()) {
+    return res
+      .status(HTTPStatus.UNAUTHORIZED)
+      .json({ error: "Unauthorized to update this post" });
+  }
+  await Post.updateOne(
+    {
+      _id: ObjectId(postId),
+    },
+    {
+      visibility: visibility,
     },
   );
   new OK({
