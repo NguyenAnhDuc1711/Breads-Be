@@ -6,7 +6,7 @@ import Post from "../../models/post.model.js";
 import User from "../../models/user.model.js";
 import { buildVisibilityQuery, getCandidatesFromMongo } from "../post.js";
 import { FEED_CONFIG } from "./config.ts";
-import { discoveryBatchSize, getDiscoveryCandidates, planDiscovery } from "./discovery.ts";
+import { accountDiscovery, discoveryBatchSize, getDiscoveryCandidates, planDiscovery } from "./discovery.ts";
 import { rebuildUserFeedZset, rebuiltSentinelKey } from "./fanout.ts";
 import { bucketedNow, rankCandidates } from "./scoring.ts";
 import { zExists, zRevRangeTop } from "./zset.ts";
@@ -219,8 +219,14 @@ export const getForYouFeed = async ({
         console.error("[feed] discovery failed:", err);
       }
     }
-    // Shadow mode (012/T4): discoveryIds đã fetch nhưng CHƯA nối vào poolIds/page — 020/T5 mới làm
-    // việc đó. Trang trả về ở bước này byte-identical với trước khi có discovery.
+    // FR-3b blend-from-start: nối TRƯỚC hydrate — bài discovery đi chung MỘT query hydrate, tự có đủ
+    // 4 field để rankCandidates chấm điểm, và tự có relevanceScore = 0 khi không khớp category
+    // (Decision #8). Nối SAU hydrate = query thứ hai (vi phạm NFR-1) + finalScore NaN/0 im lặng.
+    // rankCandidates / scoring.ts KHÔNG được sửa (C-2).
+    if (plan.mode === "blend" && discoveryIds.length) {
+      poolIds = poolIds.concat(discoveryIds);
+    }
+    // "extend" vẫn đi đường cũ (chưa nối) — thuộc 021/T6.
 
     const candidateMs = Date.now() - t0;
 
@@ -238,11 +244,15 @@ export const getForYouFeed = async ({
       .slice(skipNum, skipNum + limitNum)
       .map(({ _id }) => _id);
 
+    // FR-5 + NTH-2 (AD-6). Gọi hàm THUẦN từ discovery.ts — KHÔNG dựng Set/duyệt page inline ở đây:
+    // page là ObjectId[], discoveryIds là string[], Set<string>.has(objectId) LUÔN false một cách im
+    // lặng (CRIT-1/TR-5). accountDiscovery chuẩn hoá String() ở cả hai phía.
+    const { shown, bestRank, avgRank } = accountDiscovery(page, discoveryIds);
+
     // NTH-1: đường đọc có 2 lớp catch-all (getPostsIdByFilter, getPostDetail) nên bug thật và
     // "Redis down, đúng thiết kế" cho ra cùng một kết quả rỗng 200 OK. Dòng này phân biệt được.
-    // poolSize giữ NGUYÊN nghĩa cũ (poolIds.length tại thời điểm log). Ở shadow mode chưa cộng
-    // discoveryIds vào poolIds nên basePoolSize === poolSize; quan hệ basePoolSize = poolSize -
-    // discoveryFetched chỉ đúng từ 020/T5 (blend) trở đi.
+    // poolSize giữ NGUYÊN nghĩa cũ (poolIds.length tại thời điểm log), tức ĐÃ CỘNG batch blend.
+    // Quan hệ đúng: basePoolSize = poolSize - discoveryFetched ở blend; = poolSize ở extend/off.
     console.log("[feed]", {
       userId: String(userId),
       source,
@@ -252,7 +262,9 @@ export const getForYouFeed = async ({
       hydrateMs,
       discoveryMode: plan.mode,
       discoveryFetched: discoveryIds.length,
-      discoveryShown: 0, // shadow mode: chưa bài discovery nào chạm trang. 020/T5 thay bằng accountDiscovery.
+      discoveryShown: shown,
+      discoveryBestRank: bestRank, // NTH-2/AD-6 — null khi shown === 0, KHÔNG phải 0
+      discoveryAvgRank: avgRank, // NTH-2/AD-6 — null khi shown === 0, KHÔNG phải NaN
     });
     return page;
   } catch (err) {
