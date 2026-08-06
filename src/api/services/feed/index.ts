@@ -6,6 +6,7 @@ import Post from "../../models/post.model.js";
 import User from "../../models/user.model.js";
 import { buildVisibilityQuery, getCandidatesFromMongo } from "../post.js";
 import { FEED_CONFIG } from "./config.ts";
+import { discoveryBatchSize, getDiscoveryCandidates, planDiscovery } from "./discovery.ts";
 import { rebuildUserFeedZset, rebuiltSentinelKey } from "./fanout.ts";
 import { bucketedNow, rankCandidates } from "./scoring.ts";
 import { zExists, zRevRangeTop } from "./zset.ts";
@@ -180,6 +181,47 @@ export const getForYouFeed = async ({
     // celebrity nên post vừa nằm trong ZSET vừa bị pull lại). `Array.from` chứ không spread: repo
     // chưa set `target` trong tsconfig nên spread một Set là lỗi TS2802.
     poolIds = Array.from(new Set(poolIds));
+
+    // FR-3: basePoolSize đo SAU dedupe, TRƯỚC hydrate. Đo trước dedupe làm effectivePoolSize lớn hơn
+    // thực tế -> lệch ranh giới blend/extend VÀ sai phép trừ cursor FR-4, sai im lặng, chỉ lộ ở SC-4.
+    const basePoolSize = poolIds.length;
+
+    // W-1: batch/maxSkip tính ở CALLER rồi truyền vào — planDiscovery phải thuần để unit-test được
+    // (FEED_CONFIG parse lúc import; xem AD-1/AD-5).
+    const plan = planDiscovery({
+      enabled: FEED_CONFIG.discoveryEnabled,
+      source,
+      basePoolSize,
+      skip: skipNum,
+      limit: limitNum,
+      batch: discoveryBatchSize(),
+      maxSkip: FEED_CONFIG.discoveryMaxSkip,
+    });
+
+    let discoveryIds: string[] = [];
+    // GUARD BẮT BUỘC — KHÔNG được gỡ dù trông như tối ưu thừa (W-4/plan-review):
+    // trong MongoDB `.limit(0)` nghĩa là KHÔNG GIỚI HẠN, không phải "không trả gì". Gỡ guard thì
+    // FEED_DISCOVERY_RATIO=0 — đúng cấu hình user dùng để TẮT blend — sẽ phát một query sort TOÀN BỘ
+    // collection không index, kích hoạt đúng R-1 (trần 32MB, throw) ở đúng lúc user tưởng đã tắt.
+    if (plan.n > 0) {
+      try {
+        discoveryIds = await getDiscoveryCandidates({
+          userId,
+          poolIds,
+          visibilityQuery,
+          offset: plan.offset,
+          n: plan.n,
+        });
+      } catch (err) {
+        // NFR-3/AD-4: try/catch nằm ở CALL-SITE, không nằm trong getDiscoveryCandidates — nếu nằm
+        // bên trong, stub-reject của SC-10 sẽ đi vòng qua chính lớp bảo vệ này. Feed cá nhân hoá
+        // vẫn sống với discoveryIds = [].
+        console.error("[feed] discovery failed:", err);
+      }
+    }
+    // Shadow mode (012/T4): discoveryIds đã fetch nhưng CHƯA nối vào poolIds/page — 020/T5 mới làm
+    // việc đó. Trang trả về ở bước này byte-identical với trước khi có discovery.
+
     const candidateMs = Date.now() - t0;
 
     // --- hydrate: MỘT query, projection đúng 4 field cần để chấm điểm ---
@@ -198,6 +240,9 @@ export const getForYouFeed = async ({
 
     // NTH-1: đường đọc có 2 lớp catch-all (getPostsIdByFilter, getPostDetail) nên bug thật và
     // "Redis down, đúng thiết kế" cho ra cùng một kết quả rỗng 200 OK. Dòng này phân biệt được.
+    // poolSize giữ NGUYÊN nghĩa cũ (poolIds.length tại thời điểm log). Ở shadow mode chưa cộng
+    // discoveryIds vào poolIds nên basePoolSize === poolSize; quan hệ basePoolSize = poolSize -
+    // discoveryFetched chỉ đúng từ 020/T5 (blend) trở đi.
     console.log("[feed]", {
       userId: String(userId),
       source,
@@ -205,6 +250,9 @@ export const getForYouFeed = async ({
       returned: page.length,
       candidateMs,
       hydrateMs,
+      discoveryMode: plan.mode,
+      discoveryFetched: discoveryIds.length,
+      discoveryShown: 0, // shadow mode: chưa bài discovery nào chạm trang. 020/T5 thay bằng accountDiscovery.
     });
     return page;
   } catch (err) {
