@@ -230,19 +230,38 @@ export const getForYouFeed = async ({
 
     const candidateMs = Date.now() - t0;
 
-    // --- hydrate: MỘT query, projection đúng 4 field cần để chấm điểm ---
-    const t1 = Date.now();
-    const posts: any[] = await Post.find(
-      { _id: { $in: poolIds.map((id) => ObjectId(id)) }, ...visibilityQuery },
-      { _id: 1, engagementScore: 1, categories: 1, createdAt: 1 },
-    ).lean();
-    const hydrateMs = Date.now() - t1;
+    let hydrateMs: number | null = null;
+    let page: any[];
 
-    // --- chấm điểm toàn pool RỒI mới phân trang ---
-    const nowMs = bucketedNow(Date.now(), FEED_CONFIG.scoreBucketSeconds);
-    const page = rankCandidates(posts, userCatesCare, nowMs)
-      .slice(skipNum, skipNum + limitNum)
-      .map(({ _id }) => _id);
+    if (plan.mode === "extend") {
+      // AD-3: batch extend ĐÃ được Mongo sort theo engagementScore và ĐÃ nhúng visibilityQuery
+      // (NFR-2 đòi "ít nhất một lần lọc"), nên bỏ qua HOÀN TOÀN hydrate + rankCandidates.
+      // Hệ quả đo được: trang sâu tốn NET 0 query thêm so với baseline (mất hydrate, được discovery).
+      // FR-4: THAY THẾ trang, KHÔNG nối vào phần ranked chưa phục vụ (cần state -> C-4 cấm) và
+      // KHÔNG rank chung với pool cũ (bài mới sẽ chen vào giữa vị trí đã phục vụ ở trang trước).
+      // R-6 (chấp nhận có ý thức): plan.offset = min(batch + max(0, skip - effectivePoolSize), maxSkip)
+      // làm bước nhảy offset nhỏ hơn limit ĐÚNG MỘT LẦN ở chỗ chuyển chế độ -> lặp <= limit-1 bài (vd
+      // 5 bài giữa skip=340 và skip=360), và sót <= limit-1 bài đã rank tại trang ranh giới. ĐÚNG ĐẶC
+      // TẢ. KHÔNG được "sửa" bằng cách nhớ offset đã phục vụ — đó là state, C-4 cấm. Từ trang thứ hai
+      // của vùng extend trở đi bước nhảy trở lại đúng limit (xem scenario skip=400 / 420 của FR-4).
+      page = discoveryIds;
+      // hydrateMs giữ null — W-6: 0 bị đọc nhầm thành "hydrate chạy và nhanh bất thường" khi xem log
+      // 2 tuần sau; null nói đúng sự thật là bước đó không chạy. Đọc kèm discoveryMode.
+    } else {
+      // --- hydrate: MỘT query, projection đúng 4 field cần để chấm điểm ---
+      const t1 = Date.now();
+      const posts: any[] = await Post.find(
+        { _id: { $in: poolIds.map((id) => ObjectId(id)) }, ...visibilityQuery },
+        { _id: 1, engagementScore: 1, categories: 1, createdAt: 1 },
+      ).lean();
+      hydrateMs = Date.now() - t1;
+
+      // --- chấm điểm toàn pool RỒI mới phân trang ---
+      const nowMs = bucketedNow(Date.now(), FEED_CONFIG.scoreBucketSeconds);
+      page = rankCandidates(posts, userCatesCare, nowMs)
+        .slice(skipNum, skipNum + limitNum)
+        .map(({ _id }) => _id);
+    }
 
     // FR-5 + NTH-2 (AD-6). Gọi hàm THUẦN từ discovery.ts — KHÔNG dựng Set/duyệt page inline ở đây:
     // page là ObjectId[], discoveryIds là string[], Set<string>.has(objectId) LUÔN false một cách im
