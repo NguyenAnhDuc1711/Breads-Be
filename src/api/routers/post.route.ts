@@ -27,7 +27,7 @@ const {
   UPDATE_POST_STATUS,
 } = POST_PATH;
 
-router.get(GET_ALL, asyncHandler(getPosts));
+router.get(GET_ALL, optionalAuth, asyncHandler(getPosts));
 router.get("/:id", optionalAuth, asyncHandler(getPost));
 router.post(CREATE, createPost);
 router.delete("/:id", asyncHandler(deletePost));

@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "npx tsx watch src/server.ts",
-    "test": "node --test src/api/services/feed/*.test.ts",
+    "test": "npx tsx --test src/api/services/*.test.ts src/api/services/feed/*.test.ts",
     "start": "ts-node-dev src/server.ts",
     "crawl-data": "npx tsx src/api/crawl.ts",
     "migrate:follow-like": "npx tsx src/api/migrations/migrateFollowLike.ts",

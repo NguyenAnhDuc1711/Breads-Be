@@ -6,6 +6,7 @@ import { ObjectId } from "../../../utils/index.js";
 import Follow from "../../models/follow.model.js";
 import Post from "../../models/post.model.js";
 import User from "../../models/user.model.js";
+import { buildVisibilityQuery } from "../post.js";
 import { FEED_CONFIG } from "./config.ts";
 import { zAddPostForUsers, zReplaceUserFeed } from "./zset.ts";
 
@@ -204,12 +205,20 @@ export const rebuildUserFeedZset = async (userId: any): Promise<number> => {
   ]);
 
   const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
+  // AD-2: ZSET của viewer chỉ được chứa bài viewer thật sự xem được. `followeeRows` chính là
+  // tập author của truy vấn này nên tái dùng luôn làm `followeeIds` cho nhánh ONLY_FOLLOWERS —
+  // tương đương về kết quả và tiết kiệm 1 truy vấn `Follow`.
+  const visibilityQuery = await buildVisibilityQuery(
+    uid,
+    followeeRows.map((r) => r.followeeId),
+  );
   const posts: any[] = followeeRows.length
     ? await Post.find(
         {
           authorId: { $in: followeeRows.map((r) => r.followeeId) },
           type: { $in: [CREATE, EDIT, REPOST] },
           createdAt: { $gte: activeCutoff() },
+          ...visibilityQuery,
         },
         { _id: 1, createdAt: 1 },
       )

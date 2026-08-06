@@ -328,15 +328,21 @@ export const getPosts = async (req, res) => {
   const payload = req.query;
   const filter = payload?.filter;
   const pageFilter = filter?.page;
-  const userId = payload.userId;
   const isAdminPage = pageFilter?.includes("admin");
   if (isAdminPage) {
     payload.isAdminPage = true;
   }
+  // [010] Danh tính người xem chỉ lấy từ jwt (`optionalAuth`), luôn ghi đè giá trị client gửi lên:
+  // `userId` trong query là "feed/trang cá nhân của AI", không phải "AI đang hỏi" (NFR-2).
+  payload.viewerId = req.viewerId ?? null;
   const data = await getPostsIdByFilter(payload);
   let result = [];
   if (data?.length) {
-    result = await getPostDetail({ postIds: data, viewerId: userId });
+    result = await getPostDetail({
+      postIds: data,
+      viewerId: payload.viewerId,
+      isAdminPage: !!isAdminPage,
+    });
   }
   new OK({
     message: "Get posts successfully",

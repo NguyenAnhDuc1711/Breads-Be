@@ -11,11 +11,114 @@ import SurveyOption from "../models/surveyOption.model.js";
 import User from "../models/user.model.js";
 import { getForYouFeed } from "./feed/index.ts";
 
+/**
+ * AD-2 — quy tắc "ai được xem bài này", dùng chung cho MỌI read-path:
+ *   `authorId == viewerId` HOẶC `visibility == PUBLIC`
+ *   HOẶC (`visibility == ONLY_FOLLOWERS` VÀ viewer đang follow author)
+ * đồng thời luôn loại `status == DELETED`.
+ *
+ * KHÔNG loại `status == PRE_ACCEPT` của người khác (AD-5): bài chưa duyệt vẫn hiển thị nếu
+ * visibility cho phép — đó chính là lý do đổi `PENDING` -> `PRE_ACCEPT` (fan-out chạy ngay lúc
+ * tạo, kiểm duyệt sau).
+ *
+ * `followeeIds`: danh sách người mà viewer đang follow, truyền vào để tái dùng khi caller đã
+ * query sẵn (case FOLLOWING / rebuild ZSET) — bỏ trống thì hàm tự query 1 lần.
+ * `viewerId` null (khách ẩn danh) => chỉ thấy bài PUBLIC.
+ *
+ * Task 002 đã backfill nên mọi document đều có `visibility` hợp lệ: so khớp trực tiếp,
+ * không cần `$exists: false`.
+ */
+export const buildVisibilityQuery = async (
+  viewerId: any = null,
+  followeeIds: any[] | null = null,
+) => {
+  const { PUBLIC, ONLY_FOLLOWERS } = Constants.POST_VISIBILITY;
+  const orClauses: any[] = [{ visibility: PUBLIC }];
+  if (viewerId) {
+    orClauses.push({ authorId: ObjectId(viewerId) });
+    const ids =
+      followeeIds ??
+      (
+        await Follow.find({ followerId: ObjectId(viewerId) }, { followeeId: 1 })
+      ).map(({ followeeId }) => followeeId);
+    if (ids.length > 0) {
+      orClauses.push({ visibility: ONLY_FOLLOWERS, authorId: { $in: ids } });
+    }
+  }
+  return {
+    status: { $ne: Constants.POST_STATUS.DELETED },
+    $or: orClauses,
+  };
+};
+
+/** Bản boolean tương đương `buildVisibilityQuery`, dùng khi đã có sẵn document. */
+export const canViewPost = (
+  viewerId: any,
+  post: any,
+  isFollowingAuthor = false,
+): boolean => {
+  if (!post) return false;
+  if (post.status === Constants.POST_STATUS.DELETED) return false;
+  if (!!viewerId && String(post.authorId) === String(viewerId)) return true;
+  const { PUBLIC, ONLY_FOLLOWERS } = Constants.POST_VISIBILITY;
+  const visibility = post.visibility ?? PUBLIC;
+  if (visibility === PUBLIC) return true;
+  if (visibility === ONLY_FOLLOWERS) return !!viewerId && isFollowingAuthor;
+  return false; // ONLY_ME của người khác
+};
+
+/**
+ * Lọc mảng post đã fetch theo `canViewPost`, dùng ĐÚNG 1 truy vấn `Follow` cho cả mảng
+ * (và 0 truy vấn khi không có bài `ONLY_FOLLOWERS` của người khác — trường hợp phổ biến).
+ */
+const filterViewablePosts = async (posts: any[], viewerId: any) => {
+  const { PUBLIC, ONLY_FOLLOWERS } = Constants.POST_VISIBILITY;
+  const authorsToCheck = posts
+    .filter(
+      (post) =>
+        (post?.visibility ?? PUBLIC) === ONLY_FOLLOWERS &&
+        String(post?.authorId) !== String(viewerId ?? ""),
+    )
+    .map((post) => ObjectId(String(post.authorId)));
+  let followingSet = new Set<string>();
+  if (!!viewerId && authorsToCheck.length > 0) {
+    const rows = await Follow.find(
+      { followerId: ObjectId(viewerId), followeeId: { $in: authorsToCheck } },
+      { followeeId: 1 },
+    );
+    followingSet = new Set(rows.map(({ followeeId }) => String(followeeId)));
+  }
+  return posts.filter((post) =>
+    canViewPost(viewerId, post, followingSet.has(String(post?.authorId))),
+  );
+};
+
+/**
+ * Trang admin (kiểm duyệt) phải đọc được cả bài non-PUBLIC của người khác, nếu không hàng đợi
+ * kiểm duyệt sẽ mất bài. Quyền admin lấy từ `role` trong DB của **viewer đã xác thực bằng jwt**,
+ * KHÔNG phải từ query string `filter[page]=admin...` — nếu không, cờ admin do client tự khai
+ * sẽ trở thành đường vòng qua chính lớp enforce này.
+ */
+const isAdminViewer = async (viewerId: any): Promise<boolean> => {
+  if (!viewerId) return false;
+  try {
+    const user: any = await User.findOne(
+      { _id: ObjectId(viewerId) },
+      { role: 1 },
+    ).lean();
+    return user?.role === Constants.USER_ROLE.ADMIN;
+  } catch (err) {
+    console.log("isAdminViewer: ", err);
+    return false;
+  }
+};
+
 export const getPostDetail = async ({
   postId = "",
   postIds = [],
   getFullInfo = false,
   viewerId = null,
+  isAdminPage = false,
 }) => {
   const isBulk = postIds && postIds.length > 0;
   try {
@@ -144,6 +247,12 @@ export const getPostDetail = async ({
 
     if (!posts || posts.length === 0) return isBulk ? [] : null;
 
+    // FR-7/NFR-2: chặn IDOR — truy cập thẳng bằng postId cũng phải qua đúng quy tắc AD-2.
+    const viewablePosts = (await isAdminViewer(isAdminPage ? viewerId : null))
+      ? posts
+      : await filterViewablePosts(posts, viewerId);
+    if (viewablePosts.length === 0) return isBulk ? [] : null;
+
     const likedPostSet = new Set(likedDocs.map((doc) => doc.postId.toString()));
     const repostMap = new Map(
       repostCounts.map((item) => [item._id.toString(), item.count]),
@@ -151,7 +260,7 @@ export const getPostDetail = async ({
 
     // 2. Gom tất cả usersTag IDs từ bài chính lẫn bài cha để query batch 1 lần duy nhất
     const allUserTagIdsSet = new Set<string>();
-    posts.forEach((result) => {
+    viewablePosts.forEach((result) => {
       if (result?.usersTag?.length) {
         result.usersTag.forEach((id: any) => allUserTagIdsSet.add(id.toString()));
       }
@@ -172,7 +281,7 @@ export const getPostDetail = async ({
     }
 
     // 3. Map dữ liệu vào từng bài hoàn toàn in-memory (0 DB round-trip)
-    const enrichedPosts = posts.map((result) => {
+    const enrichedPosts = viewablePosts.map((result) => {
       if (result?.usersTag?.length > 0) {
         result.usersTagInfo = result.usersTag
           .map((id: any) => userTagMap.get(id.toString()))
@@ -277,12 +386,20 @@ const getQueryPostValidation = (filter) => {
  * Không có `$skip`: pool cố định theo `limit`, phân trang được áp **sau khi chấm điểm**
  * ở `getForYouFeed` (AD-4).
  */
-export const getCandidatesFromMongo = async ({ userId, limit }) => {
+export const getCandidatesFromMongo = async ({
+  userId,
+  limit,
+  viewerId = null,
+}) => {
   const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
+  // Lọc visibility NGAY Ở $match đầu tiên (trước `$limit`) — lọc sau `$limit` sẽ làm pool
+  // candidate teo lại thay vì được lấp đầy bằng bài viewer thật sự xem được.
+  const visibilityQuery = await buildVisibilityQuery(viewerId);
   const data = await Post.aggregate([
     {
       $match: {
         type: { $in: [CREATE, EDIT, REPOST] },
+        ...visibilityQuery,
       },
     },
     {
@@ -319,8 +436,10 @@ export const getPostsIdByFilter = async (payload) => {
         limit = 20;
       }
     }
-    const { PRE_ACCEPT, PUBLIC, ONLY_ME, ONLY_FOLLOWERS, DELETED } =
-      Constants.POST_STATUS;
+    // Danh tính người ĐANG XEM, lấy từ jwt (`optionalAuth`) — khác `userId` trong query string,
+    // vốn là "feed/trang cá nhân của ai" và client tự khai được. Không có jwt => coi như ẩn danh
+    // (fail-closed: chỉ thấy bài PUBLIC).
+    const viewerId = payload?.viewerId ?? null;
     const skip = (page - 1) * limit;
     let query = {};
     let project = { _id: 1 };
@@ -339,18 +458,19 @@ export const getPostsIdByFilter = async (payload) => {
       case PageConstant.FRIEND:
         const value = filter.value;
         let type = value;
-        const status = {
-          $nin: [PRE_ACCEPT, DELETED],
-        };
         if (!value) {
           type = {
             $nin: [PostConstants.ACTIONS.REPLY, PostConstants.ACTIONS.REPOST],
           };
         }
+        // FR-6/AD-5: chỉ còn loại `DELETED` (do `buildVisibilityQuery` đặt) — bỏ `PRE_ACCEPT`
+        // khỏi exclusion, đó là hành vi kế thừa từ thời field còn tên `PENDING`.
+        // Tác giả tự xem trang mình khớp nhánh `{ authorId: viewerId }` trong `$or` nên thấy
+        // toàn bộ bài của mình bất kể visibility/status; viewer khác bị gate đúng luật.
         query = {
           authorId: ObjectId(userId),
           type,
-          status,
+          ...(await buildVisibilityQuery(viewerId)),
         };
         break;
       case PageConstant.FOLLOWING:
@@ -360,6 +480,11 @@ export const getPostsIdByFilter = async (payload) => {
         query = {
           type: { $ne: PostConstants.ACTIONS.REPLY },
           authorId: { $in: followingIds },
+          // FR-5: tái dùng `followingIds` vừa query — không query `Follow` lần thứ hai.
+          ...(await buildVisibilityQuery(
+            viewerId,
+            String(viewerId) === String(userId) ? followingIds : null,
+          )),
         };
         break;
       case PageConstant.LIKED:
@@ -378,7 +503,7 @@ export const getPostsIdByFilter = async (payload) => {
         sort = { createdAt: 1 };
         break;
       default:
-        data = await getForYouFeed({ userId, skip, limit });
+        data = await getForYouFeed({ userId, viewerId, skip, limit });
         break;
     }
     if (
