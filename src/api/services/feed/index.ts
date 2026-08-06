@@ -6,6 +6,7 @@ import Post from "../../models/post.model.js";
 import User from "../../models/user.model.js";
 import { buildVisibilityQuery, getCandidatesFromMongo } from "../post.js";
 import { FEED_CONFIG } from "./config.ts";
+import { accountDiscovery, discoveryBatchSize, getDiscoveryCandidates, planDiscovery } from "./discovery.ts";
 import { rebuildUserFeedZset, rebuiltSentinelKey } from "./fanout.ts";
 import { bucketedNow, rankCandidates } from "./scoring.ts";
 import { zExists, zRevRangeTop } from "./zset.ts";
@@ -180,24 +181,97 @@ export const getForYouFeed = async ({
     // celebrity nên post vừa nằm trong ZSET vừa bị pull lại). `Array.from` chứ không spread: repo
     // chưa set `target` trong tsconfig nên spread một Set là lỗi TS2802.
     poolIds = Array.from(new Set(poolIds));
+
+    // FR-3: basePoolSize đo SAU dedupe, TRƯỚC hydrate. Đo trước dedupe làm effectivePoolSize lớn hơn
+    // thực tế -> lệch ranh giới blend/extend VÀ sai phép trừ cursor FR-4, sai im lặng, chỉ lộ ở SC-4.
+    const basePoolSize = poolIds.length;
+
+    // W-1: batch/maxSkip tính ở CALLER rồi truyền vào — planDiscovery phải thuần để unit-test được
+    // (FEED_CONFIG parse lúc import; xem AD-1/AD-5).
+    const plan = planDiscovery({
+      enabled: FEED_CONFIG.discoveryEnabled,
+      source,
+      basePoolSize,
+      skip: skipNum,
+      limit: limitNum,
+      batch: discoveryBatchSize(),
+      maxSkip: FEED_CONFIG.discoveryMaxSkip,
+    });
+
+    let discoveryIds: string[] = [];
+    // GUARD BẮT BUỘC — KHÔNG được gỡ dù trông như tối ưu thừa (W-4/plan-review):
+    // trong MongoDB `.limit(0)` nghĩa là KHÔNG GIỚI HẠN, không phải "không trả gì". Gỡ guard thì
+    // FEED_DISCOVERY_RATIO=0 — đúng cấu hình user dùng để TẮT blend — sẽ phát một query sort TOÀN BỘ
+    // collection không index, kích hoạt đúng R-1 (trần 32MB, throw) ở đúng lúc user tưởng đã tắt.
+    if (plan.n > 0) {
+      try {
+        discoveryIds = await getDiscoveryCandidates({
+          userId,
+          poolIds,
+          visibilityQuery,
+          offset: plan.offset,
+          n: plan.n,
+        });
+      } catch (err) {
+        // NFR-3/AD-4: try/catch nằm ở CALL-SITE, không nằm trong getDiscoveryCandidates — nếu nằm
+        // bên trong, stub-reject của SC-10 sẽ đi vòng qua chính lớp bảo vệ này. Feed cá nhân hoá
+        // vẫn sống với discoveryIds = [].
+        console.error("[feed] discovery failed:", err);
+      }
+    }
+    // FR-3b blend-from-start: nối TRƯỚC hydrate — bài discovery đi chung MỘT query hydrate, tự có đủ
+    // 4 field để rankCandidates chấm điểm, và tự có relevanceScore = 0 khi không khớp category
+    // (Decision #8). Nối SAU hydrate = query thứ hai (vi phạm NFR-1) + finalScore NaN/0 im lặng.
+    // rankCandidates / scoring.ts KHÔNG được sửa (C-2).
+    if (plan.mode === "blend" && discoveryIds.length) {
+      poolIds = poolIds.concat(discoveryIds);
+    }
+    // "extend" vẫn đi đường cũ (chưa nối) — thuộc 021/T6.
+
     const candidateMs = Date.now() - t0;
 
-    // --- hydrate: MỘT query, projection đúng 4 field cần để chấm điểm ---
-    const t1 = Date.now();
-    const posts: any[] = await Post.find(
-      { _id: { $in: poolIds.map((id) => ObjectId(id)) }, ...visibilityQuery },
-      { _id: 1, engagementScore: 1, categories: 1, createdAt: 1 },
-    ).lean();
-    const hydrateMs = Date.now() - t1;
+    let hydrateMs: number | null = null;
+    let page: any[];
 
-    // --- chấm điểm toàn pool RỒI mới phân trang ---
-    const nowMs = bucketedNow(Date.now(), FEED_CONFIG.scoreBucketSeconds);
-    const page = rankCandidates(posts, userCatesCare, nowMs)
-      .slice(skipNum, skipNum + limitNum)
-      .map(({ _id }) => _id);
+    if (plan.mode === "extend") {
+      // AD-3: batch extend ĐÃ được Mongo sort theo engagementScore và ĐÃ nhúng visibilityQuery
+      // (NFR-2 đòi "ít nhất một lần lọc"), nên bỏ qua HOÀN TOÀN hydrate + rankCandidates.
+      // Hệ quả đo được: trang sâu tốn NET 0 query thêm so với baseline (mất hydrate, được discovery).
+      // FR-4: THAY THẾ trang, KHÔNG nối vào phần ranked chưa phục vụ (cần state -> C-4 cấm) và
+      // KHÔNG rank chung với pool cũ (bài mới sẽ chen vào giữa vị trí đã phục vụ ở trang trước).
+      // R-6 (chấp nhận có ý thức): plan.offset = min(batch + max(0, skip - effectivePoolSize), maxSkip)
+      // làm bước nhảy offset nhỏ hơn limit ĐÚNG MỘT LẦN ở chỗ chuyển chế độ -> lặp <= limit-1 bài (vd
+      // 5 bài giữa skip=340 và skip=360), và sót <= limit-1 bài đã rank tại trang ranh giới. ĐÚNG ĐẶC
+      // TẢ. KHÔNG được "sửa" bằng cách nhớ offset đã phục vụ — đó là state, C-4 cấm. Từ trang thứ hai
+      // của vùng extend trở đi bước nhảy trở lại đúng limit (xem scenario skip=400 / 420 của FR-4).
+      page = discoveryIds;
+      // hydrateMs giữ null — W-6: 0 bị đọc nhầm thành "hydrate chạy và nhanh bất thường" khi xem log
+      // 2 tuần sau; null nói đúng sự thật là bước đó không chạy. Đọc kèm discoveryMode.
+    } else {
+      // --- hydrate: MỘT query, projection đúng 4 field cần để chấm điểm ---
+      const t1 = Date.now();
+      const posts: any[] = await Post.find(
+        { _id: { $in: poolIds.map((id) => ObjectId(id)) }, ...visibilityQuery },
+        { _id: 1, engagementScore: 1, categories: 1, createdAt: 1 },
+      ).lean();
+      hydrateMs = Date.now() - t1;
+
+      // --- chấm điểm toàn pool RỒI mới phân trang ---
+      const nowMs = bucketedNow(Date.now(), FEED_CONFIG.scoreBucketSeconds);
+      page = rankCandidates(posts, userCatesCare, nowMs)
+        .slice(skipNum, skipNum + limitNum)
+        .map(({ _id }) => _id);
+    }
+
+    // FR-5 + NTH-2 (AD-6). Gọi hàm THUẦN từ discovery.ts — KHÔNG dựng Set/duyệt page inline ở đây:
+    // page là ObjectId[], discoveryIds là string[], Set<string>.has(objectId) LUÔN false một cách im
+    // lặng (CRIT-1/TR-5). accountDiscovery chuẩn hoá String() ở cả hai phía.
+    const { shown, bestRank, avgRank } = accountDiscovery(page, discoveryIds);
 
     // NTH-1: đường đọc có 2 lớp catch-all (getPostsIdByFilter, getPostDetail) nên bug thật và
     // "Redis down, đúng thiết kế" cho ra cùng một kết quả rỗng 200 OK. Dòng này phân biệt được.
+    // poolSize giữ NGUYÊN nghĩa cũ (poolIds.length tại thời điểm log), tức ĐÃ CỘNG batch blend.
+    // Quan hệ đúng: basePoolSize = poolSize - discoveryFetched ở blend; = poolSize ở extend/off.
     console.log("[feed]", {
       userId: String(userId),
       source,
@@ -205,6 +279,11 @@ export const getForYouFeed = async ({
       returned: page.length,
       candidateMs,
       hydrateMs,
+      discoveryMode: plan.mode,
+      discoveryFetched: discoveryIds.length,
+      discoveryShown: shown,
+      discoveryBestRank: bestRank, // NTH-2/AD-6 — null khi shown === 0, KHÔNG phải 0
+      discoveryAvgRank: avgRank, // NTH-2/AD-6 — null khi shown === 0, KHÔNG phải NaN
     });
     return page;
   } catch (err) {

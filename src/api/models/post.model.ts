@@ -128,6 +128,11 @@ postSchema.index(
   { type: 1, createdAt: -1 },
   { partialFilterExpression: { type: { $in: [CREATE, EDIT, REPOST] } } },
 );
+// NTH-1 (escalated to MUST): phục vụ sort của query discovery (FR-2).
+// Compound theo đúng AD-2 — sort là total order { engagementScore: -1, _id: -1 };
+// index single-key { engagementScore: -1 } KHÔNG loại được stage blocking SORT.
+// Đo trên 6,000,576 posts: 28-43s (collection scan 6M docs) -> 12-91ms sau khi có index.
+postSchema.index({ engagementScore: -1, _id: -1 });
 
 const Post = mongoose.model("Post", postSchema);
 
