@@ -4,7 +4,7 @@ import { ObjectId } from "../../../utils/index.js";
 import Follow from "../../models/follow.model.js";
 import Post from "../../models/post.model.js";
 import User from "../../models/user.model.js";
-import { getCandidatesFromMongo } from "../post.js";
+import { buildVisibilityQuery, getCandidatesFromMongo } from "../post.js";
 import { FEED_CONFIG } from "./config.ts";
 import { rebuildUserFeedZset, rebuiltSentinelKey } from "./fanout.ts";
 import { bucketedNow, rankCandidates } from "./scoring.ts";
@@ -59,10 +59,13 @@ const sentinelExists = async (userId: string): Promise<boolean> => {
  */
 export const getForYouFeed = async ({
   userId,
+  viewerId = null,
   skip = 0,
   limit = 20,
 }: {
   userId: any;
+  /** Người ĐANG XEM (từ jwt). Mặc định `null` = ẩn danh -> chỉ thấy bài PUBLIC (fail-closed). */
+  viewerId?: any;
   skip?: number | string;
   limit?: number | string;
 }): Promise<any[]> => {
@@ -76,6 +79,11 @@ export const getForYouFeed = async ({
       { catesCare: 1 },
     ).lean();
     const userCatesCare = user?.catesCare ?? [];
+
+    // FR-4/AD-2: dựng 1 lần, dùng lại cho cả 3 nguồn candidate. Điểm chặn BẮT BUỘC là bước
+    // hydrate phía dưới — ZSET được ghi lúc fan-out nên không thể tin là còn đúng visibility
+    // hiện tại của bài (tác giả đổi visibility sau khi đã fan-out).
+    const visibilityQuery = await buildVisibilityQuery(viewerId);
 
     // --- candidate generation ---
     let source = "";
@@ -142,6 +150,7 @@ export const getForYouFeed = async ({
           createdAt: {
             $gte: new Date(Date.now() - FEED_CONFIG.activeWindowDays * 86400_000),
           },
+          ...visibilityQuery,
         },
         { _id: 1 },
       )
@@ -161,6 +170,7 @@ export const getForYouFeed = async ({
       poolIds = (
         await getCandidatesFromMongo({
           userId,
+          viewerId,
           limit: FEED_CONFIG.candidatePool,
         })
       ).map(String);
@@ -175,7 +185,7 @@ export const getForYouFeed = async ({
     // --- hydrate: MỘT query, projection đúng 4 field cần để chấm điểm ---
     const t1 = Date.now();
     const posts: any[] = await Post.find(
-      { _id: { $in: poolIds.map((id) => ObjectId(id)) } },
+      { _id: { $in: poolIds.map((id) => ObjectId(id)) }, ...visibilityQuery },
       { _id: 1, engagementScore: 1, categories: 1, createdAt: 1 },
     ).lean();
     const hydrateMs = Date.now() - t1;

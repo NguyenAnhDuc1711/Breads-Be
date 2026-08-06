@@ -1,4 +1,5 @@
 import { POST_PATH, Route } from "../../../Breads-Shared/APIConfig.js";
+import { Constants } from "../../../Breads-Shared/Constants/index.js";
 import PostConstants from "../../../Breads-Shared/Constants/PostConstants.js";
 import { getRedisInstance } from "../../../dbs/redis.ts";
 import { getAllSockets } from "../../../socket/services/user.ts";
@@ -6,6 +7,7 @@ import { ObjectId } from "../../../utils/index.js";
 import Follow from "../../models/follow.model.js";
 import Post from "../../models/post.model.js";
 import User from "../../models/user.model.js";
+import { buildVisibilityQuery } from "../post.js";
 import { FEED_CONFIG } from "./config.ts";
 import { zAddPostForUsers, zReplaceUserFeed } from "./zset.ts";
 
@@ -96,6 +98,18 @@ export const fanoutPostToFollowers = async (params: {
 
   const t0 = Date.now();
   const postId = String(post._id);
+
+  // FR-8: bài ONLY_ME không ai khác xem được nên fan-out sinh ĐÚNG 0 ZSET write — return sớm
+  // TRƯỚC truy vấn `User.findOne` bên dưới để không tốn thêm 1 query vô ích.
+  if (post?.visibility === Constants.POST_VISIBILITY.ONLY_ME) {
+    console.log("[feed-fanout]", {
+      postId,
+      onlyMe: true,
+      zadds: 0,
+      durationMs: Date.now() - t0,
+    });
+    return;
+  }
 
   // `followersCount` đã denormalize sẵn (A-2) — tuyệt đối không `countDocuments` trong write path.
   const author: any = await User.findOne(
@@ -204,12 +218,20 @@ export const rebuildUserFeedZset = async (userId: any): Promise<number> => {
   ]);
 
   const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
+  // AD-2: ZSET của viewer chỉ được chứa bài viewer thật sự xem được. `followeeRows` chính là
+  // tập author của truy vấn này nên tái dùng luôn làm `followeeIds` cho nhánh ONLY_FOLLOWERS —
+  // tương đương về kết quả và tiết kiệm 1 truy vấn `Follow`.
+  const visibilityQuery = await buildVisibilityQuery(
+    uid,
+    followeeRows.map((r) => r.followeeId),
+  );
   const posts: any[] = followeeRows.length
     ? await Post.find(
         {
           authorId: { $in: followeeRows.map((r) => r.followeeId) },
           type: { $in: [CREATE, EDIT, REPOST] },
           createdAt: { $gte: activeCutoff() },
+          ...visibilityQuery,
         },
         { _id: 1, createdAt: 1 },
       )

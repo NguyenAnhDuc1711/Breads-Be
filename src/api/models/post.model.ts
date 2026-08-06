@@ -6,6 +6,7 @@ const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
 const ObjectId = mongoose.Schema.Types.ObjectId;
 
 const postStatus = Object.values(Constants.POST_STATUS);
+const postVisibility = Object.values(Constants.POST_VISIBILITY);
 
 const postSchema = new mongoose.Schema(
   {
@@ -75,6 +76,11 @@ const postSchema = new mongoose.Schema(
       type: Number,
       enum: postStatus,
       default: Constants.POST_STATUS.PRE_ACCEPT,
+    },
+    visibility: {
+      type: Number,
+      enum: postVisibility,
+      default: Constants.POST_VISIBILITY.PUBLIC,
     },
     categories: [
       {
