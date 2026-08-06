@@ -248,10 +248,34 @@ export const getPostDetail = async ({
     if (!posts || posts.length === 0) return isBulk ? [] : null;
 
     // FR-7/NFR-2: chặn IDOR — truy cập thẳng bằng postId cũng phải qua đúng quy tắc AD-2.
-    const viewablePosts = (await isAdminViewer(isAdminPage ? viewerId : null))
-      ? posts
-      : await filterViewablePosts(posts, viewerId);
+    const isAdmin = await isAdminViewer(isAdminPage ? viewerId : null);
+    const viewablePosts = isAdmin ? posts : await filterViewablePosts(posts, viewerId);
     if (viewablePosts.length === 0) return isBulk ? [] : null;
+
+    // Task 090 fix: `replies` nhúng qua `getFullInfo` KHÔNG được lọc theo visibility riêng —
+    // chỉ top-level post được gate ở bước trên. Một reply có thể lệch visibility khỏi bài gốc
+    // sau khi tạo (chính tác giả reply tự đổi qua `updatePostVisibility`), và ràng buộc
+    // ONLY_FOLLOWERS của 1 reply phải tính theo tác giả CỦA REPLY đó — không phải tác giả bài
+    // gốc — nên không thể suy luận "gốc xem được thì reply cũng xem được". Tái dùng đúng
+    // `filterViewablePosts` (AD-2), gộp 1 lượt cho toàn bộ reply của mọi post trong batch để
+    // chỉ tốn thêm đúng 1 `Follow` query.
+    if (getFullInfo && !isAdmin) {
+      const allReplies = viewablePosts.flatMap((p: any) => p.replies ?? []);
+      if (allReplies.length > 0) {
+        const viewableReplyIds = new Set(
+          (await filterViewablePosts(allReplies, viewerId)).map((r: any) =>
+            String(r._id),
+          ),
+        );
+        viewablePosts.forEach((p: any) => {
+          if (p.replies) {
+            p.replies = p.replies.filter((r: any) =>
+              viewableReplyIds.has(String(r._id)),
+            );
+          }
+        });
+      }
+    }
 
     const likedPostSet = new Set(likedDocs.map((doc) => doc.postId.toString()));
     const repostMap = new Map(
@@ -477,15 +501,34 @@ export const getPostsIdByFilter = async (payload) => {
         const followingIds = (
           await Follow.find({ followerId: ObjectId(userId) }, { followeeId: 1 })
         ).map(({ followeeId }) => followeeId);
-        query = {
-          type: { $ne: PostConstants.ACTIONS.REPLY },
-          authorId: { $in: followingIds },
-          // FR-5: tái dùng `followingIds` vừa query — không query `Follow` lần thứ hai.
-          ...(await buildVisibilityQuery(
-            viewerId,
-            String(viewerId) === String(userId) ? followingIds : null,
-          )),
-        };
+        // NFR-1 escape hatch (Task 090 re-benchmark: shared buildVisibilityQuery's `$or`
+        // measured +14-41% p95/median over pre-epic baseline on this path, over the 10%
+        // budget). Only valid when `viewerId === userId` — `authorId` is already restricted
+        // to `followingIds`, the SAME set the ONLY_FOLLOWERS check would test against, so the
+        // generic `$or` (visibility PUBLIC / authorId==viewerId / ONLY_FOLLOWERS+authorId $in
+        // followingIds) collapses to a plain `visibility $in [PUBLIC, ONLY_FOLLOWERS]` with
+        // identical results but far better index selection. When viewing someone ELSE's
+        // following feed (`viewerId !== userId`), `followingIds` is a different person's
+        // followee set than the current viewer's — the collapse does NOT hold, so that branch
+        // keeps using the shared `buildVisibilityQuery` (AD-2), unchanged from before.
+        query =
+          String(viewerId) === String(userId)
+            ? {
+                type: { $ne: PostConstants.ACTIONS.REPLY },
+                authorId: { $in: followingIds },
+                status: { $ne: Constants.POST_STATUS.DELETED },
+                visibility: {
+                  $in: [
+                    Constants.POST_VISIBILITY.PUBLIC,
+                    Constants.POST_VISIBILITY.ONLY_FOLLOWERS,
+                  ],
+                },
+              }
+            : {
+                type: { $ne: PostConstants.ACTIONS.REPLY },
+                authorId: { $in: followingIds },
+                ...(await buildVisibilityQuery(viewerId)),
+              };
         break;
       case PageConstant.LIKED:
         // Order by when the post was liked, not when it was created.

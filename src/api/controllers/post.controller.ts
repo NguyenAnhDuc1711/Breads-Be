@@ -157,14 +157,22 @@ export const createPost = async (req, res) => {
   };
   // Chặn theo CẢ `action` (query param) lẫn `type` (payload): client tự gọi API có thể gửi
   // `type=REPOST` mà bỏ `?action=repost`, vẫn kèm `quote.content` copy từ bài gốc.
+  // Task 090 fix: cũng chặn khi `quote?._id` được set mà KHÔNG đi kèm `type/action=REPOST`
+  // (ví dụ `type=CREATE` + tự set `quote: { _id, content }` thủ công, không có `parentPost`) —
+  // đây vẫn đúng vector rò rỉ FR-10 mô tả (nhân bản nội dung bài non-PUBLIC ra một bài không bị
+  // ràng buộc visibility gì), chỉ khác field kích hoạt so với nhánh REPOST thông thường.
   if (
     action === PostConstants.ACTIONS.REPOST ||
-    type === PostConstants.ACTIONS.REPOST
+    type === PostConstants.ACTIONS.REPOST ||
+    !!quote?._id
   ) {
     // FR-10: repost copy nguyên văn nội dung bài gốc sang bài mới, nên cho repost bài non-PUBLIC
     // là nhân bản nội dung riêng tư ra ngoài vòng kiểm soát visibility (010). Phải chặn ở Be —
     // ẩn nút phía Fe không đủ, mọi client/API call trực tiếp đều bypass được UI.
-    const parentPostDoc = await Post.findById(parentPost, { visibility: 1 });
+    const referencedPostId = parentPost || quote?._id;
+    const parentPostDoc = await Post.findById(referencedPostId, {
+      visibility: 1,
+    });
     if (!parentPostDoc) {
       return res
         .status(HTTPStatus.BAD_REQUEST)
