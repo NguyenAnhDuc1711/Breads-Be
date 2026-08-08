@@ -119,6 +119,47 @@ export const zReplaceUserFeed = async (
   }
 };
 
+/** ZADD nhiều bài vào ZSET đã có sẵn của MỘT user, không `DEL` trước — dùng khi backfill bài của
+ * một followee mới vào feed đang có bài của các followee khác (khác `zReplaceUserFeed`, hàm đó
+ * thay thế toàn bộ key). */
+export const zAddPostsForUser = async (
+  userId: string,
+  entries: { postId: string; scoreMs: number }[]
+): Promise<void> => {
+  if (entries.length === 0) return;
+  const r = client("zAddPostsForUser");
+  if (!r) return;
+
+  const key = feedKey(userId);
+  try {
+    const pipeline = r.pipeline();
+    const zaddArgs = entries.flatMap(({ postId, scoreMs }) => [scoreMs, postId]);
+    pipeline.zadd(key, ...zaddArgs);
+    pipeline.zremrangebyrank(key, 0, -(FEED_CONFIG.zsetMaxSize + 1));
+    pipeline.expire(key, FEED_CONFIG.activeWindowDays * 86400);
+    const results = await pipeline.exec();
+    logPipelineErrors("zAddPostsForUser", results);
+  } catch (err) {
+    console.error("[feed-zset] zAddPostsForUser failed:", err);
+  }
+};
+
+/** ZREM chọn lọc — gỡ đúng các `postId` khỏi ZSET của MỘT user, không đụng bài của followee khác
+ * trong cùng key. Dùng khi unfollow, thay cho `zDeleteUserFeeds` (hàm đó xoá cả key). */
+export const zRemovePostsForUser = async (
+  userId: string,
+  postIds: string[]
+): Promise<void> => {
+  if (postIds.length === 0) return;
+  const r = client("zRemovePostsForUser");
+  if (!r) return;
+  try {
+    await r.zrem(feedKey(userId), ...postIds);
+  } catch (err) {
+    console.error("[feed-zset] zRemovePostsForUser failed:", err);
+  }
+};
+
 export const zDeleteUserFeeds = async (userIds: string[]): Promise<void> => {
   const r = client("zDeleteUserFeeds");
   if (!r) return;

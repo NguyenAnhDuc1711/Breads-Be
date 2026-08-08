@@ -9,6 +9,16 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`Server started at on port:${PORT}`);
 });
 
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `[fatal] Port ${PORT} đã bị chiếm bởi process khác — server (và socket) không thể khởi động. Hãy tắt process đang giữ port ${PORT} rồi chạy lại.`
+    );
+    process.exit(1);
+  }
+  throw err;
+});
+
 initSocket(server, app);
 
 process.on("uncaughtException", (err) => {

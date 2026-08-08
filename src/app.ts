@@ -9,6 +9,7 @@ import {
 } from "./cronjob/index.js";
 import instanceMongoDB from "./dbs/mongodb.ts";
 import initRedis from "./dbs/redis.ts";
+import { metricsHandler, metricsMiddleware } from "./api/middlewares/metrics.ts";
 import ALLOWED_ORIGINS from "./utils/allowedOrigins.ts";
 // Connect to MongoDB
 
@@ -28,6 +29,9 @@ const corOption = {
   credentials: true,
 };
 app.use(cors(corOption));
+
+app.use(metricsMiddleware);
+app.get("/metrics", metricsHandler);
 
 app.use("/api", router);
 

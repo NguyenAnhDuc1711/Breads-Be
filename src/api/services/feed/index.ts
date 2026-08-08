@@ -63,12 +63,16 @@ export const getForYouFeed = async ({
   viewerId = null,
   skip = 0,
   limit = 20,
+  followeeIds = null,
 }: {
   userId: any;
   /** Người ĐANG XEM (từ jwt). Mặc định `null` = ẩn danh -> chỉ thấy bài PUBLIC (fail-closed). */
   viewerId?: any;
   skip?: number | string;
   limit?: number | string;
+  /** Followee id list caller đã fetch sẵn -> `buildVisibilityQuery` khỏi tự query `Follow` lần
+   * nữa (NFR-1: 1 request 1 Follow.find). `null` = caller chưa có, hàm tự query như cũ. */
+  followeeIds?: any[] | null;
 }): Promise<any[]> => {
   // `skip`/`limit` đến từ query string nên có thể là chuỗi: `0 + "20"` = `"020"`.
   const skipNum = Number(skip) || 0;
@@ -84,7 +88,7 @@ export const getForYouFeed = async ({
     // FR-4/AD-2: dựng 1 lần, dùng lại cho cả 3 nguồn candidate. Điểm chặn BẮT BUỘC là bước
     // hydrate phía dưới — ZSET được ghi lúc fan-out nên không thể tin là còn đúng visibility
     // hiện tại của bài (tác giả đổi visibility sau khi đã fan-out).
-    const visibilityQuery = await buildVisibilityQuery(viewerId);
+    const visibilityQuery = await buildVisibilityQuery(viewerId, followeeIds);
 
     // --- candidate generation ---
     let source = "";
@@ -172,6 +176,7 @@ export const getForYouFeed = async ({
         await getCandidatesFromMongo({
           userId,
           viewerId,
+          followeeIds,
           limit: FEED_CONFIG.candidatePool,
         })
       ).map(String);

@@ -2,6 +2,10 @@ import { ObjectId } from "../../utils/index.js";
 import Follow from "../models/follow.model.js";
 import SavedPost from "../models/savedPost.model.js";
 import User from "../models/user.model.js";
+import {
+  backfillFeedOnFollow,
+  removeFeedOnUnfollow,
+} from "./feed/fanout.ts";
 
 // Without a cap, `$lookup` buffers every matching `follows` doc in memory
 // before continuing the pipeline. Celebrity accounts (see
@@ -100,6 +104,10 @@ export const toggleFollow = async (followerId, followeeId) => {
       { _id: ObjectId(followeeId) },
       { $inc: { followersCount: -1 } }
     );
+    // Fire-and-forget, giống fanoutPostToFollowers (NFR-2) — request unfollow không chờ Redis/Mongo.
+    removeFeedOnUnfollow(followerId, followeeId).catch((err) =>
+      console.error("[toggleFollow] removeFeedOnUnfollow failed:", err)
+    );
     return false;
   }
   await Follow.create({
@@ -113,6 +121,10 @@ export const toggleFollow = async (followerId, followeeId) => {
   await User.updateOne(
     { _id: ObjectId(followeeId) },
     { $inc: { followersCount: 1 } }
+  );
+  // Fire-and-forget, giống fanoutPostToFollowers (NFR-2) — request follow không chờ Redis/Mongo.
+  backfillFeedOnFollow(followerId, followeeId).catch((err) =>
+    console.error("[toggleFollow] backfillFeedOnFollow failed:", err)
   );
   return true;
 };

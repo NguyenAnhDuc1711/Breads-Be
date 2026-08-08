@@ -412,6 +412,7 @@ export const getPosts = async (req, res) => {
       postIds: data,
       viewerId: payload.viewerId,
       isAdminPage: !!isAdminPage,
+      followeeIds: payload.followeeIds ?? null,
     });
   }
   new OK({

@@ -11,6 +11,13 @@ import SurveyOption from "../models/surveyOption.model.js";
 import User from "../models/user.model.js";
 import { getForYouFeed } from "./feed/index.ts";
 
+/** Danh sách followeeId của `viewerId`. Tách riêng để caller có thể fetch 1 lần rồi tái dùng
+ * cho cả `buildVisibilityQuery` lẫn `filterViewablePosts` trong cùng request (NFR-1). */
+export const getFolloweeIds = async (viewerId: any): Promise<any[]> =>
+  (
+    await Follow.find({ followerId: ObjectId(viewerId) }, { followeeId: 1 })
+  ).map(({ followeeId }) => followeeId);
+
 /**
  * AD-2 — quy tắc "ai được xem bài này", dùng chung cho MỌI read-path:
  *   `authorId == viewerId` HOẶC `visibility == PUBLIC`
@@ -22,7 +29,8 @@ import { getForYouFeed } from "./feed/index.ts";
  * tạo, kiểm duyệt sau).
  *
  * `followeeIds`: danh sách người mà viewer đang follow, truyền vào để tái dùng khi caller đã
- * query sẵn (case FOLLOWING / rebuild ZSET) — bỏ trống thì hàm tự query 1 lần.
+ * query sẵn (case FOLLOWING / rebuild ZSET, hoặc `getFolloweeIds` ở trên) — bỏ trống thì hàm tự
+ * query 1 lần.
  * `viewerId` null (khách ẩn danh) => chỉ thấy bài PUBLIC.
  *
  * Task 002 đã backfill nên mọi document đều có `visibility` hợp lệ: so khớp trực tiếp,
@@ -36,11 +44,7 @@ export const buildVisibilityQuery = async (
   const orClauses: any[] = [{ visibility: PUBLIC }];
   if (viewerId) {
     orClauses.push({ authorId: ObjectId(viewerId) });
-    const ids =
-      followeeIds ??
-      (
-        await Follow.find({ followerId: ObjectId(viewerId) }, { followeeId: 1 })
-      ).map(({ followeeId }) => followeeId);
+    const ids = followeeIds ?? (await getFolloweeIds(viewerId));
     if (ids.length > 0) {
       orClauses.push({ visibility: ONLY_FOLLOWERS, authorId: { $in: ids } });
     }
@@ -71,7 +75,11 @@ export const canViewPost = (
  * Lọc mảng post đã fetch theo `canViewPost`, dùng ĐÚNG 1 truy vấn `Follow` cho cả mảng
  * (và 0 truy vấn khi không có bài `ONLY_FOLLOWERS` của người khác — trường hợp phổ biến).
  */
-export const filterViewablePosts = async (posts: any[], viewerId: any) => {
+export const filterViewablePosts = async (
+  posts: any[],
+  viewerId: any,
+  followeeIds: any[] | null = null,
+) => {
   const { PUBLIC, ONLY_FOLLOWERS } = Constants.POST_VISIBILITY;
   const authorsToCheck = posts
     .filter(
@@ -82,11 +90,17 @@ export const filterViewablePosts = async (posts: any[], viewerId: any) => {
     .map((post) => ObjectId(String(post.authorId)));
   let followingSet = new Set<string>();
   if (!!viewerId && authorsToCheck.length > 0) {
-    const rows = await Follow.find(
-      { followerId: ObjectId(viewerId), followeeId: { $in: authorsToCheck } },
-      { followeeId: 1 },
-    );
-    followingSet = new Set(rows.map(({ followeeId }) => String(followeeId)));
+    if (followeeIds) {
+      // Caller đã fetch followee sẵn trong request này (vd. `buildVisibilityQuery` ở feed) ->
+      // tái dùng thay vì query `Follow` lần hai (NFR-1).
+      followingSet = new Set(followeeIds.map((id) => String(id)));
+    } else {
+      const rows = await Follow.find(
+        { followerId: ObjectId(viewerId), followeeId: { $in: authorsToCheck } },
+        { followeeId: 1 },
+      );
+      followingSet = new Set(rows.map(({ followeeId }) => String(followeeId)));
+    }
   }
   return posts.filter((post) =>
     canViewPost(viewerId, post, followingSet.has(String(post?.authorId))),
@@ -119,6 +133,16 @@ export const getPostDetail = async ({
   getFullInfo = false,
   viewerId = null,
   isAdminPage = false,
+  // Followee id list caller đã fetch sẵn (vd. feed "for_you") -> tránh Follow.find lần hai
+  // trong filterViewablePosts bên dưới (NFR-1). null = caller chưa có, tự query như cũ.
+  followeeIds = null,
+}: {
+  postId?: any;
+  postIds?: any[];
+  getFullInfo?: boolean;
+  viewerId?: any;
+  isAdminPage?: boolean;
+  followeeIds?: any[] | null;
 }) => {
   const isBulk = postIds && postIds.length > 0;
   try {
@@ -249,7 +273,9 @@ export const getPostDetail = async ({
 
     // FR-7/NFR-2: chặn IDOR — truy cập thẳng bằng postId cũng phải qua đúng quy tắc AD-2.
     const isAdmin = await isAdminViewer(isAdminPage ? viewerId : null);
-    const viewablePosts = isAdmin ? posts : await filterViewablePosts(posts, viewerId);
+    const viewablePosts = isAdmin
+      ? posts
+      : await filterViewablePosts(posts, viewerId, followeeIds);
     if (viewablePosts.length === 0) return isBulk ? [] : null;
 
     // Task 090 fix: `replies` nhúng qua `getFullInfo` KHÔNG được lọc theo visibility riêng —
@@ -263,7 +289,7 @@ export const getPostDetail = async ({
       const allReplies = viewablePosts.flatMap((p: any) => p.replies ?? []);
       if (allReplies.length > 0) {
         const viewableReplyIds = new Set(
-          (await filterViewablePosts(allReplies, viewerId)).map((r: any) =>
+          (await filterViewablePosts(allReplies, viewerId, followeeIds)).map((r: any) =>
             String(r._id),
           ),
         );
@@ -414,11 +440,17 @@ export const getCandidatesFromMongo = async ({
   userId,
   limit,
   viewerId = null,
+  followeeIds = null,
+}: {
+  userId: any;
+  limit: any;
+  viewerId?: any;
+  followeeIds?: any[] | null;
 }) => {
   const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
   // Lọc visibility NGAY Ở $match đầu tiên (trước `$limit`) — lọc sau `$limit` sẽ làm pool
   // candidate teo lại thay vì được lấp đầy bằng bài viewer thật sự xem được.
-  const visibilityQuery = await buildVisibilityQuery(viewerId);
+  const visibilityQuery = await buildVisibilityQuery(viewerId, followeeIds);
   const data = await Post.aggregate([
     {
       $match: {
@@ -546,14 +578,27 @@ export const getPostsIdByFilter = async (payload) => {
         sort = { createdAt: 1 };
         break;
       default:
-        data = await getForYouFeed({ userId, viewerId, skip, limit });
+        // Fetch 1 lần, tái dùng cho cả buildVisibilityQuery (bên trong getForYouFeed) lẫn
+        // filterViewablePosts (bên trong getPostDetail, gọi sau ở controller) -> đúng 1
+        // Follow.find cho cả request thay vì 2 (NFR-1).
+        const followeeIds = viewerId ? await getFolloweeIds(viewerId) : [];
+        payload.followeeIds = followeeIds;
+        data = await getForYouFeed({ userId, viewerId, skip, limit, followeeIds });
         break;
     }
     if (
       Object.keys(query).length > 0 ||
       filter?.page === PageConstant.ADMIN.POSTS
     ) {
-      data = await Post.find(query, project).skip(skip).limit(limit).sort(sort);
+      // getPostDetail() expects raw ids in `postIds` (it re-maps results back to this exact
+      // array via `id.toString()`) — every other branch above already returns raw ids
+      // (SavedPost/Like `.map(({postId}) => postId)`, getForYouFeed's `.map(({_id}) => _id)`).
+      // This branch queried `Post.find` directly and returned full `{_id}` documents instead,
+      // whose `.toString()` is `"[object Object]"` — the re-map matched nothing, so USER/FRIEND
+      // profile pages and the admin post list silently rendered zero posts.
+      data = (
+        await Post.find(query, project).skip(skip).limit(limit).sort(sort)
+      ).map(({ _id }) => _id);
     }
     return data;
   } catch (err) {

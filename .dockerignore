@@ -1,0 +1,16 @@
+node_modules
+dist
+.git
+.env
+.env.*
+uploads
+data
+test
+docs
+.claude
+.ccpm
+skill
+*.log
+conversation_sample.json
+survey.json
+social-categories.json

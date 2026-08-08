@@ -9,7 +9,13 @@ import Post from "../../models/post.model.js";
 import User from "../../models/user.model.js";
 import { buildVisibilityQuery } from "../post.js";
 import { FEED_CONFIG } from "./config.ts";
-import { zAddPostForUsers, zReplaceUserFeed } from "./zset.ts";
+import {
+  zAddPostForUsers,
+  zAddPostsForUser,
+  zExists,
+  zRemovePostsForUser,
+  zReplaceUserFeed,
+} from "./zset.ts";
 
 const DAY_MS = 86400_000;
 
@@ -102,12 +108,8 @@ export const fanoutPostToFollowers = async (params: {
   // FR-8: bài ONLY_ME không ai khác xem được nên fan-out sinh ĐÚNG 0 ZSET write — return sớm
   // TRƯỚC truy vấn `User.findOne` bên dưới để không tốn thêm 1 query vô ích.
   if (post?.visibility === Constants.POST_VISIBILITY.ONLY_ME) {
-    console.log("[feed-fanout]", {
-      postId,
-      onlyMe: true,
-      zadds: 0,
-      durationMs: Date.now() - t0,
-    });
+    const durationMs = Date.now() - t0;
+    console.log("[feed-fanout]", { postId, onlyMe: true, zadds: 0, durationMs });
     return;
   }
 
@@ -119,13 +121,9 @@ export const fanoutPostToFollowers = async (params: {
 
   // FR-6: tác giả trên ngưỡng sinh ĐÚNG 0 ZSET write; 022 merge họ vào feed lúc đọc.
   if ((author?.followersCount ?? 0) > FEED_CONFIG.celebrityThreshold) {
-    console.log("[feed-fanout]", {
-      postId,
-      celebrity: true,
-      followers: author?.followersCount ?? 0,
-      zadds: 0,
-      durationMs: Date.now() - t0,
-    });
+    const followers = author?.followersCount ?? 0;
+    const durationMs = Date.now() - t0;
+    console.log("[feed-fanout]", { postId, celebrity: true, followers, zadds: 0, durationMs });
     return;
   }
 
@@ -172,12 +170,13 @@ export const fanoutPostToFollowers = async (params: {
   // [plan-review TEST-3] Fan-out là fire-and-forget nên không có điểm hoàn thành quan sát được từ
   // bên ngoài; dòng log này là cách duy nhất kiểm chứng SC-6 mà không phải đua với `redis-cli
   // MONITOR`. Bắt buộc giữ lại, không phải log debug tạm.
+  const durationMs = Date.now() - t0;
   console.log("[feed-fanout]", {
     postId,
     celebrity: false,
     followers: followerIds.length,
     zadds: followerIds.length,
-    durationMs: Date.now() - t0,
+    durationMs,
   });
 };
 
@@ -255,4 +254,86 @@ export const rebuildUserFeedZset = async (userId: any): Promise<number> => {
     sentinel: entries.length === 0,
   });
   return entries.length;
+};
+
+/**
+ * Backfill bài cũ của followee mới vào ZSET của follower ngay khi follow — không có bước này,
+ * follower phải đợi followee đăng bài MỚI thì fan-out-on-write mới đẩy bài vào ZSET (fan-out chỉ
+ * đẩy tương lai, không hồi cứu quá khứ).
+ *
+ * Guard `zExists` bắt buộc: nếu ZSET của follower **chưa từng tồn tại**, ZADD ở đây sẽ tạo key
+ * chỉ với bài của MỘT followee — `zExists` sau đó trả `true`, khoá luôn nhánh lazy-rebuild-đầy-đủ
+ * (`feed/index.ts`) khỏi bao giờ chạy cho follower này, feed kẹt vĩnh viễn ở "chỉ có bài của
+ * followee vừa follow" tới khi TTL hết hạn. Bỏ qua khi ZSET chưa tồn tại — lazy rebuild sẽ tự bao
+ * gồm followee mới vì nó query theo Follow graph hiện tại.
+ *
+ * Cùng cửa sổ `activeCutoff()` với `rebuildUserFeedZset` để nội dung backfill nhất quán với nội
+ * dung một lần rebuild đầy đủ sẽ cho ra.
+ */
+export const backfillFeedOnFollow = async (
+  followerId: any,
+  followeeId: any,
+): Promise<void> => {
+  if (!FEED_CONFIG.fanoutEnabled) return;
+
+  const followerUid = String(followerId);
+  if (!(await zExists(followerUid))) return;
+
+  const followee: any = await User.findOne(
+    { _id: followeeId },
+    { followersCount: 1 },
+  ).lean();
+  // Celebrity: 0 ZSET write, giống fan-out thường — 022 merge lúc đọc.
+  if ((followee?.followersCount ?? 0) > FEED_CONFIG.celebrityThreshold) return;
+
+  const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
+  const visibilityQuery = await buildVisibilityQuery(followerUid, [followeeId]);
+  const posts: any[] = await Post.find(
+    {
+      authorId: followeeId,
+      type: { $in: [CREATE, EDIT, REPOST] },
+      createdAt: { $gte: activeCutoff() },
+      ...visibilityQuery,
+    },
+    { _id: 1, createdAt: 1 },
+  )
+    .sort({ createdAt: -1 })
+    .limit(FEED_CONFIG.zsetMaxSize)
+    .lean();
+  if (posts.length === 0) return;
+
+  const entries = posts.map((p) => ({
+    postId: String(p._id),
+    scoreMs: new Date(p.createdAt).getTime(),
+  }));
+  await zAddPostsForUser(followerUid, entries);
+};
+
+/**
+ * Gỡ bài của followee vừa unfollow khỏi ZSET của follower — đối xứng với `backfillFeedOnFollow`.
+ * `ZREM` chọn lọc (không `DEL` cả key) để không phá bài của các followee khác đang có trong cùng
+ * ZSET. Cùng cửa sổ `activeCutoff()` — bài ngoài cửa sổ này vốn đã không còn khả năng nằm trong
+ * ZSET (đã bị trim theo rank hoặc chưa từng được ghi).
+ */
+export const removeFeedOnUnfollow = async (
+  followerId: any,
+  followeeId: any,
+): Promise<void> => {
+  if (!FEED_CONFIG.fanoutEnabled) return;
+
+  const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
+  const posts: { _id: unknown }[] = await Post.find(
+    {
+      authorId: followeeId,
+      type: { $in: [CREATE, EDIT, REPOST] },
+      createdAt: { $gte: activeCutoff() },
+    },
+    { _id: 1 },
+  ).lean();
+  if (posts.length === 0) return;
+
+  await zRemovePostsForUser(
+    String(followerId),
+    posts.map((p) => String(p._id)),
+  );
 };
