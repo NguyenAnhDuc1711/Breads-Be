@@ -6,11 +6,16 @@
 // (`prd-validate` vòng 2) VÀ 1 bypass thật khác (Task 090 verify — `type=CREATE` + `quote._id`
 // thủ công né được guard bản gốc) đã từng xảy ra. Test này tồn tại để 2 lỗi đó không tái sinh
 // một cách âm thầm nếu ai đó sửa lại `createPost` sau này (epic post-visibility, GAP-2).
+//
+// Task 012: `post.controller.ts` nay import `dispatchQueue` từ `queue.ts`, mở một connection
+// ioredis thật ngay lúc import — phải `closeFanoutQueues()` ở `after()` để `node --test` thoát
+// được, cùng lý do `queue.test.ts` đã làm (xem comment ở đó).
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
 import { isRepostLikePayload, validateRepostGuard } from "./post.controller.ts";
+import { closeFanoutQueues } from "../services/feed/queue.ts";
 
 const { PUBLIC, ONLY_FOLLOWERS, ONLY_ME } = Constants.POST_VISIBILITY;
 
@@ -68,4 +73,8 @@ test("validateRepostGuard: bài tham chiếu visibility != PUBLIC -> chặn", ()
 
 test("validateRepostGuard: bài tham chiếu visibility=PUBLIC -> cho phép", () => {
   assert.deepEqual(validateRepostGuard({ visibility: PUBLIC }), { ok: true });
+});
+
+after(async () => {
+  await closeFanoutQueues();
 });
