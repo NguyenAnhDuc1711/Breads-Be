@@ -17,6 +17,7 @@
     "seed:celebrity-follows": "npx tsx src/api/seed/seedCelebrityFollows.ts",
     "seed:ordinary-follows": "npx tsx src/api/seed/seedOrdinaryFollows.ts",
     "seed:likes": "npx tsx src/api/seed/seedLikes.ts",
+    "seed:activate-followers": "npx tsx src/api/seed/activateCelebrityFollowers.ts",
     "seed:fake-data": "npx tsx src/api/seed/index.ts",
     "k6:history": "node test/scripts/build-history.js"
   },

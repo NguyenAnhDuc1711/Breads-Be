@@ -7,46 +7,33 @@ services:
     environment:
       NODE_ENV: production
       PORT: 8080
-      MONGO_URI: mongodb://mongo:27017/Breads
-      ANALYTICS_DB_URI: mongodb://mongo:27017/Breads-analytics
-      REDIS_HOST: redis
+      MONGO_URI: mongodb://host.docker.internal:27017/Breads
+      ANALYTICS_DB_URI: mongodb://host.docker.internal:27017/Breads-analytics
+      REDIS_HOST: host.docker.internal
       REDIS_PORT: 6379
     ports:
       - "8080:8080"
     volumes:
       - ./uploads:/app/uploads
-    depends_on:
-      - mongo
-      - redis
-
-  mongo:
-    image: mongo:7
-    restart: unless-stopped
-    volumes:
-      - mongo_data:/data/db
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    volumes:
-      - redis_data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   redis-exporter:
     image: oliver006/redis_exporter:latest
     restart: unless-stopped
     environment:
-      REDIS_ADDR: redis://redis:6379
-    depends_on:
-      - redis
+      REDIS_ADDR: redis://host.docker.internal:6379
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   mongo-exporter:
     image: percona/mongodb_exporter:0.44
     restart: unless-stopped
     command:
-      - --mongodb.uri=mongodb://mongo:27017
+      - --mongodb.uri=mongodb://host.docker.internal:27017
       - --collect-all
-    depends_on:
-      - mongo
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   prometheus:
     image: prom/prometheus:latest
@@ -67,6 +54,10 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
+      # Snapshots stay on this Grafana instance only — no "publish to
+      # snapshot.raintank.io" (public third-party server) option in the
+      # Share > Snapshot dialog.
+      GF_SNAPSHOTS_EXTERNAL_ENABLED: "false"
     volumes:
       - ./docker/grafana/provisioning:/etc/grafana/provisioning
       - grafana_data:/var/lib/grafana
@@ -76,7 +67,5 @@ services:
       - prometheus
 
 volumes:
-  mongo_data:
-  redis_data:
   prometheus_data:
   grafana_data:

@@ -4,5 +4,6 @@ providers:
   - name: datn-be
     folder: ""
     type: file
+    allowUiUpdates: true
     options:
       path: /etc/grafana/provisioning/dashboards
