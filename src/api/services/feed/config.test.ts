@@ -44,3 +44,11 @@ test("FEED_CONFIG: bất biến và default của 3 key mới (env sạch)", () 
   assert.equal(FEED_CONFIG.discoveryRatio, 0.15);
   assert.equal(FEED_CONFIG.discoveryMaxSkip, 1000);
 });
+
+test("FEED_CONFIG: default của 5 field fanout-queue (001, env sạch)", () => {
+  assert.equal(FEED_CONFIG.fanoutMode, "queue");
+  assert.equal(FEED_CONFIG.fanoutQueueConcurrency, 5);
+  assert.equal(FEED_CONFIG.fanoutBatchConcurrency, 10);
+  assert.equal(FEED_CONFIG.fanoutBatchRateLimitMax, 10);
+  assert.equal(FEED_CONFIG.fanoutBatchRateLimitDurationMs, 1000);
+});

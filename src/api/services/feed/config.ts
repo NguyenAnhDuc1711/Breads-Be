@@ -69,6 +69,27 @@ export const FEED_CONFIG = Object.freeze({
   discoveryEnabled: process.env.FEED_DISCOVERY_ENABLED !== "false",
   discoveryRatio: ratio(process.env.FEED_DISCOVERY_RATIO, 0.15, "FEED_DISCOVERY_RATIO"),
   discoveryMaxSkip: int(process.env.FEED_DISCOVERY_MAX_SKIP, 1000, "FEED_DISCOVERY_MAX_SKIP"),
+  fanoutMode: process.env.FEED_FANOUT_MODE === "direct" ? "direct" : "queue",
+  fanoutQueueConcurrency: int(
+    process.env.FEED_FANOUT_QUEUE_CONCURRENCY,
+    5,
+    "FEED_FANOUT_QUEUE_CONCURRENCY"
+  ),
+  fanoutBatchConcurrency: int(
+    process.env.FEED_FANOUT_BATCH_CONCURRENCY,
+    10,
+    "FEED_FANOUT_BATCH_CONCURRENCY"
+  ),
+  fanoutBatchRateLimitMax: int(
+    process.env.FEED_FANOUT_BATCH_RATE_LIMIT_MAX,
+    10,
+    "FEED_FANOUT_BATCH_RATE_LIMIT_MAX"
+  ),
+  fanoutBatchRateLimitDurationMs: int(
+    process.env.FEED_FANOUT_BATCH_RATE_LIMIT_DURATION_MS,
+    1000,
+    "FEED_FANOUT_BATCH_RATE_LIMIT_DURATION_MS"
+  ),
 });
 
 console.log("[feed-config]", FEED_CONFIG);
