@@ -1,7 +1,7 @@
 import { Queue, Worker } from "bullmq";
 import Redis from "ioredis";
 import { FEED_CONFIG } from "./config.ts";
-import { processDispatchJob } from "./fanout.ts";
+import { processBatchJob, processDispatchJob } from "./fanout.ts";
 
 /**
  * Connection BullMQ riêng, KHÔNG dùng chung `getRedisInstance()` (`src/dbs/redis.ts`).
@@ -39,7 +39,30 @@ export const registerDispatchWorker = (io: any, conn: Redis): Worker => {
 };
 
 /**
- * Đăng ký worker cho cả 2 queue. Task 011 thêm `registerBatchWorker(connection)` vào đây.
+ * Worker tầng batch — 1 job / chunk follower (≤ `BATCH_SIZE`), chạy `processBatchJob` (ghi ZSET
+ * qua `zAddPostForUsersOrThrow`, AD-3). `limiter` là ngân sách của TOÀN Worker instance, không
+ * phải theo author — vì C-1 chỉ có 1 process/1 Worker instance cho `feed-fanout-batch` trong toàn
+ * hệ thống, đây chính là throttle "toàn hệ thống" mà PRD C-4 yêu cầu (task 011).
+ */
+export const registerBatchWorker = (conn: Redis): Worker => {
+  const worker = new Worker(
+    "feed-fanout-batch",
+    async (job) => processBatchJob(job.data),
+    {
+      connection: conn,
+      concurrency: FEED_CONFIG.fanoutBatchConcurrency,
+      limiter: {
+        max: FEED_CONFIG.fanoutBatchRateLimitMax,
+        duration: FEED_CONFIG.fanoutBatchRateLimitDurationMs,
+      },
+    },
+  );
+  workers.push(worker);
+  return worker;
+};
+
+/**
+ * Đăng ký worker cho cả 2 queue.
  *
  * Call site (`src/server.ts`) BẮT BUỘC bọc try/catch: nếu `Worker` constructor throw (vd thiếu
  * `maxRetriesPerRequest: null`), lỗi không được crash app boot (AD-2, NFR-3 "Redis down ≠ app
@@ -47,7 +70,7 @@ export const registerDispatchWorker = (io: any, conn: Redis): Worker => {
  */
 export const initFanoutWorkers = (io: any): void => {
   registerDispatchWorker(io, connection);
-  // task 011 gọi registerBatchWorker(connection)
+  registerBatchWorker(connection);
 };
 
 /**

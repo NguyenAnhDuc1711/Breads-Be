@@ -13,6 +13,7 @@ import {
   BATCH_SIZE,
   chunk,
   zAddPostForUsers,
+  zAddPostForUsersOrThrow,
   zAddPostsForUser,
   zExists,
   zRemovePostsForUser,
@@ -348,6 +349,30 @@ export const processDispatchJob = async (
     batches: chunks.length,
     durationMs,
   });
+};
+
+/** Payload job `fanout-batch` (batch tier) — task 010 enqueue đúng shape này (`addBulk`). */
+export type BatchJobData = {
+  postId: string;
+  followerIds: string[];
+  scoreMs: number;
+};
+
+/**
+ * Handler job `fanout-batch` — tầng batch của kiến trúc 2 tầng (AD-1), rate-limited toàn hệ thống
+ * qua `limiter` của `Worker` (task 011, `queue.ts`).
+ *
+ * Gọi `zAddPostForUsersOrThrow` (AD-3), KHÔNG phải `zAddPostForUsers` gốc: hàm gốc nuốt lỗi
+ * pipeline (chỉ `console.error`), nên nếu dùng ở đây BullMQ sẽ luôn thấy job `completed` kể cả khi
+ * ghi Redis thất bại thật — retry (FR-6) sẽ chết ngay từ thiết kế. `followerIds` đã ≤ `BATCH_SIZE`
+ * do dispatch worker chia sẵn, nên không chunk lại ở đây.
+ */
+export const processBatchJob = async ({
+  postId,
+  followerIds,
+  scoreMs,
+}: BatchJobData): Promise<void> => {
+  await zAddPostForUsersOrThrow(followerIds, postId, scoreMs);
 };
 
 /**

@@ -8,7 +8,14 @@ import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { Worker } from "bullmq";
 import Redis from "ioredis";
-import { batchQueue, closeFanoutQueues, dispatchQueue, initFanoutWorkers } from "./queue.ts";
+import { FEED_CONFIG } from "./config.ts";
+import {
+  batchQueue,
+  closeFanoutQueues,
+  dispatchQueue,
+  initFanoutWorkers,
+  registerBatchWorker,
+} from "./queue.ts";
 
 test("FR-1/scenario 1: dispatchQueue và batchQueue khởi tạo không throw khi Redis khả dụng", async () => {
   assert.equal(dispatchQueue.name, "feed-fanout");
@@ -77,6 +84,30 @@ test("(plan-review AD-2) initFanoutWorkers throw không được thoát ra ngoà
 
 test("initFanoutWorkers thật (thân rỗng, task 001): gọi trực tiếp không throw", () => {
   assert.doesNotThrow(() => initFanoutWorkers(null));
+});
+
+test("FR-4 (task 011): registerBatchWorker đặt đúng concurrency + limiter từ FEED_CONFIG", async () => {
+  // Connection riêng cho test này (không dùng connection nội bộ của queue.ts, không export ra
+  // ngoài file per AD-2) — cùng cấu hình `maxRetriesPerRequest: null` mà BullMQ Worker đòi hỏi.
+  const conn = new Redis({
+    host: process.env.REDIS_HOST || "localhost",
+    port: Number(process.env.REDIS_PORT || 6379),
+    maxRetriesPerRequest: null,
+  });
+  const worker = registerBatchWorker(conn);
+  try {
+    assert.equal(worker.opts.concurrency, FEED_CONFIG.fanoutBatchConcurrency);
+    assert.deepEqual(worker.opts.limiter, {
+      max: FEED_CONFIG.fanoutBatchRateLimitMax,
+      duration: FEED_CONFIG.fanoutBatchRateLimitDurationMs,
+    });
+  } finally {
+    // Đóng worker TRƯỚC khi quit `conn` — `registerBatchWorker` cũng push worker này vào
+    // `workers[]` nội bộ của queue.ts nên `closeFanoutQueues()` ở `after()` bên dưới sẽ gọi
+    // `.close()` lần nữa; BullMQ cache lại promise `closing` nên lần gọi thứ 2 vô hại.
+    await worker.close();
+    await conn.quit();
+  }
 });
 
 after(async () => {
