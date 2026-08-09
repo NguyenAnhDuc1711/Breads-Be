@@ -10,7 +10,10 @@ import User from "../../models/user.model.js";
 import { buildVisibilityQuery } from "../post.js";
 import { FEED_CONFIG } from "./config.ts";
 import {
+  BATCH_SIZE,
+  chunk,
   zAddPostForUsers,
+  zAddPostForUsersOrThrow,
   zAddPostsForUser,
   zExists,
   zRemovePostsForUser,
@@ -178,6 +181,202 @@ export const fanoutPostToFollowers = async (params: {
     zadds: followerIds.length,
     durationMs,
   });
+};
+
+/** TTL cờ chống emit socket trùng khi dispatch job retry (FR-5) — 1 giờ, dư sức phủ 3 attempt. */
+const SOCKET_SENT_TTL_SECONDS = 3600;
+
+export const socketSentKey = (postId: string): string =>
+  `feed:fanout:socket-sent:${postId}`;
+
+/** Payload job `fanout-post` (dispatch tier) — task 012 enqueue đúng shape này. */
+export type DispatchJobData = { postId: string; authorId?: string };
+
+/**
+ * Điểm nối I/O, chỉ để test tiêm mock — production **không truyền gì**, mọi field dùng default.
+ *
+ * Repo không có harness Mongo/Redis cho integration test (xem header `fanout.test.ts`), mà AC của
+ * task này (chunk math 4500 follower, idempotency socket) bắt buộc phải quan sát được. Tiêm qua
+ * tham số là cách rẻ nhất — không cần `--experimental-test-module-mocks` (đòi đổi npm script dùng
+ * chung) và không đổi hành vi đường chạy thật.
+ */
+export type DispatchDeps = {
+  loadPost?: (postId: string) => Promise<any>;
+  loadAuthor?: (authorId: any) => Promise<any>;
+  getFollowerIds?: (authorId: any) => Promise<string[]>;
+  enqueueBatches?: (jobs: any[]) => Promise<unknown>;
+  redis?: any;
+};
+
+/**
+ * `batchQueue.addBulk` nạp **động** chứ không `import` tĩnh: `queue.ts` mở một connection ioredis
+ * ngay lúc module load, nên một `import` tĩnh ở đây sẽ kéo socket đó vào MỌI process test import
+ * `fanout.ts` (kể cả `fanout.test.ts` cũ, vốn không có teardown) và treo `node --test`.
+ * `queue.ts` import ngược `processDispatchJob` theo đường tĩnh — chiều lười này cắt vòng lặp.
+ */
+const defaultEnqueueBatches = async (jobs: any[]): Promise<unknown> => {
+  const { batchQueue } = await import("./queue.ts");
+  return batchQueue.addBulk(jobs);
+};
+
+/**
+ * Handler job `fanout-post` — tầng dispatch của kiến trúc 2 tầng (AD-1).
+ *
+ * Giữ **nguyên thứ tự check** của `fanoutPostToFollowers` (`type` → `ONLY_ME` → celebrity →
+ * follower query), chỉ thay bước ghi ZSET trực tiếp bằng `batchQueue.addBulk()` N job
+ * `fanout-batch` (1 job / `BATCH_SIZE` follower) — throttle thật nằm ở batch worker (task 011),
+ * không phải ở đây: giới hạn mức job/author không chạm được burst bên trong MỘT author lớn.
+ *
+ * Khác `fanoutPostToFollowers` đúng một điểm bắt buộc: payload job chỉ có `postId` (JSON qua
+ * Redis), nên phải nạp lại `post` từ Mongo trước khi vào chuỗi check.
+ *
+ * `fanoutPostToFollowers` gốc **không đụng tới** — vẫn là đường `FEED_FANOUT_MODE=direct` (FR-8).
+ */
+export const processDispatchJob = async (
+  data: DispatchJobData,
+  io?: any,
+  deps: DispatchDeps = {},
+): Promise<void> => {
+  const t0 = Date.now();
+  const postId = String(data.postId);
+
+  const loadPost =
+    deps.loadPost ?? ((id: string) => Post.findOne({ _id: id }).lean());
+  const loadAuthor =
+    deps.loadAuthor ??
+    ((authorId: any) =>
+      User.findOne({ _id: authorId }, { followersCount: 1 }).lean());
+  const getFollowerIds = deps.getFollowerIds ?? getActiveFollowerIds;
+  const enqueueBatches = deps.enqueueBatches ?? defaultEnqueueBatches;
+
+  const post: any = await loadPost(postId);
+  // Post bị xoá giữa lúc job nằm chờ trong queue — không có gì để fan-out, và KHÔNG throw (throw
+  // ở đây chỉ tạo 3 attempt vô ích cho một tình huống không bao giờ tự khỏi).
+  if (!post) {
+    console.log("[feed-fanout]", { postId, missing: true, batches: 0, durationMs: Date.now() - t0 });
+    return;
+  }
+
+  const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
+  if (![CREATE, EDIT, REPOST].includes(post?.type)) return; // reply không lên feed
+
+  // FR-8: bài ONLY_ME không ai khác xem được nên fan-out sinh ĐÚNG 0 ZSET write — return sớm
+  // TRƯỚC truy vấn `User.findOne` bên dưới để không tốn thêm 1 query vô ích.
+  if (post?.visibility === Constants.POST_VISIBILITY.ONLY_ME) {
+    const durationMs = Date.now() - t0;
+    console.log("[feed-fanout]", { postId, onlyMe: true, zadds: 0, batches: 0, durationMs });
+    return;
+  }
+
+  // `followersCount` đã denormalize sẵn (A-2) — tuyệt đối không `countDocuments` trong write path.
+  const author: any = await loadAuthor(post.authorId);
+
+  // FR-6: tác giả trên ngưỡng sinh ĐÚNG 0 ZSET write; 022 merge họ vào feed lúc đọc.
+  if ((author?.followersCount ?? 0) > FEED_CONFIG.celebrityThreshold) {
+    const followers = author?.followersCount ?? 0;
+    const durationMs = Date.now() - t0;
+    console.log("[feed-fanout]", { postId, celebrity: true, followers, zadds: 0, batches: 0, durationMs });
+    return;
+  }
+
+  const followerIds = await getFollowerIds(post.authorId);
+  // Score = `createdAt` epoch ms (AD-2), KHÔNG phải điểm đã decay.
+  const scoreMs = new Date(post.createdAt).getTime();
+  // Chia đúng theo `BATCH_SIZE` của `zset.ts` (không định nghĩa lại) — mỗi batch job xuống tới
+  // `zAddPostForUsers` sẽ chạy đúng 1 `pipeline.exec()`, không chunk chồng chunk.
+  const chunks = chunk(followerIds, BATCH_SIZE);
+  if (chunks.length) {
+    await enqueueBatches(
+      chunks.map((c, i) => ({
+        name: "fanout-batch",
+        data: { postId, followerIds: c, scoreMs },
+        opts: {
+          // Dedup: dispatch job retry sẽ addBulk lại đúng bộ jobId này, BullMQ bỏ qua job đã tồn
+          // tại thay vì tạo bản sao (FR-3/scenario 5).
+          jobId: `${postId}:batch:${i}`,
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5000 },
+          removeOnComplete: { count: 5000 },
+          removeOnFail: { count: 5000 },
+        },
+      })),
+    );
+  }
+
+  // [030/T9] Real-time push cho follower đang online (FR-10). Mặc định TẮT (REDUCE-2) — xem
+  // `FEED_CONFIG.socketEnabled`. Registry chỉ được quét ĐÚNG MỘT LẦN cho cả lượt dispatch (AD-4:
+  // socket KHÔNG tách theo batch, nếu không sẽ thành N lượt quét/post — vi phạm NFR-2 cũ).
+  const sentKey = socketSentKey(postId);
+  const r = deps.redis ?? getRedisInstance();
+  const alreadySent = r ? await r.exists(sentKey) : 0;
+  if (FEED_CONFIG.socketEnabled && io && followerIds.length && !alreadySent) {
+    try {
+      const sockets = await getAllSockets(io); // đúng một lần cho cả lượt fan-out
+      const byUser = new Map<string, string>();
+      for (const sk of sockets ?? []) {
+        const d: any = sk?.data ?? sk;
+        if (d?.userId) byUser.set(String(d.userId), String(d.id ?? sk.id));
+      }
+      let emitted = 0;
+      const event = Route.POST + POST_PATH.NEW_FROM_FOLLOWEE;
+      for (const uid of followerIds) {
+        const socketId = byUser.get(String(uid));
+        if (socketId) {
+          io.to(socketId).emit(event, { postId, authorId: String(post.authorId) });
+          emitted++;
+        }
+      }
+      // FR-5: đặt cờ SAU khi emit xong — nếu attempt này chết giữa chừng, attempt sau vẫn được
+      // phép emit lại (thà trùng còn hơn mất, và cửa sổ trùng chỉ nằm trong 1 job).
+      if (r) await r.set(sentKey, "1", "EX", SOCKET_SENT_TTL_SECONDS);
+      console.log("[feed-socket]", {
+        postId,
+        online: emitted,
+        followers: followerIds.length,
+        socketScans: 1,
+      });
+    } catch (err) {
+      // Lỗi socket không được làm hỏng các batch job đã enqueue xong ở trên (không throw ở đây).
+      console.error("[feed-socket] error", err);
+    }
+  }
+
+  const durationMs = Date.now() - t0;
+  console.log("[feed-fanout]", {
+    postId,
+    celebrity: false,
+    followers: followerIds.length,
+    batches: chunks.length,
+    durationMs,
+  });
+};
+
+/** Payload job `fanout-batch` (batch tier) — task 010 enqueue đúng shape này (`addBulk`). */
+export type BatchJobData = {
+  postId: string;
+  followerIds: string[];
+  scoreMs: number;
+};
+
+/**
+ * Handler job `fanout-batch` — tầng batch của kiến trúc 2 tầng (AD-1), rate-limited toàn hệ thống
+ * qua `limiter` của `Worker` (task 011, `queue.ts`).
+ *
+ * Gọi `zAddPostForUsersOrThrow` (AD-3), KHÔNG phải `zAddPostForUsers` gốc: hàm gốc nuốt lỗi
+ * pipeline (chỉ `console.error`), nên nếu dùng ở đây BullMQ sẽ luôn thấy job `completed` kể cả khi
+ * ghi Redis thất bại thật — retry (FR-6) sẽ chết ngay từ thiết kế. `followerIds` đã ≤ `BATCH_SIZE`
+ * do dispatch worker chia sẵn, nên không chunk lại ở đây.
+ */
+export const processBatchJob = async ({
+  postId,
+  followerIds,
+  scoreMs,
+}: BatchJobData): Promise<void> => {
+  await zAddPostForUsersOrThrow(followerIds, postId, scoreMs);
+  // [021] Dòng log tối thiểu để đo SC-10 (khoảng cách batch đầu/cuối) từ log app thật, vì fan-out
+  // là fire-and-forget nên k6 http_req_duration không phản ánh chi phí này (xem header
+  // fanout-celebrity-stress.js).
+  console.log("[feed-fanout-batch]", { postId, completedAt: Date.now() });
 };
 
 /**

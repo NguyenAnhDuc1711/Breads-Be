@@ -1,7 +1,10 @@
 import { getRedisInstance } from "../../../dbs/redis.ts";
 import { FEED_CONFIG } from "./config.ts";
 
-const BATCH_SIZE = 2000;
+/** Kích thước 1 pipeline ZSET write. Export để dispatch worker (010) chia follower list theo ĐÚNG
+ * cùng hằng số — batch job ≤ `BATCH_SIZE` follower thì `zAddPostForUsers` bên trong chỉ chạy đúng
+ * 1 `pipeline.exec()`, không chunk lại lần nữa. */
+export const BATCH_SIZE = 2000;
 
 const client = (op: string) => {
   const r = getRedisInstance();
@@ -32,7 +35,7 @@ const logPipelineErrors = (
   }
 };
 
-const chunk = <T>(arr: T[], size: number): T[][] => {
+export const chunk = <T>(arr: T[], size: number): T[][] => {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) {
     out.push(arr.slice(i, i + size));
@@ -88,6 +91,40 @@ export const zAddPostForUsers = async (
       logPipelineErrors("zAddPostForUsers", results);
     } catch (err) {
       console.error("[feed-zset] zAddPostForUsers failed:", err);
+    }
+  }
+};
+
+/**
+ * Biến thể throw của `zAddPostForUsers` — logic pipeline giống hệt (dùng chung `chunk`/`client`)
+ * nhưng KHÔNG nuốt lỗi: mọi command lỗi trong pipeline (hoặc lỗi gửi pipeline) đều re-throw. Dùng
+ * riêng cho batch worker (task 011/AD-3) để BullMQ thấy job thật sự lỗi và retry (FR-6) — gọi
+ * thẳng `zAddPostForUsers` gốc ở đây sẽ luôn ra job `completed` giả kể cả khi ghi Redis thất bại.
+ * `zAddPostForUsers` gốc giữ nguyên không đổi, vẫn dùng cho nhánh `direct`/mọi caller khác cần hợp
+ * đồng "không bao giờ throw".
+ */
+export const zAddPostForUsersOrThrow = async (
+  userIds: string[],
+  postId: string,
+  scoreMs: number
+): Promise<void> => {
+  const r = client("zAddPostForUsersOrThrow");
+  if (!r) throw new Error("[feed-zset] zAddPostForUsersOrThrow: redis instance null");
+
+  for (const batch of chunk(userIds, BATCH_SIZE)) {
+    const pipeline = r.pipeline();
+    for (const userId of batch) {
+      const key = feedKey(userId);
+      pipeline.zadd(key, scoreMs, postId);
+      pipeline.zremrangebyrank(key, 0, -(FEED_CONFIG.zsetMaxSize + 1));
+      pipeline.expire(key, FEED_CONFIG.activeWindowDays * 86400);
+    }
+    const results = await pipeline.exec();
+    const errors = (results ?? []).filter(([err]) => err);
+    if (errors.length > 0) {
+      throw new Error(
+        `[feed-zset] zAddPostForUsersOrThrow: ${errors.length}/${results!.length} command(s) failed`
+      );
     }
   }
 };

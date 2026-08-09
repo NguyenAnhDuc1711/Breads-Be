@@ -11,7 +11,9 @@ import Link from "../models/link.model.js";
 import Post from "../models/post.model.js";
 import SurveyOption from "../models/surveyOption.model.js";
 import User from "../models/user.model.js";
+import { FEED_CONFIG } from "../services/feed/config.ts";
 import { fanoutPostToFollowers } from "../services/feed/fanout.ts";
+import { dispatchQueue } from "../services/feed/queue.ts";
 import {
   getPostDetail,
   getPostsIdByFilter,
@@ -54,6 +56,49 @@ export const validateRepostGuard = (
     return { ok: false, error: "Cannot repost non-public content" };
   }
   return { ok: true };
+};
+
+/**
+ * FR-2/FR-6/FR-7/FR-8 (Task 012): nhánh rẽ fan-out-on-write theo `FEED_CONFIG.fanoutMode`.
+ * `"direct"` gọi `fanoutPostToFollowers` y hệt hành vi cũ 100% — đường rollback duy nhất (US-5)
+ * nếu BullMQ có vấn đề sau khi ship. `"queue"` (mặc định), guard bởi `FEED_CONFIG.fanoutEnabled`
+ * (kill-switch cũ), enqueue job `fanout-post` vào `dispatchQueue` với `jobId = postId` (chống
+ * enqueue trùng). Lỗi enqueue bị `catch` tại chỗ (NFR-2) — không được làm `createPost` trả 5xx.
+ *
+ * `deps` tiêm được (cùng pattern `processDispatchJob`/`fanout.dispatch.test.ts` trong epic này) để
+ * test độc lập cả 4 nhánh mà không cần Mongo/Redis thật — mặc định luôn là hàm/instance thật, nên
+ * hành vi production không đổi khi gọi không truyền `deps`.
+ */
+export const dispatchFanout = (
+  postSaved: { _id: any; authorId: any },
+  io: any,
+  deps: {
+    fanoutDirect?: (args: { post: any; io: any }) => Promise<any>;
+    enqueue?: (name: string, data: any, opts: any) => Promise<any>;
+  } = {},
+): void => {
+  const fanoutDirect = deps.fanoutDirect ?? fanoutPostToFollowers;
+  const enqueue = deps.enqueue ?? dispatchQueue.add.bind(dispatchQueue);
+
+  if (FEED_CONFIG.fanoutMode === "direct") {
+    fanoutDirect({ post: postSaved, io }).catch((e) =>
+      console.log("[feed-fanout] error", e),
+    );
+    return;
+  }
+  if (FEED_CONFIG.fanoutEnabled) {
+    enqueue(
+      "fanout-post",
+      { postId: String(postSaved._id), authorId: String(postSaved.authorId) },
+      {
+        jobId: String(postSaved._id),
+        attempts: 3,
+        backoff: { type: "exponential", delay: 5000 },
+        removeOnComplete: { count: 1000 },
+        removeOnFail: { count: 5000 },
+      },
+    ).catch((e) => console.log("[feed-fanout] enqueue error", e));
+  }
 };
 
 //create post
@@ -217,12 +262,10 @@ export const createPost = async (req, res) => {
   const newPost = new Post(newPostPayload);
   const postSaved = await newPost.save();
   // Fan-out-on-write (FR-5). KHÔNG `await`: NFR-2 cấm fan-out chặn response — một tác giả gần
-  // ngưỡng celebrity sẽ làm response treo hàng giây. `.catch()` là bắt buộc: rejection không bắt
-  // chỉ rơi vào handler `unhandledRejection` toàn cục (001), mất hết ngữ cảnh.
-  fanoutPostToFollowers({
-    post: postSaved,
-    io: req.app.get("socket_io"),
-  }).catch((e) => console.log("[feed-fanout] error", e));
+  // ngưỡng celebrity (hoặc một job enqueue chậm) sẽ làm response treo hàng giây. `.catch()` là bắt
+  // buộc: rejection không bắt chỉ rơi vào handler `unhandledRejection` toàn cục (001), mất hết
+  // ngữ cảnh. Task 012: nhánh direct/queue theo `FEED_CONFIG.fanoutMode` — xem `dispatchFanout`.
+  dispatchFanout(postSaved, req.app.get("socket_io"));
   if (parentPost && action === PostConstants.ACTIONS.REPLY) {
     await handleReplyForParentPost({
       parentId: parentPost,

@@ -1,6 +1,7 @@
 import "dotenv/config";
 import app from "./app.ts";
 import { initSocket } from "./socket/socket.ts";
+import { initFanoutWorkers } from "./api/services/feed/queue.ts";
 
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = "0.0.0.0";
@@ -20,6 +21,16 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 });
 
 initSocket(server, app);
+
+// [fanout-queue AD-2] initFanoutWorkers khởi tạo 2 BullMQ Worker (dispatch/batch) chạy
+// in-process. Bọc try/catch bắt buộc: nếu Worker constructor throw (vd thiếu
+// `maxRetriesPerRequest: null`), lỗi chỉ vô hiệu hoá fan-out queue — KHÔNG được crash app boot
+// (NFR-3 "Redis down ≠ app down").
+try {
+  initFanoutWorkers(app.get("socket_io"));
+} catch (err) {
+  console.error("[fanout-queue] initFanoutWorkers failed — fan-out queue disabled:", err);
+}
 
 process.on("uncaughtException", (err) => {
   console.error("[fatal] uncaughtException:", err?.stack || err);
