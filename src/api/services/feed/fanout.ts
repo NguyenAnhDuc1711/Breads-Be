@@ -373,6 +373,10 @@ export const processBatchJob = async ({
   scoreMs,
 }: BatchJobData): Promise<void> => {
   await zAddPostForUsersOrThrow(followerIds, postId, scoreMs);
+  // [021] Dòng log tối thiểu để đo SC-10 (khoảng cách batch đầu/cuối) từ log app thật, vì fan-out
+  // là fire-and-forget nên k6 http_req_duration không phản ánh chi phí này (xem header
+  // fanout-celebrity-stress.js).
+  console.log("[feed-fanout-batch]", { postId, completedAt: Date.now() });
 };
 
 /**
