@@ -1,7 +1,10 @@
 import { getRedisInstance } from "../../../dbs/redis.ts";
 import { FEED_CONFIG } from "./config.ts";
 
-const BATCH_SIZE = 2000;
+/** Kích thước 1 pipeline ZSET write. Export để dispatch worker (010) chia follower list theo ĐÚNG
+ * cùng hằng số — batch job ≤ `BATCH_SIZE` follower thì `zAddPostForUsers` bên trong chỉ chạy đúng
+ * 1 `pipeline.exec()`, không chunk lại lần nữa. */
+export const BATCH_SIZE = 2000;
 
 const client = (op: string) => {
   const r = getRedisInstance();
@@ -32,7 +35,7 @@ const logPipelineErrors = (
   }
 };
 
-const chunk = <T>(arr: T[], size: number): T[][] => {
+export const chunk = <T>(arr: T[], size: number): T[][] => {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) {
     out.push(arr.slice(i, i + size));
