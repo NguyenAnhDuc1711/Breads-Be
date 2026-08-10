@@ -14,7 +14,19 @@ import {
 import { crawlPosts } from "../crawl.js";
 import optionalAuth from "../middlewares/optionalAuth.js";
 import protectRoute from "../middlewares/protectRoute.js";
+import { validate } from "../middlewares/validate.js";
 import Post from "../models/post.model.js";
+import {
+  createPostSchema,
+  deletePostSchema,
+  getPostSchema,
+  getPostsQuerySchema,
+  likeUnlikePostSchema,
+  tickPostSurveySchema,
+  updatePostSchema,
+  updatePostStatusSchema,
+  updatePostVisibilitySchema,
+} from "../validators/post.validator.js";
 import asyncHandler from "../../helpers/asyncHandler.js";
 
 const router = express.Router();
@@ -29,15 +41,31 @@ const {
   UPDATE_POST_VISIBILITY,
 } = POST_PATH;
 
-router.get(GET_ALL, optionalAuth, asyncHandler(getPosts));
-router.get("/:id", optionalAuth, asyncHandler(getPost));
-router.post(CREATE, createPost);
-router.delete("/:id", asyncHandler(deletePost));
-router.put(UPDATE, asyncHandler(updatePost));
-router.post(LIKE + ":id", protectRoute, asyncHandler(likeUnlikePost));
-router.put(TICK_SURVEY, asyncHandler(tickPostSurvey));
+// Middleware `validate` luôn đứng SAU optionalAuth/protectRoute (auth gắn `req.viewerId`/`req.user`,
+// không đọc payload) và TRƯỚC controller. `CRAWL_POST` cố ý không có schema: tool seed/dev, không
+// nhận payload từ client.
+router.get(GET_ALL, optionalAuth, validate(getPostsQuerySchema), asyncHandler(getPosts));
+router.get("/:id", optionalAuth, validate(getPostSchema), asyncHandler(getPost));
+router.post(CREATE, validate(createPostSchema), createPost);
+router.delete("/:id", validate(deletePostSchema), asyncHandler(deletePost));
+router.put(UPDATE, validate(updatePostSchema), asyncHandler(updatePost));
+router.post(
+  LIKE + ":id",
+  protectRoute,
+  validate(likeUnlikePostSchema),
+  asyncHandler(likeUnlikePost)
+);
+router.put(TICK_SURVEY, validate(tickPostSurveySchema), asyncHandler(tickPostSurvey));
 router.post(CRAWL_POST, asyncHandler(crawlPosts));
-router.post(UPDATE_POST_STATUS, asyncHandler(updatePostStatus));
-router.post(UPDATE_POST_VISIBILITY, asyncHandler(updatePostVisibility));
+router.post(
+  UPDATE_POST_STATUS,
+  validate(updatePostStatusSchema),
+  asyncHandler(updatePostStatus)
+);
+router.post(
+  UPDATE_POST_VISIBILITY,
+  validate(updatePostVisibilitySchema),
+  asyncHandler(updatePostVisibility)
+);
 
 export default router;

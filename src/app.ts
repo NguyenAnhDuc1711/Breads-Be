@@ -47,7 +47,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 app.use((err, req, res, next) => {
   const isDevEnv = process.env.NODE_ENV === "dev";
-  const statusCode = err.status || 500;
+  const statusCode = err.statusCode || err.status || 500;
   (req.log || logger).error({ err, statusCode }, err.message || "Unhandled request error");
   const response = {
     status: "error",
