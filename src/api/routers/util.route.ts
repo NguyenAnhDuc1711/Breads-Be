@@ -10,7 +10,9 @@ import { ObjectId } from "../../utils/index.js";
 import { sendForgotPWMail } from "../controllers/util.controller.js";
 import protectRoute from "../middlewares/protectRoute.js";
 import { getAllFiles, upload } from "../middlewares/upload.js";
+import { validate } from "../middlewares/validate.js";
 import File from "../models/file.model.js";
+import { sendForgotPWMailSchema, uploadSchema } from "../validators/util.validator.js";
 
 const getFileType = (inputType) => {
   let fileType = "";
@@ -35,6 +37,7 @@ router.post(
   UTIL_PATH.UPLOAD,
   protectRoute,
   upload.array("files"),
+  validate(uploadSchema),
   asyncHandler(async (req, res) => {
     const userId = req.query.userId;
     const filesName = req.body.filesName.split(",");
@@ -78,6 +81,10 @@ router.post(
     }).send(res);
   })
 );
-router.post(UTIL_PATH.SEND_FORGOT_PW_MAIL, sendForgotPWMail);
+router.post(
+  UTIL_PATH.SEND_FORGOT_PW_MAIL,
+  validate(sendForgotPWMailSchema),
+  sendForgotPWMail
+);
 
 export default router;
