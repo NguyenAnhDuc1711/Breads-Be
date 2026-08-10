@@ -110,6 +110,32 @@ test("FR-5 (qs thật): filter[value]= rỗng được GIỮ NGUYÊN là chuỗi
   });
 });
 
+// Task 020 (SC-4): bản automated tương đương ĐÚNG 1:1 với curl trong Verification Checklist —
+// `curl 'http://localhost:8080/api/posts/all?filter[page]=users&filter[value]='`. Khác test ngay
+// trên: query string ở đây KHÔNG kèm bất kỳ param nào khác (không `userId`), đúng hình dạng đã
+// điều tra ở phiên fix N+1. Chạy được không cần Mongo/Redis vì controller là stub — cái đang
+// verify là `validate()` không chặn/không bóp méo query, không phải logic feed.
+test("SC-4 (curl-equivalent): GET /posts/all?filter[page]=users&filter[value]= -> 200", async () => {
+  const app = express();
+  let seen: any = null;
+  app.get("/api/posts/all", validate(getPostsQuerySchema), (req, res) => {
+    seen = req.query;
+    res.json({ ok: true });
+  });
+  app.use(errorHandler);
+
+  await withServer(app, async (base) => {
+    const res = await fetch(`${base}/api/posts/all?filter[page]=users&filter[value]=`);
+
+    assert.equal(res.status, 200, "đúng query trong checklist phải 200, không được 400/500");
+    // `{ ok: true }` nguyên vẹn = không có field `message` -> chắc chắn không phải response lỗi
+    // của `validate()` (`{ message: VALIDATION_ERROR_MESSAGE }`).
+    assert.deepEqual(await res.json(), { ok: true });
+    assert.equal(seen.filter.page, PageConstant.USER, "filter.page phải còn nguyên là 'users'");
+    assert.equal(seen.filter.value, "", "filter[value]= rỗng phải tới controller là chuỗi rỗng");
+  });
+});
+
 // AC FR-5 (field completeness): assert trên KEY của object đã parse, không chỉ "parse thành công".
 test("FR-5: parse giữ đủ 4 field getPostsIdByFilter destructure (filter/userId/page/limit)", () => {
   const parsed: any = getPostsQuerySchema.query.parse({
@@ -381,6 +407,48 @@ test("FR-5 (HTTP): POST /posts/update-post-visibility visibility ngoài enum -> 
       assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
     })
   );
+});
+
+// Task 020 (NFR-4, positive path): 3 test HTTP ở trên đều là negative. Nếu `validate()` lỡ chặn
+// nhầm payload HỢP LỆ thì không test nào ở trên fail. Test này đi ngược chiều: payload đúng theo
+// bảng field của `012.md` phải CHẠM được controller trên cả 3 mặt reassignment (AD-6) —
+// `req.body` (/create), `req.params` + `req.query` (DELETE /posts/:id).
+test("NFR-4 (HTTP positive): payload hợp lệ chạm được controller trên cả body/params/query", async () => {
+  await withServer(routeApp(), async (base) => {
+    const createRes = await fetch(`${base}/posts/create`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        _id: VALID_ID,
+        authorId: OTHER_ID,
+        content: "hello",
+        media: [],
+        survey: [],
+        type: "create",
+        usersTag: [VALID_ID],
+        visibility: Constants.POST_VISIBILITY.PUBLIC,
+      }),
+    });
+    assert.equal(createRes.status, 200, "body hợp lệ không được bị validate() chặn");
+    assert.deepEqual(await createRes.json(), { reached: true });
+
+    const deleteRes = await fetch(`${base}/posts/${VALID_ID}?userId=${OTHER_ID}`, {
+      method: "DELETE",
+    });
+    assert.equal(deleteRes.status, 200, "params + query hợp lệ không được bị chặn");
+    assert.deepEqual(await deleteRes.json(), { reached: true });
+
+    const visibilityRes = await fetch(`${base}/posts/update-post-visibility`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        userId: VALID_ID,
+        postId: OTHER_ID,
+        visibility: Constants.POST_VISIBILITY.ONLY_ME,
+      }),
+    });
+    assert.equal(visibilityRes.status, 200);
+  });
 });
 
 /* ------------------------------------------------- wiring (đọc source, không import) */

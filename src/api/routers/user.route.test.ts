@@ -18,6 +18,7 @@ import { once } from "node:events";
 import express from "express";
 import { z } from "zod";
 import {
+  getUserProfileSchema,
   signupUserSchema,
   loginUserSchema,
   followUserSchema,
@@ -33,7 +34,7 @@ import {
   getUserIdFromEmailSchema,
 } from "../validators/user.validator.ts";
 import userRouter from "./user.route.ts";
-import { VALIDATION_ERROR_MESSAGE } from "../middlewares/validate.ts";
+import { VALIDATION_ERROR_MESSAGE, validate } from "../middlewares/validate.ts";
 
 const VALID_OBJECT_ID = "652f1b2c3d4e5f6071829304";
 const VALID_OBJECT_ID_2 = "652f1b2c3d4e5f6071829305";
@@ -470,6 +471,78 @@ test("FR-4 (checkValidUser, body rỗng): POST /users/check-valid-user với bod
     };
     assert.notEqual(json.message, VALIDATION_ERROR_MESSAGE);
   });
+});
+
+// ================================================================
+// Task 020 — positive path (NFR-4): payload HỢP LỆ vẫn đi lọt `validate()`
+// ================================================================
+//
+// Mọi test HTTP ở trên đều là negative (400) hoặc route không có schema. Nếu `validate()` lỡ chặn
+// nhầm payload đúng, hoặc `req.body`/`req.query`/`req.params` bị reassignment (AD-6) làm rơi field,
+// KHÔNG test nào ở trên fail.
+//
+// `user.route.ts` là router DUY NHẤT dùng cả 3 mặt reassignment, nhưng mọi route có schema của nó
+// đều đi thẳng vào controller chạm DB (`User.findOne`...), nên không mount router thật được (rule ở
+// đầu file). Dùng pattern của `post.route.test.ts`: SCHEMA THẬT + `validate()` THẬT + handler stub —
+// chạm được stub nghĩa là validate() đã cho qua. Wiring "schema nào gắn route nào" đã được các test
+// negative phía trên (chạy qua router THẬT) và checklist `grep -c "validate("` bảo chứng.
+const mountEcho = (method: "get" | "post", path: string, schema) => {
+  const app = express();
+  app.use(express.json());
+  app[method](path, validate(schema), (req, res) => {
+    res.json({ body: req.body, query: req.query, params: req.params });
+  });
+  app.use(errorHandler);
+  return app;
+};
+
+test("NFR-4 (positive, body): signup payload hợp lệ chạm controller, đủ 4 field", async () => {
+  const payload = {
+    name: "Duc",
+    email: "duc@example.com",
+    username: "duc",
+    password: "123456",
+  };
+
+  await withServer(mountEcho("post", "/users/signup", signupUserSchema), async (base) => {
+    const res = await fetch(`${base}/users/signup`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    assert.equal(res.status, 200);
+    const json = (await res.json()) as { body: Record<string, unknown> };
+    assert.deepEqual(json.body, payload, "reassignment không được làm rơi/đổi field nào");
+  });
+});
+
+test("NFR-4 (positive, query): users-follow query hợp lệ chạm controller, page/limit coerce đúng kiểu", async () => {
+  await withServer(
+    mountEcho("get", "/users/users-follow", getUsersFollowQuerySchema),
+    async (base) => {
+      const res = await fetch(
+        `${base}/users/users-follow?userId=${VALID_OBJECT_ID}&type=following&page=2&limit=50`
+      );
+      assert.equal(res.status, 200);
+      const json = (await res.json()) as { query: any };
+      assert.equal(json.query.userId, VALID_OBJECT_ID);
+      assert.equal(json.query.type, "following");
+      assert.equal(json.query.page, 2, "query phải được coerce sang number (AD-5)");
+      assert.equal(json.query.limit, 50, "limit=50 là boundary hợp lệ, không được bị chặn");
+    }
+  );
+});
+
+test("NFR-4 (positive, params): GET /users/profile/:userId với ObjectId hợp lệ chạm controller", async () => {
+  await withServer(
+    mountEcho("get", "/users/profile/:userId", getUserProfileSchema),
+    async (base) => {
+      const res = await fetch(`${base}/users/profile/${VALID_OBJECT_ID}`);
+      assert.equal(res.status, 200);
+      const json = (await res.json()) as { params: Record<string, unknown> };
+      assert.deepEqual(json.params, { userId: VALID_OBJECT_ID });
+    }
+  );
 });
 
 test("FR-4 (getUserIdFromEmail): thiếu userEmail -> 400 trước khi controller chạy", async () => {
