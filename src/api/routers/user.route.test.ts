@@ -18,7 +18,6 @@ import { once } from "node:events";
 import express from "express";
 import { z } from "zod";
 import {
-  getUserProfileSchema,
   signupUserSchema,
   loginUserSchema,
   followUserSchema,
@@ -261,7 +260,7 @@ test("FR-4 (no-schema route): GET /users/me không có validate() chen vào — 
   await withServer(mountUserRouter(), async (base) => {
     const res = await fetch(`${base}/users/me`);
     assert.equal(res.status, 401);
-    const json = await res.json();
+    const json = (await res.json()) as { message?: string };
     assert.notEqual(json.message, VALIDATION_ERROR_MESSAGE);
   });
 });
