@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import logger from "../core/logger.ts";
 
 export const getCollection = (name: string) => {
   const db = mongoose.connection.db;
@@ -19,7 +20,7 @@ export const getAnalyticsDateCollection = async (collectionName: string) => {
       return collection;
     }
   } catch (err) {
-    console.error("Connect error: ", err);
+    logger.error({ err }, "getAnalyticsDateCollection failed");
   }
 };
 

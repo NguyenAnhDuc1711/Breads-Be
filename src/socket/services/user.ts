@@ -41,21 +41,6 @@ export const getFriendsSocketInfo = async (
   return [];
 };
 
-export const getFriendSocketId = async (
-  userId: string,
-  io: Server,
-  socket: Socket
-): Promise<string> => {
-  const friendsSocketInfo = await getFriendsSocketInfo(io, socket);
-  if (friendsSocketInfo.length) {
-    const socketId = friendsSocketInfo.find(
-      (info) => info.userId === userId
-    )?.socketId;
-    return socketId || "";
-  }
-  return "";
-};
-
 export const getUserSocketByUserId = async (
   userId: string,
   io: Server

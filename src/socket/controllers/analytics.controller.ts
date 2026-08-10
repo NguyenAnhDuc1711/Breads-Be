@@ -6,6 +6,7 @@ import {
   getDatesInRange,
   getOSFromUserAgent,
 } from "../../utils/index.js";
+import logger from "../../core/logger.js";
 
 const getUserActiveData = (datesData, dateRange) => {
   const result = dateRange.map((date) => {
@@ -122,7 +123,7 @@ export default class AnalyticsController {
         os: userOSData,
       });
     } catch (error) {
-      console.error("Error fetching analytics data:", error);
+      logger.error({ err: error }, "Error fetching analytics data");
       cb({ error: "Failed to retrieve analytics data" });
     }
   }

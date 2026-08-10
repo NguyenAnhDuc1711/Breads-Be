@@ -2,18 +2,19 @@ import "dotenv/config";
 import app from "./app.ts";
 import { initSocket } from "./socket/socket.ts";
 import { initFanoutWorkers } from "./api/services/feed/queue.ts";
+import logger from "./core/logger.ts";
 
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = "0.0.0.0";
 
 const server = app.listen(PORT, HOST, () => {
-  console.log(`Server started at on port:${PORT}`);
+  logger.info(`Server started at on port:${PORT}`);
 });
 
 server.on("error", (err: NodeJS.ErrnoException) => {
   if (err.code === "EADDRINUSE") {
-    console.error(
-      `[fatal] Port ${PORT} đã bị chiếm bởi process khác — server (và socket) không thể khởi động. Hãy tắt process đang giữ port ${PORT} rồi chạy lại.`
+    logger.fatal(
+      `Port ${PORT} đã bị chiếm bởi process khác — server (và socket) không thể khởi động. Hãy tắt process đang giữ port ${PORT} rồi chạy lại.`
     );
     process.exit(1);
   }
@@ -29,24 +30,24 @@ initSocket(server, app);
 try {
   initFanoutWorkers(app.get("socket_io"));
 } catch (err) {
-  console.error("[fanout-queue] initFanoutWorkers failed — fan-out queue disabled:", err);
+  logger.error({ err }, "[fanout-queue] initFanoutWorkers failed — fan-out queue disabled");
 }
 
 process.on("uncaughtException", (err) => {
-  console.error("[fatal] uncaughtException:", err?.stack || err);
+  logger.fatal({ err }, "uncaughtException");
   process.exit(1);
 });
 
 process.on("unhandledRejection", (reason) => {
-  console.error("[fatal] unhandledRejection:", (reason as any)?.stack || reason);
+  logger.fatal({ err: reason }, "unhandledRejection");
 });
 
 process.on("SIGINT", () => {
   server.getConnections((err, count) => {
-    console.log("Open connections:", count);
+    logger.info(`Open connections: ${count}`);
   });
   server.close(() => {
-    console.log("All connections closed");
+    logger.info("All connections closed");
   });
   process.exit(1);
 });

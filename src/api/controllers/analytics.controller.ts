@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { OK } from "../../core/success.response.js";
+import logger from "../../core/logger.js";
 import { ObjectId } from "../../utils/index.js";
 import AnalyticsModel from "../models/analytics.model.js";
 
@@ -45,6 +46,6 @@ export const getEvents = async (req: any, res: any) => {
   try {
     // const { userId, agg } = req.body;
   } catch (err) {
-    console.log("getEvents: ", err);
+    logger.error({ err }, "getEvents failed");
   }
 };

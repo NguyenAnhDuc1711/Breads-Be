@@ -3,6 +3,7 @@ import { Constants } from "../../Breads-Shared/Constants/index.js";
 import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
 import { IPost } from "../../Breads-Shared/Types/index.js";
 import { CREATED, OK } from "../../core/success.response.js";
+import logger from "../../core/logger.js";
 import HTTPStatus from "../../utils/httpStatus.js";
 import { ObjectId } from "../../utils/index.js";
 import Category from "../models/category.model.js";
@@ -82,7 +83,7 @@ export const dispatchFanout = (
 
   if (FEED_CONFIG.fanoutMode === "direct") {
     fanoutDirect({ post: postSaved, io }).catch((e) =>
-      console.log("[feed-fanout] error", e),
+      logger.error({ err: e }, "[feed-fanout] direct fan-out failed"),
     );
     return;
   }
@@ -97,7 +98,7 @@ export const dispatchFanout = (
         removeOnComplete: { count: 1000 },
         removeOnFail: { count: 5000 },
       },
-    ).catch((e) => console.log("[feed-fanout] enqueue error", e));
+    ).catch((e) => logger.error({ err: e }, "[feed-fanout] enqueue failed"));
   }
 };
 
@@ -207,7 +208,6 @@ export const createPost = async (req, res) => {
           query: content,
         },
       );
-      console.log("relatedCategories: ", relatedCategories);
       if (relatedCategories?.length) {
         const catesQuery = await Category.find(
           {
@@ -220,7 +220,7 @@ export const createPost = async (req, res) => {
         categories = catesQuery?.map(({ _id }) => _id);
       }
     } catch (err) {
-      console.log("error when get related categories: ", err);
+      logger.error({ err }, "get related categories failed");
     }
   }
   const newPostPayload: any = {

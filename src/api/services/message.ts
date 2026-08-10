@@ -1,5 +1,6 @@
 import Conversation from "../models/conversation.model.js";
 import { ObjectId, destructObjectId } from "../../utils/index.js";
+import logger from "../../core/logger.js";
 
 export const getConversationInfo = async ({ conversationId, userId }) => {
   try {
@@ -28,7 +29,7 @@ export const getConversationInfo = async ({ conversationId, userId }) => {
     }
     return null;
   } catch (err) {
-    console.log("getConversationInfo: ", err);
+    logger.error({ err }, "getConversationInfo failed");
     throw new Error(err);
   }
 };

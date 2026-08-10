@@ -10,6 +10,7 @@ import { MESSAGE_PATH, Route } from "../../Breads-Shared/APIConfig.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import { ObjectId, destructObjectId } from "../../utils/index.js";
 import { sendToSpecificUser } from "../services/message.js";
+import logger from "../../core/logger.js";
 
 const { TEXT, MEDIA, FILE, SETTING } = Constants.MSG_TYPE;
 const previewLinkKey = (process.env.LINKPREVIEW_API_KEYS ?? "")
@@ -89,11 +90,10 @@ export default class MessageController {
                       }
                     } catch (err) {
                       index += 1;
-                      console.log("End of preview link quota: ", err);
                     }
                   } while (index < previewLen && !result);
                 } catch (err) {
-                  console.log("getLinkPreview: ", err);
+                  logger.error({ err }, "getLinkPreview key rotation failed");
                 }
                 if (
                   typeof result == "object" &&
@@ -107,7 +107,7 @@ export default class MessageController {
               }
             }
           } catch (err) {
-            console.error("getLinkPreview: ", err);
+            logger.error({ err }, "getLinkPreview failed");
           }
           if (links?.length > 0) {
             await Link.insertMany(links, { ordered: false });
@@ -137,7 +137,6 @@ export default class MessageController {
               };
             }
           }
-          console.log("uploadMedia: ", uploadMedia);
           newMsg = new Message({
             ...msgInfo,
             media: uploadMedia,
@@ -214,7 +213,7 @@ export default class MessageController {
           },
         });
     } catch (error) {
-      console.error("sendMessage: ", error);
+      logger.error({ err: error }, "sendMessage failed");
       cb({ status: "error", data: [] });
     }
   }
@@ -306,7 +305,7 @@ export default class MessageController {
       });
       cb({ status: "success", data: result });
     } catch (error) {
-      console.error("getConversations: ", error);
+      logger.error({ err: error }, "getConversations failed");
       cb({ status: "error", data: [] });
     }
   }
@@ -350,7 +349,7 @@ export default class MessageController {
       const result = msgs?.sort((a, b) => -1);
       cb({ status: "success", data: result });
     } catch (error) {
-      console.error("getConversations: ", error);
+      logger.error({ err: error }, "getConversations failed");
       cb({ status: "error", data: [] });
     }
   }
@@ -400,7 +399,7 @@ export default class MessageController {
         cb({ status: "success", data: result, page: page });
       }
     } catch (err) {
-      console.error("getMsgsToSearchMsg: ", err);
+      logger.error({ err }, "getMsgsToSearchMsg failed");
       cb({ status: "error", data: [], page: 1 });
     }
   }
@@ -482,7 +481,7 @@ export default class MessageController {
       });
       !!cb && cb({ status: "success", data: result });
     } catch (err) {
-      console.log("reactMsg: ", err);
+      logger.error({ err }, "reactMsg failed");
       cb({ status: "error", data: null });
     }
   }
@@ -549,7 +548,7 @@ export default class MessageController {
           },
         });
     } catch (err) {
-      console.log("changeSettingConversation: ", err);
+      logger.error({ err }, "changeSettingConversation failed");
       cb({ status: "error", data: null });
     }
   }
@@ -591,7 +590,7 @@ export default class MessageController {
           data: result,
         });
     } catch (err) {
-      console.log("retrieveMsg: ", err);
+      logger.error({ err }, "retrieveMsg failed");
       cb({ status: "error", data: null });
     }
   }
@@ -639,7 +638,7 @@ export default class MessageController {
       });
       !!cb && cb({ status: "success", data: lastMsgUpdated });
     } catch (err) {
-      console.log("updateLastSeen: ", err);
+      logger.error({ err }, "updateLastSeen failed");
     }
   }
   static async sendNext(payload: any, cb: Function, io: Server) {

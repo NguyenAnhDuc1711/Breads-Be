@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import logger from "../../core/logger.js";
 
 export const sendMailService = async ({ from, to, subject, html }) => {
   try {
@@ -18,6 +19,6 @@ export const sendMailService = async ({ from, to, subject, html }) => {
     const info = await transporter.sendMail(options);
     return info;
   } catch (err) {
-    console.log("sendMailService: ", err);
+    logger.error({ err }, "sendMailService failed");
   }
 };

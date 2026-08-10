@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import HTTPStatus from "../../utils/httpStatus.js";
+import logger from "../../core/logger.js";
 import User from "../models/user.model.js";
 
 // Avoid writing to the DB on every single request; only refresh the
@@ -29,14 +30,14 @@ const protectRoute = async (req, res, next) => {
         Date.now() - user.lastActiveAt.getTime() > LAST_ACTIVE_THROTTLE_MS)
     ) {
       User.updateOne({ _id: user._id }, { lastActiveAt: new Date() }).catch(
-        (err) => console.log("Error updating lastActiveAt", err.message)
+        (err) => logger.error({ err }, "Error updating lastActiveAt")
       );
     }
 
     next();
   } catch (err) {
     res.status(HTTPStatus.SERVER_ERR).json({ message: err.message });
-    console.log("Error in protectRoute", err.message);
+    logger.error({ err }, "Error in protectRoute");
   }
 };
 

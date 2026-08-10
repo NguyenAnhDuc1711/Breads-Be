@@ -1,4 +1,5 @@
 import { ObjectId } from "../../utils/index.js";
+import logger from "../../core/logger.js";
 import Follow from "../models/follow.model.js";
 import SavedPost from "../models/savedPost.model.js";
 import User from "../models/user.model.js";
@@ -85,7 +86,7 @@ export const getUserInfo = async (userId, { includeRelations = true } = {}) => {
     user.collection = savedPosts.map(({ postId }) => postId);
     return user;
   } catch (err) {
-    console.log(err);
+    logger.error({ err }, "getUserInfo failed");
   }
 };
 
@@ -106,7 +107,7 @@ export const toggleFollow = async (followerId, followeeId) => {
     );
     // Fire-and-forget, giống fanoutPostToFollowers (NFR-2) — request unfollow không chờ Redis/Mongo.
     removeFeedOnUnfollow(followerId, followeeId).catch((err) =>
-      console.error("[toggleFollow] removeFeedOnUnfollow failed:", err)
+      logger.error({ err }, "[toggleFollow] removeFeedOnUnfollow failed")
     );
     return false;
   }
@@ -124,7 +125,7 @@ export const toggleFollow = async (followerId, followeeId) => {
   );
   // Fire-and-forget, giống fanoutPostToFollowers (NFR-2) — request follow không chờ Redis/Mongo.
   backfillFeedOnFollow(followerId, followeeId).catch((err) =>
-    console.error("[toggleFollow] backfillFeedOnFollow failed:", err)
+    logger.error({ err }, "[toggleFollow] backfillFeedOnFollow failed")
   );
   return true;
 };
@@ -152,7 +153,7 @@ export const getUsersByPage = async ({ page, limit, agg }) => {
     ]);
     return data;
   } catch (err) {
-    console.log("getUsersByPage: ", err);
+    logger.error({ err }, "getUsersByPage failed");
     return [];
   }
 };

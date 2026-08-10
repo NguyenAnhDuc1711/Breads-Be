@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import client from "prom-client";
 import { batchQueue, dispatchQueue } from "../services/feed/queue.ts";
+import logger from "../../core/logger.ts";
 
 export const register = new client.Registry();
 client.collectDefaultMetrics({ register });
@@ -52,7 +53,7 @@ export const metricsHandler = async (_req: Request, res: Response) => {
   } catch (err) {
     // Redis down lúc scrape — không để lỗi getJobCounts() làm hỏng phần response /metrics còn lại
     // (HTTP metrics vẫn phải trả được, NFR-3-style fail-safe).
-    console.error("[metrics] getJobCounts thất bại, bỏ qua gauge queue:", err);
+    logger.error({ err }, "[metrics] getJobCounts thất bại, bỏ qua gauge queue");
   }
   res.set("Content-Type", register.contentType);
   res.end(await register.metrics());

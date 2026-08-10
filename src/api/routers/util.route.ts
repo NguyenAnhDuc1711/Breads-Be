@@ -4,6 +4,7 @@ import fs from "fs";
 import { UTIL_PATH } from "../../Breads-Shared/APIConfig.js";
 import { fileTypes } from "../../Breads-Shared/Constants/index.js";
 import { OK } from "../../core/success.response.js";
+import logger from "../../core/logger.js";
 import asyncHandler from "../../helpers/asyncHandler.js";
 import { ObjectId } from "../../utils/index.js";
 import { sendForgotPWMail } from "../controllers/util.controller.js";
@@ -48,9 +49,8 @@ router.post(
         { resource_type: "raw" },
         function (error, result) {
           if (error) {
-            console.log("err: ", error);
+            logger.error({ err: error }, "cloudinary upload failed");
           }
-          console.log(result?.secure_url);
           if (result?.secure_url) {
             urls[i] = result.secure_url;
             i++;

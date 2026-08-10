@@ -172,7 +172,6 @@ export const searchMsg = async (req, res) => {
     throw new BadRequestError("Empty payload");
   }
 
-  console.log("search value: ", value);
   const skip = (page - 1) * limit;
 
   // Create search terms

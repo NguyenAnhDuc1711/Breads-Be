@@ -1,6 +1,7 @@
 import axios from "axios";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { Constants, gif } from "../Breads-Shared/Constants/index.js";
 import Post from "./models/post.model.js";
 import SurveyOption from "./models/surveyOption.model.js";
@@ -9,6 +10,13 @@ import { getImgUnsplash, randomAvatar } from "./utils/index.js";
 import { destructObjectId, ObjectId } from "../utils/index.js";
 import Conversation from "./models/conversation.model.js";
 import Message from "./models/message.model.js";
+
+// Neo theo vị trí file này, không phải `process.cwd()` — script chạy từ thư mục khác vẫn tìm
+// đúng data/ ở root repo.
+const DATA_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../data",
+);
 
 const getListFakeUserId = async () => {
   try {
@@ -32,15 +40,6 @@ const randomValueInArr = (arr) => {
 const acceptValueByPercentage = (percentage) => {
   const randomPercent = Math.random();
   return randomPercent <= percentage;
-};
-
-export const crawlData = async () => {
-  try {
-    await crawlUser();
-    // await crawlPost();
-  } catch (err) {
-    console.log(err);
-  }
 };
 
 const createPosts = async (payload) => {
@@ -184,7 +183,7 @@ const crawlPostsWithSurvey = async () => {
     console.log("Start crawling posts with survey");
     const fakeUserIds = await getListFakeUserId();
     let postsData = [];
-    const filePath = path.resolve("survey.json");
+    const filePath = path.join(DATA_DIR, "survey.json");
     let data = fs.readFileSync(filePath, "utf8");
     data = JSON.parse(data);
     for (const { question, A, B, C, D, answer } of data) {
@@ -447,7 +446,10 @@ export const genMsgsInConversation = async (conversationId, numberMsg = 50) => {
       throw new Error("Cannot find conversation");
     }
     const participants = conversationInfo?.participants;
-    let fake_conversation = fs.readFileSync("conversation_sample.json", "utf8");
+    let fake_conversation = fs.readFileSync(
+      path.join(DATA_DIR, "conversation_sample.json"),
+      "utf8",
+    );
     fake_conversation = JSON.parse(fake_conversation);
     const listMsg = [];
     const listId = [];

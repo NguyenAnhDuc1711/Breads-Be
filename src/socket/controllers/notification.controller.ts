@@ -15,7 +15,6 @@ export default class NotificationController {
       toUsers: { $in: toUsers?.map((userId) => ObjectId(userId)) },
       action: action,
     });
-    console.log("existingNotifications: ", existingNotifications);
     if (existingNotifications.length > 0) {
       const notificationIds = existingNotifications.map((notification) =>
         ObjectId(notification._id)

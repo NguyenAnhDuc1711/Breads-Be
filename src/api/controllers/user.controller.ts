@@ -601,7 +601,6 @@ export const getUsersWithStatus = async (req, res) => {
     agg,
   });
   const count = await User.countDocuments(agg);
-  console.log("count: ", count);
   new OK({
     message: "Get users with status successfully",
     metadata: {

@@ -2,6 +2,7 @@ import { Constants } from "../../Breads-Shared/Constants/index.js";
 import PageConstant from "../../Breads-Shared/Constants/PageConstants.js";
 import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
 import { destructObjectId, ObjectId } from "../../utils/index.js";
+import logger from "../../core/logger.js";
 import Category from "../models/category.model.js";
 import Follow from "../models/follow.model.js";
 import Like from "../models/like.model.js";
@@ -122,7 +123,7 @@ const isAdminViewer = async (viewerId: any): Promise<boolean> => {
     ).lean();
     return user?.role === Constants.USER_ROLE.ADMIN;
   } catch (err) {
-    console.log("isAdminViewer: ", err);
+    logger.error({ err }, "isAdminViewer failed");
     return false;
   }
 };
@@ -363,7 +364,7 @@ export const getPostDetail = async ({
 
     return enrichedPosts[0] || null;
   } catch (err) {
-    console.log("getPostDetail err: ", err);
+    logger.error({ err }, "getPostDetail failed");
     return isBulk ? [] : null;
   }
 };
@@ -602,7 +603,7 @@ export const getPostsIdByFilter = async (payload) => {
     }
     return data;
   } catch (err) {
-    console.log("getPostsIdByFilter: ", err);
+    logger.error({ err }, "getPostsIdByFilter failed");
     return [];
   }
 };
@@ -623,7 +624,7 @@ export const handleReplyForParentPost = async ({
       action,
     );
   } catch (err) {
-    console.log("handleReplyForParentPost: ", err);
+    logger.error({ err }, "handleReplyForParentPost failed");
   }
 };
 
@@ -642,7 +643,7 @@ export const getUsersTagInfo = async ({ usersTagId }) => {
     );
     return usersTagInfo;
   } catch (err) {
-    console.log("getUsersTagInfo: ", err);
+    logger.error({ err }, "getUsersTagInfo failed");
   }
 };
 
@@ -666,7 +667,7 @@ export const getPostsCatesByIds = async ({ postIds }) => {
     const cateIds = [...new Set(postsCates.flat())];
     return cateIds;
   } catch (err) {
-    console.log("getPostsCatesByIds: ", err);
+    logger.error({ err }, "getPostsCatesByIds failed");
     return [];
   }
 };

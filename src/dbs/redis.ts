@@ -1,5 +1,6 @@
 import Redis from "ioredis";
 import dotenv from "dotenv";
+import logger from "../core/logger.ts";
 dotenv.config();
 
 let client: { instanceConnect: Redis | null } = { instanceConnect: null },
@@ -22,30 +23,26 @@ const REDIS_CONNECT_TIMEOUT = 10000,
 
 const handleTimeoutError = () => {
   connectionTimeout = setTimeout(() => {
-    console.error(
-      "[redis] connect timeout after",
-      REDIS_CONNECT_TIMEOUT,
-      "ms —",
-      REDIS_CONNECT_MESSAGE.message.en
+    logger.error(
+      { timeoutMs: REDIS_CONNECT_TIMEOUT },
+      `[redis] connect timeout — ${REDIS_CONNECT_MESSAGE.message.en}`
     );
   }, REDIS_CONNECT_TIMEOUT);
 };
 
 const handleEventConnection = ({ connectionRedis }) => {
   connectionRedis.on(statusConnectRedis.CONNECT, () => {
-    console.log("Redis connected successfully");
     clearTimeout(connectionTimeout);
   });
   connectionRedis.on(statusConnectRedis.END, () => {
-    console.log("Redis connection ended");
+    logger.warn("[redis] connection ended");
     handleTimeoutError();
   });
   connectionRedis.on(statusConnectRedis.RECONNECT, () => {
-    console.log("Redis connection reconnected");
     clearTimeout(connectionTimeout);
   });
   connectionRedis.on(statusConnectRedis.ERROR, (error) => {
-    console.log("Redis connection error", error);
+    logger.error({ err: error }, "[redis] connection error");
     handleTimeoutError();
   });
 };

@@ -19,6 +19,8 @@
     "seed:likes": "npx tsx src/api/seed/seedLikes.ts",
     "seed:activate-followers": "npx tsx src/api/seed/activateCelebrityFollowers.ts",
     "seed:fake-data": "npx tsx src/api/seed/index.ts",
+    "seed:conversations": "npx tsx src/api/seed/seedConversations.ts",
+    "seed:notifications": "npx tsx src/api/seed/seedNotifications.ts",
     "k6:history": "node test/scripts/build-history.js"
   },
   "keywords": [],
@@ -41,6 +43,8 @@
     "multer": "^1.4.5-lts.1",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.9.16",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
     "prom-client": "^15.1.3",
     "socket.io": "^4.7.5",
     "ts-node-dev": "^2.0.0",
@@ -50,6 +54,7 @@
     "@faker-js/faker": "^10.5.0",
     "@types/express": "^5.0.0",
     "nodemon": "^3.1.4",
+    "pino-pretty": "^13.1.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }

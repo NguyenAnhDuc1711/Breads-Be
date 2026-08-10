@@ -5,10 +5,10 @@ import { destructObjectId } from "../utils";
 import { getPostsCatesByIds } from "../api/services/post";
 import User from "../api/models/user.model";
 import { ObjectId } from "../utils";
+import logger from "../core/logger";
 
 export const createDailyCollectionCron = () => {
   cron.schedule("0 0 * * *", () => {
-    console.log("Running daily task to create collection...");
     createDailyCollection();
   });
 };
@@ -59,11 +59,6 @@ export const updateUsersCatesCron = async () => {
     const promises = [];
     for (const [userId, postIds] of Object.entries(processedData)) {
       const cateIds = await getPostsCatesByIds({ postIds });
-      console.log({
-        userId,
-        postIds,
-        cateIds,
-      });
       promises.push(
         User.updateOne(
           {
@@ -129,13 +124,10 @@ const createDailyCollection = async () => {
     const now = new Date();
     const dateString = now.toLocaleDateString("en-GB");
     const collectionName = dateString.replace(/\//g, "-");
-    const collection = await analyticsDB.createCollection(collectionName);
-    console.log(`Collection created: ${collection.collectionName}`);
+    await analyticsDB.createCollection(collectionName);
   } catch (err) {
-    if (err.codeName === "NamespaceExists") {
-      console.log("Collection already exists for today.");
-    } else {
-      console.error("Error creating collection:", err);
+    if (err.codeName !== "NamespaceExists") {
+      logger.error({ err }, "createDailyCollection failed");
     }
   }
 };

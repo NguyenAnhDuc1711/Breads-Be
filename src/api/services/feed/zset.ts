@@ -182,7 +182,7 @@ export const zAddPostsForUser = async (
 };
 
 /** ZREM chọn lọc — gỡ đúng các `postId` khỏi ZSET của MỘT user, không đụng bài của followee khác
- * trong cùng key. Dùng khi unfollow, thay cho `zDeleteUserFeeds` (hàm đó xoá cả key). */
+ * trong cùng key. Dùng khi unfollow. */
 export const zRemovePostsForUser = async (
   userId: string,
   postIds: string[]
@@ -194,19 +194,5 @@ export const zRemovePostsForUser = async (
     await r.zrem(feedKey(userId), ...postIds);
   } catch (err) {
     console.error("[feed-zset] zRemovePostsForUser failed:", err);
-  }
-};
-
-export const zDeleteUserFeeds = async (userIds: string[]): Promise<void> => {
-  const r = client("zDeleteUserFeeds");
-  if (!r) return;
-
-  for (const batch of chunk(userIds, BATCH_SIZE)) {
-    try {
-      const keys = batch.map(feedKey);
-      await r.del(...keys);
-    } catch (err) {
-      console.error("[feed-zset] zDeleteUserFeeds failed:", err);
-    }
   }
 };

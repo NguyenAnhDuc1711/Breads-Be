@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import dotenv from "dotenv";
+import logger from "../core/logger.ts";
 dotenv.config();
 
 const connectionStr = process.env.MONGO_URI || "mongodb://localhost:27017";
@@ -16,14 +17,9 @@ class Database {
       mongoose.set("debug", { color: true });
     }
 
-    mongoose
-      .connect(connectionStr)
-      .then(() => {
-        console.log("Connected to MongoDB");
-      })
-      .catch((err) => {
-        console.log("Error connecting to MongoDB", err);
-      });
+    mongoose.connect(connectionStr).catch((err) => {
+      logger.error({ err }, "Error connecting to MongoDB");
+    });
   }
 
   static getInstance() {
