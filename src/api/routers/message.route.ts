@@ -12,6 +12,16 @@ import {
   searchMsg,
 } from "../controllers/message.controller.js";
 import protectRoute from "../middlewares/protectRoute.js";
+import { validate } from "../middlewares/validate.ts";
+import {
+  getConversationByUsersIdSchema,
+  getConversationByIdQuerySchema,
+  getConversationMediaSchema,
+  getConversationFilesSchema,
+  getConversationLinksSchema,
+  searchMsgSchema,
+  handleFakeConversationsSchema,
+} from "../validators/message.validator.ts";
 
 const router = express.Router();
 const {
@@ -28,32 +38,38 @@ const {
 router.post(
   GET_CONVERSATION_BY_USERS_ID,
   protectRoute,
+  validate(getConversationByUsersIdSchema),
   asyncHandler(getConversationByUsersId)
 );
 router.get(
   GET_CONVERSATION_BY_ID,
   protectRoute,
+  validate(getConversationByIdQuerySchema),
   asyncHandler(getConversationById)
 );
 router.post(
   GET_CONVERSATION_MEDIA,
   protectRoute,
+  validate(getConversationMediaSchema),
   asyncHandler(getConversationMedia)
 );
 router.post(
   GET_CONVERSATION_FILES,
   protectRoute,
+  validate(getConversationFilesSchema),
   asyncHandler(getConversationFiles)
 );
 router.post(
   GET_CONVERSATION_LINKS,
   protectRoute,
+  validate(getConversationLinksSchema),
   asyncHandler(getConversationLinks)
 );
-router.post(SEARCH, protectRoute, asyncHandler(searchMsg));
+router.post(SEARCH, protectRoute, validate(searchMsgSchema), asyncHandler(searchMsg));
 router.post(
   FAKE_CONVERSATIONS,
   protectRoute,
+  validate(handleFakeConversationsSchema),
   asyncHandler(handleFakeConversations)
 );
 router.post(
