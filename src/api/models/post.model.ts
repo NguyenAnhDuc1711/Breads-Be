@@ -129,6 +129,12 @@ postSchema.index(
   { partialFilterExpression: { type: { $in: [CREATE, EDIT, REPOST] } } },
 );
 postSchema.index({ engagementScore: -1, _id: -1 });
+// USER/FRIEND page (post.ts getPostsIdByFilter): lọc authorId + sort createdAt, với `type`
+// $nin (mặc định) hoặc = "reply" — cả hai đều không khớp partialFilterExpression của
+// `type_1_authorId_1_createdAt_-1` (chỉ CREATE/EDIT/REPOST) nên trước đây Mongo fallback về
+// scan toàn bộ index `createdAt_-1` (~6M doc mới trả 9 kết quả, ~20s). Index này không có
+// partial filter nên áp dụng được với mọi giá trị `type`.
+postSchema.index({ authorId: 1, createdAt: -1 });
 
 const Post = mongoose.model("Post", postSchema);
 

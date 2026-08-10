@@ -1,11 +1,10 @@
-import httpStatusCode from "../utils/httpStatusCode.ts";
-const { STATUS_CODES, REASON_PHRASES } = httpStatusCode;
+import HTTPStatus from "../utils/httpStatus.ts";
 
 class SuccessResponse {
   constructor({
     message,
-    statusCode = STATUS_CODES.OK,
-    reasonStatusCode = REASON_PHRASES.OK,
+    statusCode = HTTPStatus.OK,
+    reasonStatusCode = "OK",
     metadata = {},
   }) {
     this.statusCode = statusCode;
@@ -28,8 +27,8 @@ class OK extends SuccessResponse {
 class CREATED extends SuccessResponse {
   constructor({
     message,
-    statusCode = STATUS_CODES.CREATED,
-    reasonStatusCode = REASON_PHRASES.CREATED,
+    statusCode = HTTPStatus.CREATED,
+    reasonStatusCode = "Created",
     metadata,
   }) {
     super({ message, statusCode, reasonStatusCode, metadata });

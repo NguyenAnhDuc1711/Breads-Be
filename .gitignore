@@ -27,6 +27,8 @@ dist-ssr
 
 .env
 
+uploads/
+
 # k6 stress test reports (generated per run)
 test/results/*
 !test/results/.gitkeep

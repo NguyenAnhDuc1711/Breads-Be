@@ -1,5 +1,4 @@
-import httpStatusCode from "../utils/httpStatusCode.ts";
-const { STATUS_CODES, REASON_PHRASES } = httpStatusCode;
+import HTTPStatus from "../utils/httpStatus.ts";
 
 class ErrorResponse extends Error {
   constructor(message, statusCode) {
@@ -9,46 +8,34 @@ class ErrorResponse extends Error {
 }
 
 class ConflictRequestError extends ErrorResponse {
-  constructor(
-    message = REASON_PHRASES.CONFLICT,
-    statusCode = STATUS_CODES.CONFLICT
-  ) {
+  constructor(message = "Conflict", statusCode = HTTPStatus.CONFLICT) {
     super(message, statusCode);
   }
 }
 
 class BadRequestError extends ErrorResponse {
-  constructor(
-    message = REASON_PHRASES.BAD_REQUEST,
-    statusCode = STATUS_CODES.BAD_REQUEST
-  ) {
+  constructor(message = "Bad Request", statusCode = HTTPStatus.BAD_REQUEST) {
     super(message, statusCode);
   }
 }
 
 class AuthFailureError extends ErrorResponse {
   constructor(
-    message = REASON_PHRASES.UNAUTHORIZED,
-    statusCode = STATUS_CODES.UNAUTHORIZED
+    message = "Unauthorized",
+    statusCode = HTTPStatus.UNAUTHORIZED
   ) {
     super(message, statusCode);
   }
 }
 
 class NotFoundError extends ErrorResponse {
-  constructor(
-    message = REASON_PHRASES.NOT_FOUND,
-    statusCode = STATUS_CODES.NOT_FOUND
-  ) {
+  constructor(message = "Not Found", statusCode = HTTPStatus.NOT_FOUND) {
     super(message, statusCode);
   }
 }
 
 class ForbiddenError extends ErrorResponse {
-  constructor(
-    message = REASON_PHRASES.FORBIDDEN,
-    statusCode = STATUS_CODES.FORBIDDEN
-  ) {
+  constructor(message = "Forbidden", statusCode = HTTPStatus.FORBIDDEN) {
     super(message, statusCode);
   }
 }
@@ -56,7 +43,7 @@ class ForbiddenError extends ErrorResponse {
 class RedisErrorResponse extends ErrorResponse {
   constructor(
     message = REDIS_CONNECT_MESSAGE,
-    statusCode = STATUS_CODES.INTERNAL_SERVER_ERROR
+    statusCode = HTTPStatus.SERVER_ERR
   ) {
     super(message, statusCode);
   }
