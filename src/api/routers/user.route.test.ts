@@ -24,6 +24,13 @@ import {
   updateUserSchema,
   changePasswordSchema,
   validateEmailByCodeSchema,
+  getUsersFollowQuerySchema,
+  getUserToFollowsQuerySchema,
+  getUsersToTagQuerySchema,
+  getUsersWithStatusQuerySchema,
+  getUsersPendingPostSchema,
+  checkValidUserSchema,
+  getUserIdFromEmailSchema,
 } from "../validators/user.validator.ts";
 import userRouter from "./user.route.ts";
 import { VALIDATION_ERROR_MESSAGE } from "../middlewares/validate.ts";
@@ -262,5 +269,217 @@ test("FR-4 (no-schema route): GET /users/me không có validate() chen vào — 
     assert.equal(res.status, 401);
     const json = (await res.json()) as { message?: string };
     assert.notEqual(json.message, VALIDATION_ERROR_MESSAGE);
+  });
+});
+
+// ================================================================
+// Task 011 — 9 route listing/admin còn lại của `user.route.ts`
+// ================================================================
+
+/* -------------------------------------------------------------- tầng schema */
+
+test("getUsersFollowQuerySchema: limit=50 (boundary) pass", () => {
+  assert.doesNotThrow(() =>
+    getUsersFollowQuerySchema.query.parse({
+      userId: VALID_OBJECT_ID,
+      type: "following",
+      limit: "50",
+    })
+  );
+});
+
+test("getUsersFollowQuerySchema: limit=51 fail (cap .max(50) local cho router này)", () => {
+  assert.throws(
+    () =>
+      getUsersFollowQuerySchema.query.parse({
+        userId: VALID_OBJECT_ID,
+        type: "following",
+        limit: "51",
+      }),
+    z.ZodError
+  );
+});
+
+test("getUsersFollowQuerySchema: type=bogus fail", () => {
+  assert.throws(
+    () =>
+      getUsersFollowQuerySchema.query.parse({
+        userId: VALID_OBJECT_ID,
+        type: "bogus",
+      }),
+    z.ZodError
+  );
+});
+
+test("getUsersFollowQuerySchema: type=following pass", () => {
+  assert.doesNotThrow(() =>
+    getUsersFollowQuerySchema.query.parse({
+      userId: VALID_OBJECT_ID,
+      type: "following",
+    })
+  );
+});
+
+test("getUserToFollowsQuerySchema: isTest=false parse ra boolean false thật (không phải truthy string)", () => {
+  const result = getUserToFollowsQuerySchema.query.parse({ isTest: "false" });
+  assert.equal(result.isTest, false);
+});
+
+test("getUserToFollowsQuerySchema: isTest=true parse ra boolean true", () => {
+  const result = getUserToFollowsQuerySchema.query.parse({ isTest: "true" });
+  assert.equal(result.isTest, true);
+});
+
+test("getUserToFollowsQuerySchema: isTest vắng mặt -> undefined (optional)", () => {
+  const result = getUserToFollowsQuerySchema.query.parse({});
+  assert.equal(result.isTest, undefined);
+});
+
+test("getUsersToTagQuerySchema: shape hợp lệ pass", () => {
+  assert.doesNotThrow(() =>
+    getUsersToTagQuerySchema.query.parse({
+      userId: VALID_OBJECT_ID,
+      page: "1",
+      limit: "20",
+      searchValue: "duc",
+    })
+  );
+});
+
+test("getUsersToTagQuerySchema: page không phải số fail", () => {
+  assert.throws(
+    () =>
+      getUsersToTagQuerySchema.query.parse({
+        userId: VALID_OBJECT_ID,
+        page: "abc",
+      }),
+    z.ZodError
+  );
+});
+
+test("getUsersWithStatusQuerySchema: shape hợp lệ pass", () => {
+  assert.doesNotThrow(() =>
+    getUsersWithStatusQuerySchema.query.parse({
+      userId: VALID_OBJECT_ID,
+      page: "1",
+      limit: "20",
+    })
+  );
+});
+
+test("getUsersWithStatusQuerySchema: page không phải số fail", () => {
+  assert.throws(
+    () =>
+      getUsersWithStatusQuerySchema.query.parse({
+        userId: VALID_OBJECT_ID,
+        page: "abc",
+      }),
+    z.ZodError
+  );
+});
+
+test("getUsersPendingPostSchema: shape hợp lệ pass", () => {
+  assert.doesNotThrow(() =>
+    getUsersPendingPostSchema.body.parse({
+      userId: VALID_OBJECT_ID,
+      page: 1,
+      limit: 20,
+    })
+  );
+});
+
+test("getUsersPendingPostSchema: page không phải số fail", () => {
+  assert.throws(
+    () =>
+      getUsersPendingPostSchema.body.parse({
+        userId: VALID_OBJECT_ID,
+        page: "abc",
+      }),
+    z.ZodError
+  );
+});
+
+test("checkValidUserSchema: chỉ userId (không userEmail) vẫn pass ở tầng schema — either-or là business rule ở controller", () => {
+  assert.doesNotThrow(() =>
+    checkValidUserSchema.body.parse({ userId: VALID_OBJECT_ID })
+  );
+});
+
+test("checkValidUserSchema: cả userId lẫn userEmail đều thiếu vẫn pass ở tầng schema (xác nhận task này không dời business logic vào schema)", () => {
+  assert.doesNotThrow(() => checkValidUserSchema.body.parse({}));
+});
+
+test("getUserIdFromEmailSchema: thiếu userEmail fail", () => {
+  assert.throws(
+    () => getUserIdFromEmailSchema.body.parse({}),
+    z.ZodError
+  );
+});
+
+test("getUserIdFromEmailSchema: userEmail hợp lệ pass", () => {
+  assert.doesNotThrow(() =>
+    getUserIdFromEmailSchema.body.parse({ userEmail: "duc@example.com" })
+  );
+});
+
+test("getUsersPendingPostSchema: limit=1000 KHÔNG bị chặn (cap .max(50) của getUsersFollow không leak sang route body này)", () => {
+  assert.doesNotThrow(() =>
+    getUsersPendingPostSchema.body.parse({
+      userId: VALID_OBJECT_ID,
+      page: 1,
+      limit: 1000,
+    })
+  );
+});
+
+/* ---------------------------------------------------------------- tầng HTTP */
+// Lưu ý: `getAdminAccount` (User.findOne) và `handleCrawlFakeUsers` (crawlUser) đều chạm DB/mạng
+// thật ngay cả khi input hợp lệ (route không có schema nên validate() không chặn được gì trước đó)
+// — theo đúng rule ở đầu file, KHÔNG test 2 route này qua tầng HTTP; "không có validate() chen
+// vào" cho 2 route này được xác nhận qua code review + checklist `grep -c "validate("` thủ công.
+
+test("FR-4 (pagination cap, local): GET /users/users-follow?limit=1000 -> 400 (vượt cap .max(50))", async () => {
+  await withServer(mountUserRouter(), async (base) => {
+    const res = await fetch(
+      `${base}/users/users-follow?userId=${VALID_OBJECT_ID}&type=following&limit=1000`
+    );
+    assert.equal(res.status, 400);
+    assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
+  });
+});
+
+test("FR-4 (type enum): GET /users/users-follow?type=bogus -> 400 trước khi getUsersFollow chạy", async () => {
+  await withServer(mountUserRouter(), async (base) => {
+    const res = await fetch(
+      `${base}/users/users-follow?userId=${VALID_OBJECT_ID}&type=bogus`
+    );
+    assert.equal(res.status, 400);
+    assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
+  });
+});
+
+test("FR-4 (checkValidUser, body rỗng): POST /users/check-valid-user với body {} -> KHÔNG phải lỗi validate (either-or vẫn là controller kiểm, throw sớm trước khi chạm DB)", async () => {
+  await withServer(mountUserRouter(), async (base) => {
+    const res = await fetch(`${base}/users/check-valid-user`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      message?: string;
+    };
+    assert.notEqual(json.message, VALIDATION_ERROR_MESSAGE);
+  });
+});
+
+test("FR-4 (getUserIdFromEmail): thiếu userEmail -> 400 trước khi controller chạy", async () => {
+  await withServer(mountUserRouter(), async (base) => {
+    const res = await fetch(`${base}/users/get-user-id-from-email`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 400);
+    assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
   });
 });

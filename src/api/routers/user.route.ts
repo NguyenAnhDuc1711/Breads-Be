@@ -31,6 +31,13 @@ import {
   updateUserSchema,
   changePasswordSchema,
   validateEmailByCodeSchema,
+  getUsersFollowQuerySchema,
+  getUserToFollowsQuerySchema,
+  getUsersToTagQuerySchema,
+  getUsersWithStatusQuerySchema,
+  getUsersPendingPostSchema,
+  checkValidUserSchema,
+  getUserIdFromEmailSchema,
 } from "../validators/user.validator.js";
 
 const router = express.Router();
@@ -56,17 +63,38 @@ const {
 } = USER_PATH;
 
 router.get(ME, protectRoute, asyncHandler(getMe));
-router.get(USERS_FOLLOW, asyncHandler(getUsersFollow));
+router.get(
+  USERS_FOLLOW,
+  validate(getUsersFollowQuerySchema),
+  asyncHandler(getUsersFollow)
+);
 router.get(ADMIN, asyncHandler(getAdminAccount));
 router.get(
   PROFILE + ":userId",
   validate(getUserProfileSchema),
   asyncHandler(getUserProfile)
 );
-router.get(USERS_TO_FOLLOW, asyncHandler(getUserToFollows));
-router.get(USERS_TO_TAG, protectRoute, asyncHandler(getUsersToTag));
-router.get(GET_USERS_WITH_STATUS, asyncHandler(getUsersWithStatus));
-router.post(GET_USERS_PENDING_POST, asyncHandler(getUsersPendingPost));
+router.get(
+  USERS_TO_FOLLOW,
+  validate(getUserToFollowsQuerySchema),
+  asyncHandler(getUserToFollows)
+);
+router.get(
+  USERS_TO_TAG,
+  protectRoute,
+  validate(getUsersToTagQuerySchema),
+  asyncHandler(getUsersToTag)
+);
+router.get(
+  GET_USERS_WITH_STATUS,
+  validate(getUsersWithStatusQuerySchema),
+  asyncHandler(getUsersWithStatus)
+);
+router.post(
+  GET_USERS_PENDING_POST,
+  validate(getUsersPendingPostSchema),
+  asyncHandler(getUsersPendingPost)
+);
 router.post(SIGN_UP, validate(signupUserSchema), asyncHandler(signupUser));
 router.post(LOGIN, validate(loginUserSchema), asyncHandler(loginUser));
 router.post(LOGOUT, asyncHandler(logoutUser));
@@ -88,8 +116,16 @@ router.put(
   asyncHandler(changePassword)
 );
 router.post(CRAWL_USER, asyncHandler(handleCrawlFakeUsers));
-router.post(CHECK_VALID_USER, asyncHandler(checkValidUser));
-router.post(GET_USER_ID_FROM_EMAIL, asyncHandler(getUserIdFromEmail));
+router.post(
+  CHECK_VALID_USER,
+  validate(checkValidUserSchema),
+  asyncHandler(checkValidUser)
+);
+router.post(
+  GET_USER_ID_FROM_EMAIL,
+  validate(getUserIdFromEmailSchema),
+  asyncHandler(getUserIdFromEmail)
+);
 router.post(
   VALIDATE_USER_EMAIL,
   validate(validateEmailByCodeSchema),
