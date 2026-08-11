@@ -24,6 +24,8 @@ import {
 } from "../validators/message.validator.ts";
 
 const router = express.Router();
+// FR-2 (task 010): không route nào nhận media/base64 -> 1mb.
+router.use(express.json({ limit: "1mb" }));
 const {
   GET_CONVERSATION_BY_USERS_ID,
   GET_CONVERSATION_BY_ID,

@@ -30,6 +30,8 @@ import {
 import asyncHandler from "../../helpers/asyncHandler.js";
 
 const router = express.Router();
+// FR-2 (task 010): createPost/updatePost nhận `media`/`files` base64 -> giữ 50mb như global cũ.
+router.use(express.json({ limit: "50mb" }));
 const {
   GET_ALL,
   CREATE,

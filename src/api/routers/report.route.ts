@@ -17,6 +17,8 @@ import {
 } from "../validators/report.validator.ts";
 
 const router = express.Router();
+// AD-4: blanket 50mb cho cả router, kể cả RESPONSE/REJECT không cần media — xem epic.md
+router.use(express.json({ limit: "50mb" }));
 
 router.get(REPORT_PATH.GET, validate(getReportsSchema), asyncHandler(getReports));
 router.post(

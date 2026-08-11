@@ -6,6 +6,8 @@ import { validate } from "../middlewares/validate.ts";
 import { getNotificationsSchema } from "../validators/notification.validator.ts";
 
 const router = express.Router();
+// FR-2 (task 010): chỉ nhận userId/paging, không có field lớn -> 1mb.
+router.use(express.json({ limit: "1mb" }));
 
 router.post(
   NOTIFICATION_PATH.GET,

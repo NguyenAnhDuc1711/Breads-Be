@@ -32,6 +32,9 @@ cloudinary.config({
 });
 
 const router = express.Router();
+// FR-2 (task 010): chỉ `sendForgotPWMail` đọc JSON body (chuỗi email) -> 100kb là quá đủ. Route
+// UPLOAD dùng multer/multipart, `express.json` tự bỏ qua theo Content-Type nên không bị chặn.
+router.use(express.json({ limit: "100kb" }));
 
 router.post(
   UTIL_PATH.UPLOAD,

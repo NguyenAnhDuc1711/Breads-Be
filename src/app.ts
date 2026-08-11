@@ -24,7 +24,9 @@ const app = express();
 
 app.use(pinoHttp({ logger }));
 
-app.use(express.json({ limit: "50mb" })); // to prase  Json data in the req.body
+// FR-2 (security-hardening, task 010): KHÔNG mount `express.json` global ở đây nữa. `body-parser`
+// có hành vi parse-once (`req._body`) nên global 50mb sẽ làm mọi override nhỏ hơn phía sau thành
+// no-op. Mỗi router tự mount `express.json({limit})` theo nhu cầu thật của mình.
 app.use(express.urlencoded({ extended: false })); // to prase from data in the req.body
 app.use(cookieParser());
 app.use(helmet());

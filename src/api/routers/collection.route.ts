@@ -1,4 +1,4 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import {
   addPostToCollection,
   getUserCollection,
@@ -15,6 +15,8 @@ import {
 } from "../validators/collection.validator.ts";
 
 const router = Router();
+// FR-2 (task 010): chỉ nhận id/paging, không có field lớn -> 1mb.
+router.use(express.json({ limit: "1mb" }));
 const { ADD, REMOVE } = COLLECTION_PATH;
 
 router.get(
