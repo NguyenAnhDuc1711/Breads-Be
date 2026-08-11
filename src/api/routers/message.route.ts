@@ -1,4 +1,6 @@
 import express from "express";
+import mongoSanitize from "express-mongo-sanitize";
+import hpp from "hpp";
 import { MESSAGE_PATH } from "../../Breads-Shared/APIConfig.js";
 import asyncHandler from "../../helpers/asyncHandler.js";
 import {
@@ -24,6 +26,11 @@ import {
 } from "../validators/message.validator.ts";
 
 const router = express.Router();
+// FR-2 (task 010): không route nào nhận media/base64 -> 1mb.
+router.use(express.json({ limit: "1mb" }));
+// FR-5 (task 013): sanitize NoSQL operator + HPP.
+router.use(mongoSanitize());
+router.use(hpp());
 const {
   GET_CONVERSATION_BY_USERS_ID,
   GET_CONVERSATION_BY_ID,

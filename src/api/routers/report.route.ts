@@ -1,4 +1,6 @@
 import express from "express";
+import mongoSanitize from "express-mongo-sanitize";
+import hpp from "hpp";
 import { REPORT_PATH } from "../../Breads-Shared/APIConfig";
 import asyncHandler from "../../helpers/asyncHandler.ts";
 import {
@@ -17,6 +19,11 @@ import {
 } from "../validators/report.validator.ts";
 
 const router = express.Router();
+// AD-4: blanket 50mb cho cả router, kể cả RESPONSE/REJECT không cần media — xem epic.md
+router.use(express.json({ limit: "50mb" }));
+// FR-5 (task 013): sanitize NoSQL operator + HPP.
+router.use(mongoSanitize());
+router.use(hpp());
 
 router.get(REPORT_PATH.GET, validate(getReportsSchema), asyncHandler(getReports));
 router.post(

@@ -1,5 +1,7 @@
 import cloudinary from "cloudinary";
 import express from "express";
+import mongoSanitize from "express-mongo-sanitize";
+import hpp from "hpp";
 import fs from "fs";
 import { UTIL_PATH } from "../../Breads-Shared/APIConfig.js";
 import { fileTypes } from "../../Breads-Shared/Constants/index.js";
@@ -10,6 +12,7 @@ import { ObjectId } from "../../utils/index.js";
 import { sendForgotPWMail } from "../controllers/util.controller.js";
 import protectRoute from "../middlewares/protectRoute.js";
 import { getAllFiles, upload } from "../middlewares/upload.js";
+import { authTierLimiter } from "../middlewares/rateLimiter.js";
 import { validate } from "../middlewares/validate.js";
 import File from "../models/file.model.js";
 import { sendForgotPWMailSchema, uploadSchema } from "../validators/util.validator.js";
@@ -32,6 +35,12 @@ cloudinary.config({
 });
 
 const router = express.Router();
+// FR-2 (task 010): chỉ `sendForgotPWMail` đọc JSON body (chuỗi email) -> 100kb là quá đủ. Route
+// UPLOAD dùng multer/multipart, `express.json` tự bỏ qua theo Content-Type nên không bị chặn.
+router.use(express.json({ limit: "100kb" }));
+// FR-5 (task 013): sanitize NoSQL operator + HPP.
+router.use(mongoSanitize());
+router.use(hpp());
 
 router.post(
   UTIL_PATH.UPLOAD,
@@ -81,8 +90,10 @@ router.post(
     }).send(res);
   })
 );
+// FR-1 (task 012): forgot-password thuộc auth-tier (5 req/phút) — chống spam gửi mail/brute-force.
 router.post(
   UTIL_PATH.SEND_FORGOT_PW_MAIL,
+  authTierLimiter,
   validate(sendForgotPWMailSchema),
   sendForgotPWMail
 );
