@@ -1,4 +1,6 @@
 import express from "express";
+import mongoSanitize from "express-mongo-sanitize";
+import hpp from "hpp";
 import {
   changePassword,
   checkValidUser,
@@ -47,6 +49,14 @@ import {
 // nhóm auth không hạ avatar xuống 100kb. 9/18 route đọc `req.body` đều PHẢI có `express.json`
 // đứng đầu chain; 9 route còn lại (GET listing + LOGOUT + CRAWL_USER) không đọc body -> không mount.
 const router = express.Router();
+// FR-5 (task 013): mongoSanitize/hpp KHÔNG có hành vi parse-once như body-parser (khác express.json
+// ở Task 011) -> an toàn mount router.use() cho CẢ file. NHƯNG router.use() ở đây chạy TRƯỚC mọi
+// express.json per-route (đứng trên cùng file, đăng ký trước) -> tại thời điểm này req.body CHƯA
+// được parse (POST/PUT), nên lượt sanitize này CHỈ có tác dụng thật với req.query/req.params (9 route
+// GET + phần query của các route khác), KHÔNG sanitize được req.body. Vì vậy 9 route có `.body` bên
+// dưới đều tự thêm mongoSanitize()/hpp() NGAY SAU express.json của route đó (mới sanitize được body).
+router.use(mongoSanitize());
+router.use(hpp());
 const {
   ME,
   ADMIN,
@@ -99,12 +109,16 @@ router.get(
 router.post(
   GET_USERS_PENDING_POST,
   express.json({ limit: "100kb" }),
+  mongoSanitize(),
+  hpp(),
   validate(getUsersPendingPostSchema),
   asyncHandler(getUsersPendingPost)
 );
 router.post(
   SIGN_UP,
   express.json({ limit: "100kb" }),
+  mongoSanitize(),
+  hpp(),
   authTierLimiter,
   validate(signupUserSchema),
   asyncHandler(signupUser)
@@ -112,6 +126,8 @@ router.post(
 router.post(
   LOGIN,
   express.json({ limit: "100kb" }),
+  mongoSanitize(),
+  hpp(),
   authTierLimiter,
   validate(loginUserSchema),
   asyncHandler(loginUser)
@@ -120,6 +136,8 @@ router.post(LOGOUT, asyncHandler(logoutUser));
 router.put(
   FOLLOW,
   express.json({ limit: "100kb" }),
+  mongoSanitize(),
+  hpp(),
   protectRoute,
   validate(followUserSchema),
   asyncHandler(followUser)
@@ -129,6 +147,8 @@ router.put(
 router.put(
   UPDATE + ":id",
   express.json({ limit: "50mb" }),
+  mongoSanitize(),
+  hpp(),
   protectRoute,
   validate(updateUserSchema),
   asyncHandler(updateUser)
@@ -136,6 +156,8 @@ router.put(
 router.put(
   CHANGE_PW + ":id",
   express.json({ limit: "100kb" }),
+  mongoSanitize(),
+  hpp(),
   validate(changePasswordSchema),
   asyncHandler(changePassword)
 );
@@ -145,18 +167,24 @@ router.post(CRAWL_USER, authTierLimiter, asyncHandler(handleCrawlFakeUsers));
 router.post(
   CHECK_VALID_USER,
   express.json({ limit: "100kb" }),
+  mongoSanitize(),
+  hpp(),
   validate(checkValidUserSchema),
   asyncHandler(checkValidUser)
 );
 router.post(
   GET_USER_ID_FROM_EMAIL,
   express.json({ limit: "100kb" }),
+  mongoSanitize(),
+  hpp(),
   validate(getUserIdFromEmailSchema),
   asyncHandler(getUserIdFromEmail)
 );
 router.post(
   VALIDATE_USER_EMAIL,
   express.json({ limit: "100kb" }),
+  mongoSanitize(),
+  hpp(),
   validate(validateEmailByCodeSchema),
   asyncHandler(validateEmailByCode)
 );

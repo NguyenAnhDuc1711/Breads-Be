@@ -134,16 +134,28 @@ test("FR-1: app.ts mount globalTierLimiter cho /api", async () => {
   );
 });
 
+// Chỉ đòi hỏi authTierLimiter có mặt TRONG chain của route đó (không đòi vị trí tương đối với
+// express.json/mongoSanitize — Task 013 chèn mongoSanitize()/hpp() ngay sau express.json để
+// sanitize được req.body, đẩy authTierLimiter xuống sau; thứ tự này không ảnh hưởng an toàn vì
+// express.json/mongoSanitize/authTierLimiter độc lập với nhau).
 test("FR-1: SIGN_UP/LOGIN/CRAWL_USER trong user.route.ts có authTierLimiter", async () => {
   const src = await readSrc("src/api/routers/user.route.ts");
   const code = src.replace(/^\s*\/\/.*$/gm, "");
+
+  const routeBlock = (key: string) => {
+    const startIdx = code.indexOf(`router.post(\n  ${key},`);
+    assert.ok(startIdx !== -1, `phải tìm thấy route ${key}`);
+    const endIdx = code.indexOf(");", startIdx);
+    return code.slice(startIdx, endIdx);
+  };
+
   assert.ok(
-    code.includes("SIGN_UP,\n  express.json({ limit: \"100kb\" }),\n  authTierLimiter,"),
-    "SIGN_UP phải có authTierLimiter ngay sau express.json"
+    routeBlock("SIGN_UP").includes("authTierLimiter"),
+    "SIGN_UP phải có authTierLimiter trong chain"
   );
   assert.ok(
-    code.includes("LOGIN,\n  express.json({ limit: \"100kb\" }),\n  authTierLimiter,"),
-    "LOGIN phải có authTierLimiter ngay sau express.json"
+    routeBlock("LOGIN").includes("authTierLimiter"),
+    "LOGIN phải có authTierLimiter trong chain"
   );
   assert.ok(
     code.includes("router.post(CRAWL_USER, authTierLimiter,"),

@@ -1,4 +1,6 @@
 import express from "express";
+import mongoSanitize from "express-mongo-sanitize";
+import hpp from "hpp";
 import { POST_PATH } from "../../Breads-Shared/APIConfig.js";
 import {
   createPost,
@@ -33,6 +35,10 @@ import asyncHandler from "../../helpers/asyncHandler.js";
 const router = express.Router();
 // FR-2 (task 010): createPost/updatePost nhận `media`/`files` base64 -> giữ 50mb như global cũ.
 router.use(express.json({ limit: "50mb" }));
+// FR-5 (task 013): strip key NoSQL operator ($/.) khỏi body/query/params + giữ giá trị cuối khi
+// query key lặp (HPP). Không có hành vi parse-once như body-parser -> an toàn mount router.use().
+router.use(mongoSanitize());
+router.use(hpp());
 const {
   GET_ALL,
   CREATE,

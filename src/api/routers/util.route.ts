@@ -1,5 +1,7 @@
 import cloudinary from "cloudinary";
 import express from "express";
+import mongoSanitize from "express-mongo-sanitize";
+import hpp from "hpp";
 import fs from "fs";
 import { UTIL_PATH } from "../../Breads-Shared/APIConfig.js";
 import { fileTypes } from "../../Breads-Shared/Constants/index.js";
@@ -36,6 +38,9 @@ const router = express.Router();
 // FR-2 (task 010): chỉ `sendForgotPWMail` đọc JSON body (chuỗi email) -> 100kb là quá đủ. Route
 // UPLOAD dùng multer/multipart, `express.json` tự bỏ qua theo Content-Type nên không bị chặn.
 router.use(express.json({ limit: "100kb" }));
+// FR-5 (task 013): sanitize NoSQL operator + HPP.
+router.use(mongoSanitize());
+router.use(hpp());
 
 router.post(
   UTIL_PATH.UPLOAD,

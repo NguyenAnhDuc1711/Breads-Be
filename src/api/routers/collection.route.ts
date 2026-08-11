@@ -1,4 +1,6 @@
 import express, { Router } from "express";
+import mongoSanitize from "express-mongo-sanitize";
+import hpp from "hpp";
 import {
   addPostToCollection,
   getUserCollection,
@@ -17,6 +19,9 @@ import {
 const router = Router();
 // FR-2 (task 010): chỉ nhận id/paging, không có field lớn -> 1mb.
 router.use(express.json({ limit: "1mb" }));
+// FR-5 (task 013): sanitize NoSQL operator + HPP.
+router.use(mongoSanitize());
+router.use(hpp());
 const { ADD, REMOVE } = COLLECTION_PATH;
 
 router.get(
