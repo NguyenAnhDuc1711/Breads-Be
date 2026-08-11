@@ -3,6 +3,7 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import express, { NextFunction, Request, Response } from "express";
 import helmet from "helmet";
+import multer from "multer";
 import pinoHttp from "pino-http";
 import router from "./api/routers/index.js";
 import {
@@ -47,9 +48,20 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next(error as any);
 });
 
+// FR-2 (security-hardening, task 002): multer ném MulterError khi upload vượt limit cấu hình ở
+// `middlewares/upload.ts` (fileSize/files) — message rõ ràng theo err.code, KHÔNG rơi vào nhánh
+// generic 500 phía dưới.
+const MULTER_ERROR_MESSAGES: Record<string, string> = {
+  LIMIT_FILE_SIZE: "File quá lớn",
+  LIMIT_FILE_COUNT: "Quá nhiều file trong 1 request",
+};
+
 app.use((err, req, res, next) => {
   const isDevEnv = process.env.NODE_ENV === "dev";
-  const statusCode = err.statusCode || err.status || 500;
+  // MulterError (FR-2, task 002) luôn trả 413, CHÈN TRƯỚC khi tính statusCode/message generic của
+  // T001 — không sửa lại nhánh T001 phía dưới.
+  const isMulterError = err instanceof multer.MulterError;
+  const statusCode = isMulterError ? 413 : err.statusCode || err.status || 500;
   // Log server luôn ghi đầy đủ err/stack/message gốc, bất kể env — chỉ response ra client bị giới hạn.
   (req.log || logger).error({ err, statusCode }, err.message || "Unhandled request error");
 
@@ -58,8 +70,9 @@ app.use((err, req, res, next) => {
   // Lỗi KHÔNG thuộc nhóm này (Mongoose, runtime khác) ở env != "dev" bị thay bằng message generic
   // theo statusCode (vd 404 -> "Not Found", 500 -> "Internal Server Error") để không lộ chi tiết nội bộ.
   const isKnownBusinessError = err instanceof ErrorResponse;
-  const message =
-    isDevEnv || isKnownBusinessError
+  const message = isMulterError
+    ? MULTER_ERROR_MESSAGES[err.code] || err.message || "Lỗi upload file"
+    : isDevEnv || isKnownBusinessError
       ? err.message || "Internal Server Error"
       : STATUS_CODES[statusCode] || "Internal Server Error";
 

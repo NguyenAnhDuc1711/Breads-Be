@@ -45,6 +45,29 @@ export const getAllFiles = (folderPath) => {
   });
 };
 
+// FR-2 (security-hardening, task 002): giới hạn dung lượng/file và số file/request để chặn DoS
+// (upload file khổng lồ hoặc quá nhiều file làm đầy disk/treo server). Ngưỡng mặc định 10MB/file,
+// 10 file/request — chỉnh qua env var nếu cần sau khi có dữ liệu traffic thực tế (PRD C-2), không
+// cần đổi code.
+const parsePositiveInt = (raw: string | undefined, def: number): number => {
+  if (!raw) return def;
+  const v = Number(raw);
+  return Number.isFinite(v) && v > 0 ? Math.trunc(v) : def;
+};
+
+export const MAX_FILE_SIZE_BYTES = parsePositiveInt(
+  process.env.UPLOAD_MAX_FILE_SIZE_BYTES,
+  10 * 1024 * 1024 // 10MB
+);
+export const MAX_FILES_PER_REQUEST = parsePositiveInt(
+  process.env.UPLOAD_MAX_FILES_PER_REQUEST,
+  10
+);
+
 export const upload = multer({
   storage: storage,
+  limits: {
+    fileSize: MAX_FILE_SIZE_BYTES,
+    files: MAX_FILES_PER_REQUEST,
+  },
 });
