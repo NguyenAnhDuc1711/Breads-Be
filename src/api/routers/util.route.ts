@@ -10,6 +10,7 @@ import { ObjectId } from "../../utils/index.js";
 import { sendForgotPWMail } from "../controllers/util.controller.js";
 import protectRoute from "../middlewares/protectRoute.js";
 import { getAllFiles, upload } from "../middlewares/upload.js";
+import { authTierLimiter } from "../middlewares/rateLimiter.js";
 import { validate } from "../middlewares/validate.js";
 import File from "../models/file.model.js";
 import { sendForgotPWMailSchema, uploadSchema } from "../validators/util.validator.js";
@@ -84,8 +85,10 @@ router.post(
     }).send(res);
   })
 );
+// FR-1 (task 012): forgot-password thuộc auth-tier (5 req/phút) — chống spam gửi mail/brute-force.
 router.post(
   UTIL_PATH.SEND_FORGOT_PW_MAIL,
+  authTierLimiter,
   validate(sendForgotPWMailSchema),
   sendForgotPWMail
 );

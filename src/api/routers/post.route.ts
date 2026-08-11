@@ -14,6 +14,7 @@ import {
 import { crawlPosts } from "../crawl.js";
 import optionalAuth from "../middlewares/optionalAuth.js";
 import protectRoute from "../middlewares/protectRoute.js";
+import { authTierLimiter } from "../middlewares/rateLimiter.js";
 import { validate } from "../middlewares/validate.js";
 import Post from "../models/post.model.js";
 import {
@@ -58,7 +59,9 @@ router.post(
   asyncHandler(likeUnlikePost)
 );
 router.put(TICK_SURVEY, validate(tickPostSurveySchema), asyncHandler(tickPostSurvey));
-router.post(CRAWL_POST, asyncHandler(crawlPosts));
+// AD-3 (task 012): CRAWL_POST thiếu auth guard (PRD C-4) -> áp auth-tier nghiêm ngặt thay vì loại
+// trừ khỏi rate-limit, vì đây là endpoint tốn tài nguyên (trigger crawl).
+router.post(CRAWL_POST, authTierLimiter, asyncHandler(crawlPosts));
 router.post(
   UPDATE_POST_STATUS,
   validate(updatePostStatusSchema),

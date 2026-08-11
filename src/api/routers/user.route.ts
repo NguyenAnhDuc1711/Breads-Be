@@ -23,6 +23,7 @@ import { USER_PATH } from "../../Breads-Shared/APIConfig.js";
 import protectRoute from "../middlewares/protectRoute.js";
 import asyncHandler from "../../helpers/asyncHandler.js";
 import { validate } from "../middlewares/validate.js";
+import { authTierLimiter } from "../middlewares/rateLimiter.js";
 import {
   getUserProfileSchema,
   signupUserSchema,
@@ -104,12 +105,14 @@ router.post(
 router.post(
   SIGN_UP,
   express.json({ limit: "100kb" }),
+  authTierLimiter,
   validate(signupUserSchema),
   asyncHandler(signupUser)
 );
 router.post(
   LOGIN,
   express.json({ limit: "100kb" }),
+  authTierLimiter,
   validate(loginUserSchema),
   asyncHandler(loginUser)
 );
@@ -136,7 +139,9 @@ router.put(
   validate(changePasswordSchema),
   asyncHandler(changePassword)
 );
-router.post(CRAWL_USER, asyncHandler(handleCrawlFakeUsers));
+// AD-3 (task 012): CRAWL_USER thiếu auth guard (PRD C-4) -> áp auth-tier nghiêm ngặt thay vì loại
+// trừ khỏi rate-limit, vì đây là endpoint tốn tài nguyên (trigger seed).
+router.post(CRAWL_USER, authTierLimiter, asyncHandler(handleCrawlFakeUsers));
 router.post(
   CHECK_VALID_USER,
   express.json({ limit: "100kb" }),
