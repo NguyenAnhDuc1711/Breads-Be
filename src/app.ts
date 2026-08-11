@@ -1,3 +1,4 @@
+import { STATUS_CODES } from "node:http";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express, { NextFunction, Request, Response } from "express";
@@ -12,6 +13,7 @@ import instanceMongoDB from "./dbs/mongodb.ts";
 import initRedis from "./dbs/redis.ts";
 import { metricsHandler, metricsMiddleware } from "./api/middlewares/metrics.ts";
 import ALLOWED_ORIGINS from "./utils/allowedOrigins.ts";
+import { ErrorResponse } from "./core/error.response.ts";
 import logger from "./core/logger.ts";
 // Connect to MongoDB
 
@@ -48,11 +50,23 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use((err, req, res, next) => {
   const isDevEnv = process.env.NODE_ENV === "dev";
   const statusCode = err.statusCode || err.status || 500;
+  // Log server luôn ghi đầy đủ err/stack/message gốc, bất kể env — chỉ response ra client bị giới hạn.
   (req.log || logger).error({ err, statusCode }, err.message || "Unhandled request error");
+
+  // "Lỗi nghiệp vụ đã biết" (BadRequestError, validate() middleware, ...) đều extend `ErrorResponse`
+  // và tự soạn sẵn message an toàn để hiển thị — luôn giữ nguyên message của chúng.
+  // Lỗi KHÔNG thuộc nhóm này (Mongoose, runtime khác) ở env != "dev" bị thay bằng message generic
+  // theo statusCode (vd 404 -> "Not Found", 500 -> "Internal Server Error") để không lộ chi tiết nội bộ.
+  const isKnownBusinessError = err instanceof ErrorResponse;
+  const message =
+    isDevEnv || isKnownBusinessError
+      ? err.message || "Internal Server Error"
+      : STATUS_CODES[statusCode] || "Internal Server Error";
+
   const response = {
     status: "error",
     code: statusCode,
-    message: err.message || "Internal Server Error",
+    message,
   };
   if (isDevEnv) {
     (response as any).stack = err.stack;
