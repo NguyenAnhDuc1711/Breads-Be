@@ -21,10 +21,15 @@ import cookieParser from "cookie-parser";
 import jwt from "jsonwebtoken";
 import fs from "node:fs/promises";
 import { validate, VALIDATION_ERROR_MESSAGE } from "../middlewares/validate.ts";
-import { getNotificationsSchema } from "../validators/notification.validator.ts";
+import {
+  getNotificationsSchema,
+  readNotificationsSchema,
+} from "../validators/notification.validator.ts";
 import notificationRouter from "./notification.route.ts";
+import { readNotifications } from "../controllers/notification.controller.ts";
 import Notification from "../models/notification.model.ts";
 import User from "../models/user.model.ts";
+import { NotFoundError } from "../../core/error.response.ts";
 import logger from "../../core/logger.ts";
 
 const VALID_ID = "652f1b2c3d4e5f6071829304";
@@ -79,6 +84,56 @@ const makeApp = (echo = false) => {
   return app;
 };
 
+// FR-3: harness trần cho schema `readNotificationsSchema` (XOR notificationId/markAll).
+const makeReadApp = (echo = false) => {
+  const app = express();
+  app.use(express.json());
+  app.post("/t", validate(readNotificationsSchema), (req, res) => {
+    res.json(echo ? { body: req.body } : { ok: true });
+  });
+  app.use(errorHandler);
+  return app;
+};
+
+// Pattern task 002 (`socket/controllers/notification.controller.test.ts`): stub property của
+// object đã import, restore trong `finally`. Gán đè named export không có tác dụng dưới
+// `npx tsx --test` — module gọi vẫn resolve về binding gốc.
+const withStubbedModel = async (
+  stubs: Array<[any, string, any]>,
+  fn: () => Promise<void> | void
+) => {
+  const originals: Array<[any, string, any]> = stubs.map(([obj, prop]) => [
+    obj,
+    prop,
+    obj[prop],
+  ]);
+  for (const [obj, prop, replacement] of stubs) {
+    obj[prop] = replacement;
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [obj, prop, original] of originals) {
+      obj[prop] = original;
+    }
+  }
+};
+
+const fakeRes = () => {
+  const res: any = {};
+  res.statusCode = undefined;
+  res.body = undefined;
+  res.status = (code: number) => {
+    res.statusCode = code;
+    return res;
+  };
+  res.json = (payload: any) => {
+    res.body = payload;
+    return res;
+  };
+  return res;
+};
+
 /* ------------------------------------------- harness router THẬT (TEST-5, task 001 epic) */
 
 const makeRouterApp = () => {
@@ -116,6 +171,29 @@ const stubAggregate = () => {
     },
     restore: () => {
       (Notification as any).aggregate = original;
+    },
+  };
+};
+
+// TEST-6: đếm lần gọi `Notification.updateOne`/`updateMany` qua router thật — dùng cho test 401
+// (chứng minh controller `readNotifications` không chạy khi thiếu token).
+const stubNotificationWrites = () => {
+  const originalUpdateOne = (Notification as any).updateOne;
+  const originalUpdateMany = (Notification as any).updateMany;
+  const calls = { updateOne: 0, updateMany: 0 };
+  (Notification as any).updateOne = async () => {
+    calls.updateOne++;
+    return { matchedCount: 1 };
+  };
+  (Notification as any).updateMany = async () => {
+    calls.updateMany++;
+    return {};
+  };
+  return {
+    calls,
+    restore: () => {
+      (Notification as any).updateOne = originalUpdateOne;
+      (Notification as any).updateMany = originalUpdateMany;
     },
   };
 };
@@ -380,10 +458,283 @@ test("FR-3: $project chứa $ifNull cho isRead (không phải isRead: 1)", async
   );
 });
 
+/* -------------------------------------------- FR-3: readNotificationsSchema (XOR, TEST) */
+
+test("FR-3: XOR cả notificationId lẫn markAll -> 400", async () => {
+  await silenceWarn(() =>
+    withServer(makeReadApp(), async (base) => {
+      const res = await fetch(`${base}/t`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ notificationId: VALID_ID, markAll: true }),
+      });
+      assert.equal(res.status, 400);
+      assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
+    })
+  );
+});
+
+test("FR-3: XOR không key nào -> 400", async () => {
+  await silenceWarn(() =>
+    withServer(makeReadApp(), async (base) => {
+      const res = await fetch(`${base}/t`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      assert.equal(res.status, 400);
+      assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
+    })
+  );
+});
+
+test("FR-3: markAll: false -> 400 (z.literal(true), không phải z.boolean())", async () => {
+  await silenceWarn(() =>
+    withServer(makeReadApp(), async (base) => {
+      const res = await fetch(`${base}/t`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ markAll: false }),
+      });
+      assert.equal(res.status, 400);
+      assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
+    })
+  );
+});
+
+/* ---------------------------------------------- FR-3: readNotifications controller (ARCH-1) */
+
+test("FR-3: markAll -> updateMany filter có isRead: {$ne: true} (không phải false)", async () => {
+  let updateManyArgs: any;
+  await withStubbedModel(
+    [
+      [
+        Notification,
+        "updateMany",
+        async (filter: any, update: any) => {
+          updateManyArgs = [filter, update];
+          return { matchedCount: 5, modifiedCount: 5 };
+        },
+      ],
+      [Notification, "exists", async () => null],
+      [User, "updateOne", async () => ({})],
+    ],
+    async () => {
+      const req: any = { user: { _id: USER_X }, body: { markAll: true } };
+      const res = fakeRes();
+      await readNotifications(req, res);
+      assert.equal(res.statusCode, 200);
+      const [filter, update] = updateManyArgs;
+      assert.equal(String(filter.toUsers.$in[0]), USER_X);
+      assert.equal(filter.toUsers.$in.length, 1);
+      assert.deepEqual(
+        filter.isRead,
+        { $ne: true },
+        "phải là $ne: true, KHÔNG BAO GIỜ isRead: false (ARCH-1)"
+      );
+      assert.deepEqual(update, { isRead: true });
+    }
+  );
+});
+
+test("FR-3: exists trả null -> User.updateOne({hasNewNotify: false})", async () => {
+  let userUpdateArgs: any;
+  await withStubbedModel(
+    [
+      [Notification, "updateMany", async () => ({ matchedCount: 0 })],
+      [Notification, "exists", async () => null],
+      [
+        User,
+        "updateOne",
+        async (filter: any, update: any) => {
+          userUpdateArgs = [filter, update];
+          return {};
+        },
+      ],
+    ],
+    async () => {
+      const req: any = { user: { _id: USER_X }, body: { markAll: true } };
+      const res = fakeRes();
+      await readNotifications(req, res);
+      assert.deepEqual(userUpdateArgs[1], { hasNewNotify: false });
+      assert.equal(String(userUpdateArgs[0]._id), USER_X);
+    }
+  );
+});
+
+test("FR-3: exists trả document -> User.updateOne({hasNewNotify: true})", async () => {
+  let userUpdateArgs: any;
+  await withStubbedModel(
+    [
+      [Notification, "updateMany", async () => ({ matchedCount: 0 })],
+      [Notification, "exists", async () => ({ _id: VALID_ID })],
+      [
+        User,
+        "updateOne",
+        async (filter: any, update: any) => {
+          userUpdateArgs = [filter, update];
+          return {};
+        },
+      ],
+    ],
+    async () => {
+      const req: any = { user: { _id: USER_X }, body: { markAll: true } };
+      const res = fakeRes();
+      await readNotifications(req, res);
+      assert.deepEqual(userUpdateArgs[1], { hasNewNotify: true });
+    }
+  );
+});
+
+test("FR-3: filter exists cùng hình dạng với updateMany (toUsers.$in + $ne: true)", async () => {
+  let updateManyFilter: any;
+  let existsFilter: any;
+  await withStubbedModel(
+    [
+      [
+        Notification,
+        "updateMany",
+        async (filter: any) => {
+          updateManyFilter = filter;
+          return { matchedCount: 0 };
+        },
+      ],
+      [
+        Notification,
+        "exists",
+        async (filter: any) => {
+          existsFilter = filter;
+          return null;
+        },
+      ],
+      [User, "updateOne", async () => ({})],
+    ],
+    async () => {
+      const req: any = { user: { _id: USER_X }, body: { markAll: true } };
+      const res = fakeRes();
+      await readNotifications(req, res);
+      assert.equal(
+        String(existsFilter.toUsers.$in[0]),
+        String(updateManyFilter.toUsers.$in[0])
+      );
+      assert.deepEqual(existsFilter.isRead, updateManyFilter.isRead);
+      assert.deepEqual(existsFilter.isRead, { $ne: true });
+    }
+  );
+});
+
+test("FR-3: notificationId -> updateOne filter có _id + toUsers.$in, set isRead: true", async () => {
+  let updateOneArgs: any;
+  await withStubbedModel(
+    [
+      [
+        Notification,
+        "updateOne",
+        async (filter: any, update: any) => {
+          updateOneArgs = [filter, update];
+          return { matchedCount: 1, modifiedCount: 1 };
+        },
+      ],
+      [Notification, "exists", async () => null],
+      [User, "updateOne", async () => ({})],
+    ],
+    async () => {
+      const req: any = {
+        user: { _id: USER_X },
+        body: { notificationId: VALID_ID },
+      };
+      const res = fakeRes();
+      await readNotifications(req, res);
+      assert.equal(res.statusCode, 200);
+      const [filter, update] = updateOneArgs;
+      assert.equal(String(filter._id), VALID_ID);
+      assert.equal(String(filter.toUsers.$in[0]), USER_X);
+      assert.deepEqual(update, { isRead: true });
+    }
+  );
+});
+
+test("FR-3: matchedCount === 0 -> NotFoundError (404, không 403), User.updateOne không chạy", async () => {
+  let userUpdateCalls = 0;
+  await withStubbedModel(
+    [
+      [Notification, "updateOne", async () => ({ matchedCount: 0 })],
+      [Notification, "exists", async () => null],
+      [
+        User,
+        "updateOne",
+        async () => {
+          userUpdateCalls++;
+          return {};
+        },
+      ],
+    ],
+    async () => {
+      const req: any = {
+        user: { _id: USER_X },
+        body: { notificationId: VALID_ID },
+      };
+      const res = fakeRes();
+      await assert.rejects(
+        () => readNotifications(req, res),
+        (err: any) =>
+          err instanceof NotFoundError && (err as any).statusCode === 404
+      );
+      assert.equal(
+        userUpdateCalls,
+        0,
+        "nhánh 404 phải thoát TRƯỚC recompute hasNewNotify"
+      );
+    }
+  );
+});
+
+/* ------------------------------------------------------- FR-3/TEST-6: auth guard route mới */
+
+test("FR-3/TEST-6: PATCH /notifications/read không token -> 401, updateOne/updateMany 0 lần", async () => {
+  const writes = stubNotificationWrites();
+  try {
+    await withServer(makeRouterApp(), async (base) => {
+      const res = await fetch(`${base}/api/notifications/read`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ markAll: true }),
+      });
+      assert.equal(res.status, 401);
+      assert.equal(writes.calls.updateOne, 0);
+      assert.equal(writes.calls.updateMany, 0);
+    });
+  } finally {
+    writes.restore();
+  }
+});
+
+test("FR-3/TEST-6: router.use(protectRoute) đứng trước mọi router.post(/router.patch(", async () => {
+  const src = await fs.readFile("src/api/routers/notification.route.ts", "utf8");
+  const protectIdx = src.indexOf("router.use(protectRoute)");
+  assert.notEqual(protectIdx, -1, "phải mount protectRoute ở router level");
+  const routeRegex = /router\.(post|patch)\(/g;
+  const routeIndices: number[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = routeRegex.exec(src)) !== null) {
+    routeIndices.push(m.index);
+  }
+  assert.ok(
+    routeIndices.length >= 2,
+    "phải có ít nhất 2 route (POST /get + PATCH /read)"
+  );
+  for (const idx of routeIndices) {
+    assert.ok(
+      protectIdx < idx,
+      "protectRoute phải đứng trước mọi router.post(/router.patch("
+    );
+  }
+});
+
 /* --------------------------------------------------------------- wiring/structure */
 
-test("notification.route.ts: validate() wired vào đúng 1 route", async () => {
+test("notification.route.ts: validate() wired vào đúng 2 route", async () => {
   const src = await fs.readFile("src/api/routers/notification.route.ts", "utf8");
   const validateCalls = src.match(/validate\(/g) || [];
-  assert.equal(validateCalls.length, 1, "phải có đúng 1 lần gọi validate(...)");
+  assert.equal(validateCalls.length, 2, "phải có đúng 2 lần gọi validate(...) (GET + READ)");
 });

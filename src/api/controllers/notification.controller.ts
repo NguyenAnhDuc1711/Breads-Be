@@ -1,8 +1,9 @@
 import { Constants } from "../../Breads-Shared/Constants/index.js";
-import { AuthFailureError } from "../../core/error.response.js";
+import { AuthFailureError, NotFoundError } from "../../core/error.response.js";
 import { OK } from "../../core/success.response.js";
 import { ObjectId } from "../../utils/index.js";
 import Notification from "../models/notification.model.js";
+import User from "../models/user.model.js";
 
 export const getNotifications = async (req, res) => {
   // A-4: `protectRoute` gán thẳng kết quả `User.findById` vào `req.user` mà KHÔNG return sớm khi
@@ -85,5 +86,50 @@ export const getNotifications = async (req, res) => {
   new OK({
     message: "Notifications fetched successfully",
     metadata: notifications,
+  }).send(res);
+};
+
+// FR-3 (task 010): PATCH /notifications/read — mark-read (1 document hoặc tất cả) rồi recompute
+// `User.hasNewNotify` bằng 1 truy vấn `Notification.exists` trong chính request (AD-5 — không
+// counter field, không Mongoose hook, không migration).
+//
+// ARCH-1: ~370k document Notification legacy KHÔNG có key `isRead` trên đĩa. `default: false` của
+// Mongoose chỉ áp lúc TẠO document mới, không áp lúc query. Điều kiện "chưa đọc" PHẢI là
+// `isRead: { $ne: true }` — TUYỆT ĐỐI KHÔNG so sánh isRead với giá trị false trực tiếp — ở cả
+// `updateMany` lẫn `exists`.
+export const readNotifications = async (req, res) => {
+  // A-4: guard trước mọi ObjectId(...) — ObjectId(undefined) sinh id NGẪU NHIÊN thay vì throw.
+  if (!req.user) {
+    throw new AuthFailureError("Unauthorized");
+  }
+  const uid = ObjectId(req.user._id);
+  // Schema (XOR) đã đảm bảo đúng 1 trong 2 key tồn tại — chỉ cần đọc `notificationId`; nhánh
+  // `else` tự động là `markAll` (`noUnusedLocals` cấm destructure `markAll` rồi bỏ không dùng).
+  const { notificationId } = req.body;
+
+  if (notificationId) {
+    const result = await Notification.updateOne(
+      { _id: ObjectId(notificationId), toUsers: { $in: [uid] } },
+      { isRead: true }
+    );
+    if (result.matchedCount === 0) {
+      throw new NotFoundError("Notification not found");
+    }
+  } else {
+    await Notification.updateMany(
+      { toUsers: { $in: [uid] }, isRead: { $ne: true } }, // ⚠️ $ne: true — ARCH-1
+      { isRead: true }
+    );
+  }
+
+  const stillUnread = await Notification.exists({
+    toUsers: { $in: [uid] },
+    isRead: { $ne: true }, // ⚠️ $ne: true — ARCH-1
+  });
+  await User.updateOne({ _id: uid }, { hasNewNotify: !!stillUnread });
+
+  new OK({
+    message: "Notifications marked as read",
+    metadata: { hasNewNotify: !!stillUnread },
   }).send(res);
 };

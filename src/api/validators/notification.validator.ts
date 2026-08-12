@@ -1,6 +1,8 @@
 // Schema cho router `notification` (FR-7, task 014).
 //
-// Router chỉ có 1 route. Lưu ý: route là `POST`, nên `page`/`limit` tới từ JSON body — dùng
+// Router có 2 route (`getNotificationsSchema` cho `POST /get`, `readNotificationsSchema` cho
+// `PATCH /read` — task 010 epic notification-fixes). Lưu ý: route `/get` là `POST`, nên `page`/`limit`
+// tới từ JSON body — dùng
 // `z.number()`, KHÔNG `z.coerce.number()` (AD-5): body đã là số thật, coerce ở đây sẽ âm thầm
 // chấp nhận cả string `"2"` mà client hiện tại không bao giờ gửi.
 //
@@ -16,6 +18,7 @@
 // chứ KHÔNG `z.string()`: giá trị này đi thẳng vào `$match`, chuỗi tự do là bề mặt injection.
 import { z } from "zod";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
+import { objectIdSchema } from "./common.ts";
 
 export const getNotificationsSchema = {
   body: z.object({
@@ -23,4 +26,18 @@ export const getNotificationsSchema = {
     limit: z.number().int().min(1),
     action: z.enum(Constants.NOTIFICATION_ACTION).optional(),
   }),
+};
+
+// FR-3 (task 010): XOR notificationId / markAll — đúng 1 trong 2, không cả hai, không rỗng.
+// `markAll` là `z.literal(true)` (không `z.boolean()`): `markAll: false` không phải một ý định hợp lệ.
+export const readNotificationsSchema = {
+  body: z
+    .object({
+      notificationId: objectIdSchema.optional(),
+      markAll: z.literal(true).optional(),
+    })
+    .refine(
+      (b) => Boolean(b.notificationId) !== Boolean(b.markAll),
+      "đúng 1 trong 2: notificationId HOẶC markAll"
+    ),
 };
