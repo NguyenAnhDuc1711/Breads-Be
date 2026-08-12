@@ -53,6 +53,30 @@
           "legendFormat": "lag"
         }
       ]
+    },
+    {
+      "id": 5,
+      "title": "Fan-out Queue — Waiting Jobs",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "feed_fanout_queue_waiting",
+          "legendFormat": "{{queue}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Fan-out Queue — Failed Jobs",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "feed_fanout_queue_failed",
+          "legendFormat": "{{queue}}"
+        }
+      ]
     }
   ]
 }

@@ -18,6 +18,23 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  # [A3] BullMQ Worker (dispatch/batch) chạy container riêng, không share process với `app`
+  # (HTTP server) — scale độc lập theo queue depth bằng `docker compose up --scale worker=N`.
+  worker:
+    build: .
+    command: ["npx", "tsx", "src/worker.ts"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      MONGO_URI: mongodb://host.docker.internal:27017/Breads
+      ANALYTICS_DB_URI: mongodb://host.docker.internal:27017/Breads-analytics
+      REDIS_HOST: host.docker.internal
+      REDIS_PORT: 6379
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
   redis-exporter:
     image: oliver006/redis_exporter:latest
     restart: unless-stopped
