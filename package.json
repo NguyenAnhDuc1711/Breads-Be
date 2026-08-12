@@ -8,7 +8,7 @@
     "dev": "npx tsx watch src/server.ts",
     "worker": "npx tsx src/worker.ts",
     "worker:dev": "npx tsx watch src/worker.ts",
-    "test": "npx tsx --test src/api/services/*.test.ts src/api/services/feed/*.test.ts src/api/services/metrics/*.test.ts src/api/controllers/*.test.ts src/api/middlewares/*.test.ts src/api/validators/*.test.ts src/api/routers/*.test.ts",
+    "test": "npx tsx --test src/api/services/*.test.ts src/api/services/feed/*.test.ts src/api/services/metrics/*.test.ts src/api/controllers/*.test.ts src/api/middlewares/*.test.ts src/api/validators/*.test.ts src/api/routers/*.test.ts src/socket/controllers/*.test.ts src/socket/services/*.test.ts",
     "start": "ts-node-dev src/server.ts",
     "crawl-data": "npx tsx src/api/crawl.ts",
     "migrate:follow-like": "npx tsx src/api/migrations/migrateFollowLike.ts",
