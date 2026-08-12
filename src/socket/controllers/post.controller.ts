@@ -11,6 +11,28 @@ import Model from "../../utils/ModelName.js";
 import { sendToSpecificUser } from "../services/message.js";
 import { Server, Socket } from "socket.io";
 
+// Tách khỏi `likePost` vì `likePost` gọi `getCollection(Model.POST)` (`src/utils/index.ts`), hàm
+// này throw khi không có Mongo connection thật -> `likePost` không chạy được end-to-end trong test
+// suite (không có harness Mongo, NFR-2 cấm thêm dependency). Đây là điều kiện cần để có test
+// coverage cho fix FR-4 (A12b), cùng pattern `dispatchFanout` đã tách khỏi `createPost`
+// (xem `src/api/controllers/post.controller.dispatch.test.ts`).
+export const deleteLikeNotification = async ({
+  fromUserId,
+  toUserId,
+  postId,
+}: {
+  fromUserId: any;
+  toUserId: any;
+  postId: any;
+}) => {
+  await Notification.deleteOne({
+    fromUser: ObjectId(fromUserId),
+    toUsers: { $in: [toUserId] },
+    action: Constants.NOTIFICATION_ACTION.LIKE,
+    target: ObjectId(postId),
+  });
+};
+
 export default class PostController {
   static likePost = async (payload: any, socket: Socket, io: Server) => {
     const { userId, postId } = payload;
@@ -48,15 +70,11 @@ export default class PostController {
         0;
       //Handle send notification
       if (likedBefore) {
-        const validNotification = await Notification.findOne({
-          fromUser: ObjectId(userId),
-          "toUsers.0": postInfo.authorId,
+        await deleteLikeNotification({
+          fromUserId: userId,
+          toUserId: postInfo.authorId,
+          postId,
         });
-        if (validNotification) {
-          await Notification.deleteOne({
-            _id: validNotification._id,
-          });
-        }
       } else {
         if (userId !== postInfo.authorId) {
           const notificationInfo = new Notification({
@@ -120,6 +138,7 @@ export default class PostController {
                 createdAt: 1,
                 FromUserDetails: 1,
                 "postDetails.content": 1,
+                isRead: { $ifNull: ["$isRead", false] },
               },
             },
           ]);
