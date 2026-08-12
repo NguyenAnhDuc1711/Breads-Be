@@ -11,7 +11,12 @@ import asyncHandler from "../../helpers/asyncHandler.js";
 import { ObjectId } from "../../utils/index.js";
 import { sendForgotPWMail } from "../controllers/util.controller.js";
 import protectRoute from "../middlewares/protectRoute.js";
-import { getAllFiles, upload } from "../middlewares/upload.js";
+import {
+  getAllFiles,
+  rejectUnsupportedFileTypes,
+  upload,
+  validateUploadUserId,
+} from "../middlewares/upload.js";
 import { authTierLimiter } from "../middlewares/rateLimiter.js";
 import { validate } from "../middlewares/validate.js";
 import File from "../models/file.model.js";
@@ -45,7 +50,9 @@ router.use(hpp());
 router.post(
   UTIL_PATH.UPLOAD,
   protectRoute,
+  validateUploadUserId,
   upload.array("files"),
+  rejectUnsupportedFileTypes,
   validate(uploadSchema),
   asyncHandler(async (req, res) => {
     const userId = req.query.userId;

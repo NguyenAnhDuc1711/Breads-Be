@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
 import { STATUS_CODES } from "node:http";
+import fs from "node:fs";
 import fsp from "node:fs/promises";
 import express from "express";
 import multer from "multer";
@@ -20,6 +21,8 @@ import {
   upload,
   MAX_FILE_SIZE_BYTES,
   MAX_FILES_PER_REQUEST,
+  validateUploadUserId,
+  rejectUnsupportedFileTypes,
 } from "./upload.ts";
 import { ErrorResponse } from "../../core/error.response.ts";
 
@@ -79,7 +82,7 @@ test("FR-2: upload 1 file vượt fileSize cấu hình -> 413, message riêng LI
     await withServer(app, async (base) => {
       const oversized = Buffer.alloc(MAX_FILE_SIZE_BYTES + 1024, "a");
       const form = new FormData();
-      form.append("files", new Blob([oversized]), "big.bin");
+      form.append("files", new Blob([oversized], { type: "image/png" }), "big.bin");
 
       const res = await fetch(`${base}/t?userId=${USER_ID}`, {
         method: "POST",
@@ -106,7 +109,7 @@ test("FR-2: upload số file vượt files cấu hình -> 413, không có file n
     await withServer(app, async (base) => {
       const form = new FormData();
       for (let i = 0; i < MAX_FILES_PER_REQUEST + 1; i++) {
-        form.append("files", new Blob([`hello-${i}`]), `f${i}.txt`);
+        form.append("files", new Blob([`hello-${i}`], { type: "text/plain" }), `f${i}.txt`);
       }
 
       const res = await fetch(`${base}/t?userId=${USER_ID}`, {
@@ -158,6 +161,86 @@ test("FR-2 (regression): upload file/số lượng hợp lệ trong giới hạn
   }
 });
 
+/* --------------------------------------------------------- S2: sanitize userId + fileFilter */
+
+test("S2: userId không phải ObjectId hợp lệ (path traversal) -> 400, không tạo thư mục/ghi file nào", async () => {
+  const app = express();
+  app.post(
+    "/t",
+    validateUploadUserId,
+    upload.array("files"),
+    rejectUnsupportedFileTypes,
+    (_req, res) => {
+      res.json({ ok: true });
+    }
+  );
+  app.use(makeErrorHandler(false));
+
+  const traversalDir = "./uploads/../evil";
+  try {
+    await withServer(app, async (base) => {
+      const form = new FormData();
+      form.append("files", new Blob(["hello"], { type: "text/plain" }), "hello.txt");
+
+      const res = await fetch(`${base}/t?userId=${encodeURIComponent("../evil")}`, {
+        method: "POST",
+        body: form,
+      });
+
+      assert.equal(res.status, 400);
+      const body: any = await res.json();
+      assert.equal(body.message, "Invalid userId");
+      assert.equal(fs.existsSync(traversalDir), false, "không được tạo thư mục ngoài ./uploads");
+    });
+  } finally {
+    await fsp.rm(traversalDir, { recursive: true, force: true });
+  }
+});
+
+test("S2: mimetype không nằm trong whitelist (ảnh/video/tài liệu) -> 400, không ghi file xuống disk", async () => {
+  const app = express();
+  app.post(
+    "/t",
+    validateUploadUserId,
+    upload.array("files"),
+    rejectUnsupportedFileTypes,
+    (_req, res) => {
+      res.json({ ok: true });
+    }
+  );
+  app.use(makeErrorHandler(false));
+
+  try {
+    await withServer(app, async (base) => {
+      const form = new FormData();
+      form.append(
+        "files",
+        new Blob(["#!/bin/sh\necho pwned"], { type: "application/x-sh" }),
+        "evil.sh"
+      );
+
+      const res = await fetch(`${base}/t?userId=${USER_ID}`, {
+        method: "POST",
+        body: form,
+      });
+
+      assert.equal(res.status, 400);
+      const body: any = await res.json();
+      assert.equal(body.message, "Unsupported file type: application/x-sh");
+
+      let filesOnDisk: string[] = [];
+      try {
+        filesOnDisk = await fsp.readdir(UPLOAD_TEST_DIR);
+      } catch {
+        // dir không tồn tại -> chắc chắn không có file nào bị ghi, hợp lệ
+      }
+      assert.equal(filesOnDisk.length, 0);
+    });
+  } finally {
+    await cleanupUploadDir();
+  }
+});
+
 test("FR-2 (ordering): nhánh MulterError chạy TRƯỚC nhánh generic — message riêng, không phải STATUS_CODES[413]/\"Internal Server Error\"", async () => {
   const app = express();
   app.post("/t", upload.array("files"), (_req, res) => {
@@ -172,7 +255,7 @@ test("FR-2 (ordering): nhánh MulterError chạy TRƯỚC nhánh generic — mes
     await withServer(app, async (base) => {
       const oversized = Buffer.alloc(MAX_FILE_SIZE_BYTES + 1024, "a");
       const form = new FormData();
-      form.append("files", new Blob([oversized]), "big.bin");
+      form.append("files", new Blob([oversized], { type: "image/png" }), "big.bin");
 
       const res = await fetch(`${base}/t?userId=${USER_ID}`, {
         method: "POST",

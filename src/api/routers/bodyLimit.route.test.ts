@@ -175,7 +175,7 @@ test("FR-2 (util router): multipart qua multer KHÔNG bị express.json 100kb ch
   try {
     await withServer(app, async (base) => {
       const form = new FormData();
-      form.append("files", new Blob([Buffer.alloc(200 * 1024, "a")]), "big.txt");
+      form.append("files", new Blob([Buffer.alloc(200 * 1024, "a")], { type: "text/plain" }), "big.txt");
 
       const res = await fetch(`${base}/util/upload?userId=${VALID_ID}`, {
         method: "POST",
