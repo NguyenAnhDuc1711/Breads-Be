@@ -41,14 +41,28 @@ export const getFriendsSocketInfo = async (
   return [];
 };
 
+// Nhận cả `string` lẫn `ObjectId`: call site `services/message.ts` truyền
+// `postInfo.authorId` lấy từ driver Mongo thô -> đã là ObjectId, không phải string.
+// Bắt buộc `String(...)` ở CẢ HAI phía, nếu không Set.has() luôn false và push im lặng.
+// Bỏ qua socket chưa emit `user/connect` (`data` rỗng) để input stringify thành
+// "undefined"/"null" không khớp toàn bộ socket chưa đăng ký.
+export const getUserSocketsByUserIds = async (
+  userIds: (string | any)[],
+  io: Server
+): Promise<string[]> => {
+  const wanted = new Set(
+    (userIds || []).filter(Boolean).map((id) => String(id))
+  );
+  if (!wanted.size) return [];
+  const listSocket = await getAllSockets(io);
+  return (listSocket || [])
+    .map((sk) => sk.data as SocketData)
+    .filter((d) => d?.userId && wanted.has(String(d.userId)))
+    .map((d) => d.id);
+};
+
 export const getUserSocketByUserId = async (
   userId: string,
   io: Server
-): Promise<string | undefined> => {
-  const listSocket = await getAllSockets(io);
-  const socketsData = listSocket.map((sk) => sk.data as SocketData);
-  const userSocketId = socketsData.find(
-    (socket) => socket.userId === userId.toString()
-  )?.id;
-  return userSocketId;
-};
+): Promise<string | undefined> =>
+  (await getUserSocketsByUserIds([userId], io))[0];
