@@ -10,6 +10,12 @@
 >
 > Cập nhật 2026-08-12 (bổ sung): review chi tiết module Notification (REST + Socket.IO) — phát
 > hiện S5, S6 (nghiêm trọng, chưa fix) và A11-A14 (đáng chú ý) ở mục 3, checklist tương ứng ở mục 4.
+>
+> Cập nhật 2026-08-12 (epic `notification-fixes`, đã merge `master` @ `e1b36af`): đã xử lý toàn bộ
+> S5, S6, A11, A12, A13, A14 qua pipeline CCPM đầy đủ (office-hours → PRD → plan-review 2 vòng →
+> 7 task → epic-verify EPIC_COMPLETE 5/5). Thêm 1 finding mới phát hiện khi implement (**A12b**, cùng
+> lớp bug với A12 nhưng ở code path unlike) và 1 mở rộng scope được chủ dự án duyệt giữa chừng
+> (**S7**, danh tính socket ở `user/connect`) — cả hai cũng đã fix trong cùng epic. Chi tiết ở mục 3.
 
 ---
 
@@ -83,8 +89,9 @@ graph TB
 | S2 | ✅ **ĐÃ FIX** — ~~Upload: path ghép trực tiếp `req.query.userId`, không `fileFilter`/`limits`~~ | `src/api/middlewares/upload.ts` | `validateUploadUserId` (validate ObjectId trước khi multer đụng body) + `fileFilter` whitelist ảnh/video/tài liệu (`cb(null,false)` — không dùng `cb(err)` vì multer không tự drain stream, sẽ treo connection) + `limits.fileSize/files` đã có sẵn từ trước. |
 | S3 | ✅ **ĐÃ FIX** — ~~Không có rate limiting ở bất kỳ đâu~~ | toàn bộ `app.ts`/routers | `globalTierLimiter` áp cho toàn `/api` + `authTierLimiter` riêng cho login/signup/crawl/forgot-password. |
 | S4 | ✅ **ĐÃ FIX** — ~~Graceful shutdown không thực sự "graceful"~~ | `src/server.ts` | `process.exit(0)` giờ nằm trong callback `server.close()`, force-exit timeout 10s, đóng sạch Mongo/Redis/BullMQ queue trước khi thoát. Xử lý cả `SIGTERM` (Docker/K8s) không chỉ `SIGINT`. |
-| S5 | Route đọc thông báo không có xác thực — IDOR | `src/api/routers/notification.route.ts` | Không mount `protectRoute` (khác pattern đã dùng ở `post.route.ts` cho `LIKE`). `getNotifications` lấy thẳng `userId` từ body client, không đối chiếu `req.user` — bất kỳ ai (kể cả chưa đăng nhập) chỉ cần biết `userId` của người khác là đọc được toàn bộ thông báo riêng tư của họ (ai follow, ai like bài nào). |
-| S6 | Tạo thông báo qua socket không xác thực `fromUser` — giả mạo/xoá thông báo người khác | `src/socket/controllers/notification.controller.ts:7-12` | Khác `PostController.likePost` (có check `authenticatedUserId !== userId`), handler `create` dùng thẳng `fromUser` từ payload, không đối chiếu `socket.user`. Vì middleware xác thực socket vẫn `next()` khi JWT thiếu/sai (`socket.ts:43-47`), client bất kỳ có thể emit thông báo giả hoặc lợi dụng nhánh dedupe (xoá-thay-vì-tạo khi trùng `fromUser+toUsers+action`) để xoá thông báo thật của người khác. |
+| S5 | ✅ **ĐÃ FIX** — ~~Route đọc thông báo không có xác thực — IDOR~~ | `src/api/routers/notification.route.ts` | `router.use(protectRoute)` mount ở router level (đúng pattern `post.route.ts`); `userId` bỏ hẳn khỏi `getNotificationsSchema`, controller lấy `req.user._id`. `z.object()` strip key lạ nên FE cũ gửi `userId` cũ vẫn `200`, không breaking. Xác nhận bằng smoke test HTTP thật: body chứa `userId` của người khác vẫn chỉ trả đúng thông báo của user đăng nhập. |
+| S6 | ✅ **ĐÃ FIX** — ~~Tạo thông báo qua socket không xác thực `fromUser` — giả mạo/xoá thông báo người khác~~ | `src/socket/controllers/notification.controller.ts` | Thêm guard `(socket as any).user?.userId !== fromUser` ngay đầu `create`, mirror 1-1 pattern `likePost`, `return` sớm + `logger.warn` (silent với client). Kèm error containment (`try/catch` bọc toàn bộ thân hàm) vì fix thêm `await` mới có thể tạo unhandled rejection nếu không bọc. |
+| S7 | ✅ **ĐÃ FIX** (mới, phát hiện + fix trong epic `notification-fixes`) — Danh tính socket ở `user/connect` do **client tự khai báo**, không đối chiếu JWT | `src/socket/controllers/user.controller.ts` | `socket.data.userId` (dùng để định tuyến push tin nhắn 1-1, presence, và notification) được gán thẳng từ `payload.userId` client gửi lên thay vì `(socket as any).user?.userId` mà middleware JWT đã xác thực sẵn. Bất kỳ socket nào cũng có thể tự nhận là user khác và **nghe lén** notification/tin nhắn real-time của họ. Phát hiện khi review S6: đóng chiều *ghi* (S6) mà bỏ ngỏ chiều *nhận* thì vẫn còn lỗ hổng cùng loại — chủ dự án duyệt mở rộng scope epic để vá luôn. |
 
 ### 🟠 Đáng chú ý
 
@@ -100,10 +107,10 @@ graph TB
 | A8 | Không có health check endpoint / Docker HEALTHCHECK | `app.ts`, `Dockerfile` | Orchestrator (Docker/K8s) không có cách xác định app đã sẵn sàng nhận traffic hay đã treo. |
 | A9 | Production image chạy trực tiếp bằng `tsx` (JIT transpile), không build | `Dockerfile` (`CMD ["npx", "tsx", "src/server.ts"]`) | `tsx`/`typescript` đang nằm trong `devDependencies` nhưng thực chất là runtime dependency của production — nếu ai đổi sang `npm ci --omit=dev` app sẽ vỡ ngay. Không compile trước cũng nghĩa là lỗi type chỉ lộ ra lúc chạy, không có gate nào chặn trước. |
 | A10 | Container chạy với user root | `Dockerfile` | Không có `USER node`/non-root — vi phạm hardening cơ bản cho container production. |
-| A11 | Vòng đời "đã đọc" của thông báo bị đứt gãy | `notification.controller.ts:103` (socket), toàn repo | `User.hasNewNotify` được set `true` ở 2 nơi nhưng không nơi nào set lại `false` — `NOTIFICATION_PATH.READ` đã khai báo trong `APIConfig.ts` nhưng chưa từng wire route/controller. Badge "thông báo mới" không bao giờ tắt cho user thật. Nguyên nhân sâu hơn còn do bug kiểu dữ liệu: `ObjectId(toUsers)` với `toUsers` là mảng → `mongoose.isValidObjectId` trả `false` → hàm tự tạo 1 ObjectId ngẫu nhiên mới, `User.updateOne` luôn update sai document (không tồn tại), nên dòng code này thực chất chưa từng có tác dụng qua đường socket `create` (đường trong `post.controller.ts:132-139` thì đúng vì dùng 1 ObjectId đơn). |
-| A12 | Dedupe khi tạo thông báo bỏ qua `target` → mất thông báo hợp lệ | `notification.controller.ts:13-26` | Trước khi tạo, hệ thống tìm thông báo cùng `fromUser+toUsers+action` (không xét `target`) — có thì xoá thay vì tạo mới. Đúng cho FOLLOW (toggle follow/unfollow) nhưng handler dùng chung cho mọi action: 2 lần REPLY khác bài viết từ cùng 1 người tới cùng 1 người nhận sẽ khiến lần 2 xoá mất thông báo của lần 1 thay vì tạo thêm. |
-| A13 | Push real-time hỏng âm thầm khi thông báo có nhiều người nhận | `notification.controller.ts:95`, `socket/services/user.ts:44-53` | `getUserSocketByUserId(toUsers, io)` nhận `toUsers` là mảng nhưng hàm được định nghĩa nhận 1 `userId: string`; so sánh `socket.userId === userId.toString()` chỉ đúng khi mảng có đúng 1 phần tử (`Array.toString()` nối bằng dấu phẩy). Schema `toUsers: [ObjectId]` cho phép nhiều người nhận nhưng cơ chế push chưa từng hoạt động đúng với trường hợp đó — chưa lộ vì mọi call site hiện tại đều tạo mảng 1 phần tử. |
-| A14 | Data model chưa đủ cho UI "đã đọc"/lọc theo loại thông báo | `notification.model.ts`, `notification.validator.ts` | Không có field `isRead`/`readAt` per-document (chỉ có cờ `hasNewNotify` toàn cục ở `User`, xem A11) nên không thể hiển thị từng thông báo đã đọc/chưa đọc. `getNotificationsSchema` cũng không nhận filter theo `action` dù `Constants.NOTIFICATION_ACTION` đã định nghĩa `ALL/FOLLOW/REPLY/TAG/REPOST/LIKE` — không hỗ trợ được tab lọc trên UI nếu FE cần. |
+| A11 | ✅ **ĐÃ FIX** — ~~Vòng đời "đã đọc" của thông báo bị đứt gãy~~ | `notification.model.ts`, `notification.controller.ts`, `notification.route.ts` | Thêm field `isRead: { type: Boolean, default: false }`. Wire `PATCH /notifications/read` (nhận `notificationId` hoặc `markAll`, XOR). Sau update, recompute `User.hasNewNotify` bằng `Notification.exists`. **Bẫy quan trọng xử lý đúng**: 370k document cũ không có key `isRead` trên đĩa (Mongoose `default` không áp lúc query/aggregate) — mọi filter "chưa đọc" dùng `isRead: { $ne: true }` (không phải `isRead: false`), mọi `$project` dùng `$ifNull: ["$isRead", false]` (không phải `isRead: 1`). Xác nhận bằng aggregate thật trên 1 document legacy thật sự thiếu key. |
+| A12 | ✅ **ĐÃ FIX** — ~~Dedupe khi tạo thông báo bỏ qua `target` → mất thông báo hợp lệ~~ | `notification.controller.ts` | Thêm `target` vào điều kiện match (`target ? {target: ObjectId(target)} : {target: {$exists: false}}` — tuyệt đối không `target: undefined`, Mongoose strip key sẽ tái tạo đúng bug cũ). FOLLOW toggle giữ nguyên hành vi (target luôn vắng ở cả 2 phía). **A12b (phát hiện thêm khi implement, cùng lớp bug):** nhánh unlike ở `post.controller.ts` (`likePost`) xoá notification chỉ match `fromUser` + `"toUsers.0"` — bỏ cả `action` lẫn `target` — cũng đã siết đủ 4 điều kiện, thống nhất kiểu match `toUsers: {$in:[...]}` giữa 2 code path. |
+| A13 | ✅ **ĐÃ FIX** — ~~Push real-time hỏng âm thầm khi thông báo có nhiều người nhận~~ | `socket/services/user.ts`, `notification.controller.ts` | Thêm `getUserSocketsByUserIds` dùng `.filter()` (bắt mọi tab của mọi user) + chuẩn hoá `String(...)` cả 2 phía; `getUserSocketByUserId` cũ giữ nguyên signature, thành wrapper mỏng (call site `message.ts` không đổi). Sửa luôn bug đi kèm: `User.updateOne({_id: ObjectId(toUsers)})` (mảng → id ngẫu nhiên) → `User.updateMany({_id:{$in: sendTo.map(ObjectId)}})`, dùng `sendTo` (đã lọc `fromUser`) thay vì `toUsers` thô ở cả 2 điểm. |
+| A14 | ✅ **ĐÃ FIX** — ~~Data model chưa đủ cho UI "đã đọc"/lọc theo loại thông báo~~ | `notification.model.ts`, `notification.validator.ts`, `notification.controller.ts` | `isRead` per-document đã có (xem A11). Filter theo `action` (`z.enum(Constants.NOTIFICATION_ACTION).optional()`, sentinel `"all"` = không lọc) đã thêm vào `getNotificationsSchema` + `$match` — chốt sau khi chủ dự án xác nhận FE có tab lọc. **Lưu ý phát hiện khi verify (TRACE-2)**: FE hiện tại (`DATN-Fe`) chưa gửi `action` lên server — tab lọc đang lọc phía client trên dữ liệu đã fetch (`Activity.tsx`). Backend capability đã sẵn sàng, backward-compatible, nhưng FE chưa tích hợp — không phải lỗi, chỉ là chưa dùng tới. |
 
 ### 🟡 Nợ kỹ thuật / nhất quán
 
@@ -112,8 +119,9 @@ graph TB
 - **Không có lint config** (không ESLint) — style code phụ thuộc hoàn toàn vào tự giác.
 - **Phân mảnh analytics theo ngày**: `analytics.model.ts` tạo 1 collection Mongo mới mỗi ngày — hợp lý cho throughput nhưng không truy vấn xuyên ngày bằng 1 query được, và số collection tăng vô hạn theo thời gian.
 - **Single point of failure hạ tầng có chủ đích**: 1 Mongo (không replica set), 1 Redis, 1 app container trong `docker-compose.yml` — chấp nhận được cho portfolio/demo nhưng cần nói rõ đây là giới hạn biết trước, không phải oversight.
-- **Logic tạo/emit/aggregate notification copy-paste 3 nơi**: `notification.controller.ts` (REST), `notification.controller.ts` (socket), `post.controller.ts` (socket, trong `likePost`) đều có cùng ~30 dòng aggregate (lookup `fromUser`/`post`, `$addFields.FromUserDetails`) — không có test nào bắt được lệch giữa 3 bản sao, đổi field response phải sửa đồng bộ cả 3 nơi.
+- **Logic tạo/emit/aggregate notification copy-paste 3 nơi**: `notification.controller.ts` (REST), `notification.controller.ts` (socket), `post.controller.ts` (socket, trong `likePost`) đều có cùng ~30 dòng aggregate (lookup `fromUser`/`post`, `$addFields.FromUserDetails`) — không có test nào bắt được lệch giữa 3 bản sao, đổi field response phải sửa đồng bộ cả 3 nơi. **Đã cân nhắc lại trong epic `notification-fixes` (2026-08-12) và cố tình KHÔNG gộp**: tách helper dùng chung sẽ phá tính song song của 2 task sửa 2 file này (mỗi task cần sở hữu độc quyền file để chạy đồng thời) — chấp nhận trùng lặp đổi lấy tốc độ; điều kiện mở lại: xuất hiện bản sao thứ 4.
 - **`getNotifications` phân trang bằng `$skip`/`$limit` trần** (`notification.controller.ts:14-16`) — chi phí tăng tuyến tính theo độ sâu trang, chưa là vấn đề với data hiện tại nhưng đáng theo dõi nếu 1 user tích luỹ rất nhiều thông báo.
+- **1 test fail có sẵn, không liên quan module Notification**: `FEED_CONFIG: default của 5 field fanout-queue` (`src/api/services/feed/config.ts`) — default đã đổi (5→20, 10→100 khi tách BullMQ worker, xem A3) nhưng test chưa cập nhật theo. Phát hiện khi chạy `epic-verify` cho `notification-fixes` (xác nhận qua `git diff` cho thấy `config.ts` không nằm trong diff của epic đó) — hiện `npm test` exit code là `1` chứ không phải `0` vì lý do này, cần biết trước khi wire CI (mục P1 "Thiết lập CI" bên dưới) nếu không CI sẽ đỏ ngay từ ngày đầu vì lỗi không liên quan.
 
 ### ✅ Đã xác nhận khắc phục
 
@@ -124,6 +132,7 @@ graph TB
 - **A3 (tách BullMQ worker)** — `src/worker.ts` là process riêng, không còn chạy chung HTTP server.
 - **A4 (index Message/Notification)** — đã thêm 2 index theo đúng đề xuất.
 - **JS→TS migrate** — không còn file `.js` nào trong `src/` (mục nợ kỹ thuật ở trên).
+- **S5, S6, S7, A11, A12 (+A12b), A13, A14 (module Notification)** — epic `notification-fixes` (merge `master` @ `e1b36af`, 2026-08-12). Verify qua `epic-verify` (EPIC_COMPLETE, quality 5/5, 0 critical/high gap) với bằng chứng hạ tầng thật: DB seed 214k+ document, `explain("executionStats")` xác nhận `IXSCAN` không `COLLSCAN`, HTTP smoke thật xác nhận không rò rỉ chéo user + badge tắt đúng, 2 negative-control test (sabotage rồi revert) xác nhận test suite không xanh giả.
 
 ---
 
@@ -138,8 +147,9 @@ graph TB
 - [x] Sửa `SIGINT` handler: chuyển `process.exit()` vào trong callback của `server.close()`, exit code `0` cho shutdown bình thường; thêm timeout ép thoát nếu connection không đóng kịp (S4) — *Thấp*
 - [ ] Bọc các thao tác đếm-đi-kèm-document (follow/unfollow, like/unlike, v.v.) trong `mongoose.startSession().withTransaction()` (S1) — *Trung bình*
 - [ ] Thêm `secure: true` cho cookie JWT khi `NODE_ENV=production` (A6) — *Rất thấp*
-- [ ] Thêm `protectRoute` cho `notification.route.ts`, lấy `userId` từ `req.user` thay vì body — bỏ hẳn param `userId` khỏi request (S5) — *Thấp*
-- [ ] Check `fromUser === socket.user?.userId` ở đầu `NotificationController.create` (socket), mirror pattern đã có ở `likePost` (S6) — *Rất thấp*
+- [x] Thêm `protectRoute` cho `notification.route.ts`, lấy `userId` từ `req.user` thay vì body — bỏ hẳn param `userId` khỏi request (S5) — *Thấp*
+- [x] Check `fromUser === socket.user?.userId` ở đầu `NotificationController.create` (socket), mirror pattern đã có ở `likePost` (S6) — *Rất thấp*
+- [x] Dùng `(socket as any).user?.userId` (JWT) thay vì `payload.userId` (client tự khai) ở `user/connect` (S7, phát hiện khi làm S6) — *Rất thấp*
 
 ### P1 — Nên làm sớm, ảnh hưởng trực tiếp đến độ tin cậy/hiệu năng
 
@@ -149,10 +159,10 @@ graph TB
 - [ ] Thêm endpoint `/health` (readiness: check Mongo + Redis ping) và `HEALTHCHECK` trong `Dockerfile` (A8) — *Thấp*
 - [ ] Thiết lập CI (GitHub Actions): chạy `npm test` + `npx tsc --noEmit` trên mỗi PR, chặn merge khi fail (nợ kỹ thuật CI/CD) — *Thấp*
 - [ ] Thêm ESLint (+ Prettier nếu chưa nhất quán format) và chạy trong CI — *Thấp*
-- [ ] Thêm field `isRead`/`readAt` vào `Notification`, wire route `PATCH /notifications/read` (path đã có sẵn trong `APIConfig.ts`), sửa lại điểm set `hasNewNotify` cho đúng user (vá luôn bug `ObjectId(toUsers)` là mảng) (A11) — *Trung bình*
-- [ ] Sửa dedupe khi tạo notification để xét thêm `target`, hoặc giới hạn nhánh xoá-thay-vì-tạo chỉ cho `action === FOLLOW` (A12) — *Thấp*
-- [ ] Sửa `getUserSocketByUserId`/call site để nhận đúng nhiều `toUsers` thay vì chỉ hoạt động đúng với 1 người nhận (A13) — *Thấp*
-- [ ] Thêm filter theo `action` vào `getNotificationsSchema` nếu FE cần tab lọc (A14) — *Thấp* — cần xác nhận với FE/PM trước khi làm
+- [x] Thêm field `isRead` (không `readAt` — chưa cần) vào `Notification`, wire route `PATCH /notifications/read`, sửa lại điểm set `hasNewNotify` cho đúng user (vá luôn bug `ObjectId(toUsers)` là mảng) (A11) — *Trung bình*
+- [x] Sửa dedupe khi tạo notification để xét thêm `target` (cả 2 code path: generic create + unlike/A12b) (A12) — *Thấp*
+- [x] Sửa `getUserSocketByUserId`/call site để nhận đúng nhiều `toUsers` (A13) — *Thấp*
+- [x] Thêm filter theo `action` vào `getNotificationsSchema` (A14) — *Thấp* — đã xác nhận với chủ dự án (FE có tab lọc, dù hiện lọc client-side, chưa gọi param mới)
 
 ### P2 — Cần thiết trước khi tự tin gọi là "production"
 
