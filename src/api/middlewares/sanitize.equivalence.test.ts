@@ -12,14 +12,14 @@ import { test } from "node:test";
 import mongoSanitize from "express-mongo-sanitize";
 import { sanitizeNoSqlPayload } from "./sanitize.js";
 
-const maliciousInputs: unknown[] = [
+const maliciousInputs: Record<string, unknown>[] = [
   { $gt: "" },
   { "a.b": 1 },
   { nested: { $where: "evil" } },
   { safe: "value", $ne: null },
 ];
 
-const safeInputs: unknown[] = [
+const safeInputs: Record<string, unknown>[] = [
   { name: "Nguyễn Văn Ánh", bio: "yêu đời! #vibe @all 100%" },
   { nested: { safe: "value", count: 2 } },
 ];
