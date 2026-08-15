@@ -22,6 +22,7 @@ import PageConstant from "../../Breads-Shared/Constants/PageConstants.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import logger from "../../core/logger.ts";
 import { VALIDATION_ERROR_MESSAGE, validate } from "../middlewares/validate.ts";
+import { sanitizeText } from "../middlewares/sanitize.ts";
 import SavedPost from "../models/savedPost.model.ts";
 import { getPostsIdByFilter } from "../services/post.ts";
 import {
@@ -31,6 +32,7 @@ import {
   likeUnlikePostSchema,
   tickPostSurveySchema,
   updatePostStatusSchema,
+  updatePostSchema,
   updatePostVisibilitySchema,
 } from "../validators/post.validator.ts";
 
@@ -303,6 +305,94 @@ test("createPostSchema: visibility ngoài enum fail, thiếu authorId fail", () 
   assert.throws(() => createPostSchema.body.parse({ ...base, visibility: 99 }), z.ZodError);
   const { authorId, ...withoutAuthor } = base;
   assert.throws(() => createPostSchema.body.parse(withoutAuthor), z.ZodError);
+});
+
+/* ---------------------------------- Task 010 (FR-3/FR-5/FAIL-1): sanitize post.content ---------------------------------- */
+
+// AC FR-3 scenario 1: createPostSchema.content required -> `.transform(sanitizeText)` trực tiếp.
+test("FR-3: createPostSchema.content chứa <script> bị strip sau transform", () => {
+  const body = createPostSchema.body.parse({
+    _id: VALID_ID,
+    authorId: OTHER_ID,
+    content: "<script>alert(1)</script>Hello",
+    type: "create",
+  });
+  assert.ok(!body.content.includes("<script>"), "script tag phải bị strip");
+  assert.equal(body.content, "Hello");
+});
+
+// AC FR-5 (non-regression): tiếng Việt có dấu / emoji không bị strip nhầm bởi sanitizeText.
+test("FR-5: createPostSchema.content tiếng Việt có dấu và emoji giữ nguyên", () => {
+  const raw = "Xin chào các bạn 🎉";
+  const body = createPostSchema.body.parse({
+    _id: VALID_ID,
+    authorId: OTHER_ID,
+    content: raw,
+    type: "create",
+  });
+  assert.equal(body.content, raw);
+});
+
+// AC FAIL-1 (CRITICAL): field optional -> guard bắt buộc. Bug gốc: naive `.transform(sanitizeText)`
+// không guard sẽ khiến `content` absent -> `""` (sanitizeText(undefined) === ""), rồi
+// `post.controller.ts:392` (`post.content = content;`, vô điều kiện) ghi đè "" lên content cũ.
+// Test dưới đây chứng minh guard hiện tại KHÔNG rơi vào case đó: `content` vắng mặt trong body ->
+// key `content` không tồn tại trong kết quả parse (rơi ra `undefined` khi destructure ở controller),
+// KHÔNG BAO GIỜ là chuỗi rỗng `""`.
+test("FAIL-1 guard (CRITICAL): updatePostSchema — content vắng mặt -> parse ra undefined, KHÔNG phải ''", () => {
+  const parsed: any = updatePostSchema.body.parse({
+    _id: VALID_ID,
+    userId: OTHER_ID,
+    survey: [],
+    // content: cố ý KHÔNG truyền — mô phỏng request chỉ update survey.
+  });
+
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(parsed, "content"),
+    false,
+    "key content phải hoàn toàn vắng mặt sau parse khi client không gửi -> destructure ra undefined"
+  );
+  assert.equal(parsed.content, undefined);
+  assert.notEqual(
+    parsed.content,
+    "",
+    "đây chính là bug FAIL-1 nếu thiếu guard: sanitizeText(undefined) === '' sẽ ghi đè content cũ"
+  );
+});
+
+// Đối chứng trực tiếp: một transform KHÔNG guard (naive, đúng bug mà FAIL-1 mô tả) sẽ cho '' —
+// chứng minh guard trong updatePostSchema thực sự cần thiết, không phải phòng thủ thừa.
+test("FAIL-1 guard: đối chứng naive transform (không guard) sẽ tạo ra '' — lý do guard bắt buộc", () => {
+  const naiveContentSchema = z.string().optional().transform((val) => sanitizeText(val));
+  assert.equal(
+    naiveContentSchema.parse(undefined),
+    "",
+    "minh hoạ: không guard -> absent content bị coerce thành '' (đây là bug FAIL-1 cảnh báo)"
+  );
+});
+
+// AC FR-5 (non-regression, update path): content có giá trị (tiếng Việt/emoji) qua updatePostSchema
+// vẫn giữ nguyên, không bị strip nhầm.
+test("FR-5: updatePostSchema.content có giá trị tiếng Việt/emoji giữ nguyên, không bị guard nuốt", () => {
+  const raw = "Cập nhật nội dung 😊";
+  const parsed: any = updatePostSchema.body.parse({
+    _id: VALID_ID,
+    userId: OTHER_ID,
+    content: raw,
+    survey: [],
+  });
+  assert.equal(parsed.content, raw);
+});
+
+// AC FR-3 scenario 1 (update path): content chứa <script> qua updatePostSchema cũng bị strip.
+test("FR-3: updatePostSchema.content chứa <script> bị strip sau transform", () => {
+  const parsed: any = updatePostSchema.body.parse({
+    _id: VALID_ID,
+    userId: OTHER_ID,
+    content: "<script>alert(1)</script>Bye",
+    survey: [],
+  });
+  assert.equal(parsed.content, "Bye");
 });
 
 test("updatePostVisibilitySchema / updatePostStatusSchema: giá trị sai bị từ chối", () => {
