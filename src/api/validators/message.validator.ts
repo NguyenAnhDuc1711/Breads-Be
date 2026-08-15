@@ -3,6 +3,7 @@
 // `message.route.ts` có 8 route, tất cả sau `protectRoute` — 7/8 route cần schema, riêng
 // `FAKE_CONVERSATIONS_MSGS` không đọc body nên không cần (không export const cho route này).
 import { z } from "zod";
+import { sanitizeText } from "../middlewares/sanitize.js";
 import { objectIdSchema } from "./common.ts";
 
 export const getConversationByUsersIdSchema = {
@@ -40,9 +41,11 @@ export const getConversationLinksSchema = {
 // `page`/`limit` tới từ JSON body (không phải query string) -> `z.number()`, KHÔNG
 // `z.coerce.number()` — formalize hoá đúng check "Empty payload" đã có sẵn ở controller
 // (`message.controller.ts:169-172`), sớm hơn 1 tầng.
+// FR-3 (task 010): field free-text duy nhất trong file này — tương đương `searchValue` bên socket
+// đã có `sanitizeText` từ lâu. `value` luôn required (`.min(1)`) nên không cần guard undefined.
 export const searchMsgSchema = {
   body: z.object({
-    value: z.string().min(1),
+    value: z.string().min(1).transform((val) => sanitizeText(val)),
     conversationId: objectIdSchema,
     page: z.number().int().min(1),
     limit: z.number().int().min(1),

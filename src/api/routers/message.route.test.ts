@@ -182,6 +182,47 @@ test("searchMsgSchema: page/limit không phải số nguyên -> 400", async () =
   );
 });
 
+// AC FR-3 scenario 2 (task 010): searchMsgSchema.value là field free-text API-side duy nhất trong
+// file này, tương đương `searchValue` bên socket đã có `sanitizeText` từ lâu.
+test("FR-3: searchMsgSchema.value chứa <script> bị strip sau transform", async () => {
+  const app = express();
+  app.use(express.json());
+  let seenBody: any = null;
+  app.post("/t", validate(searchMsgSchema), (req, res) => {
+    seenBody = req.body;
+    res.json({ ok: true });
+  });
+  app.use(errorHandler);
+
+  await withServer(app, async (base) => {
+    const res = await fetch(`${base}/t`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        value: "<script>alert(1)</script>abc",
+        conversationId: VALID_ID_1,
+        page: 1,
+        limit: 10,
+      }),
+    });
+    assert.equal(res.status, 200);
+    assert.ok(!seenBody.value.includes("<script>"), "script tag phải bị strip");
+    assert.equal(seenBody.value, "abc");
+  });
+});
+
+// AC FR-5 (non-regression): tiếng Việt có dấu / emoji không bị strip nhầm.
+test("FR-5: searchMsgSchema.value tiếng Việt có dấu và emoji giữ nguyên", () => {
+  const raw = "Xin chào các bạn 🎉";
+  const parsed = searchMsgSchema.body.parse({
+    value: raw,
+    conversationId: VALID_ID_1,
+    page: 1,
+    limit: 10,
+  });
+  assert.equal(parsed.value, raw);
+});
+
 /* ------------------------------------------------ handleFakeConversationsSchema (body) */
 
 test("handleFakeConversationsSchema: numberConversations vắng mặt vẫn pass (optional, controller tự default)", async () => {

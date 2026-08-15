@@ -8,6 +8,7 @@
 // bên dưới được trace từ CẢ controller LẪN service, không chỉ controller.
 import { z } from "zod";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
+import { sanitizeText } from "../middlewares/sanitize.js";
 import { objectIdSchema, paginationQuerySchema } from "./common.js";
 
 const VISIBILITY_VALUES: number[] = Object.values(Constants.POST_VISIBILITY);
@@ -89,7 +90,8 @@ export const createPostSchema = {
   body: z.object({
     _id: objectIdSchema,
     authorId: objectIdSchema,
-    content: z.string().max(500),
+    // FR-3: required, luôn là string -> `.transform()` trực tiếp, không cần guard undefined.
+    content: z.string().max(500).transform((val) => sanitizeText(val)),
     media: z.array(z.any()).optional(),
     parentPost: objectIdSchema.optional(),
     survey: z.array(z.any()).optional(),
@@ -108,11 +110,21 @@ export const deletePostSchema = {
   query: z.object({ userId: objectIdSchema }),
 };
 
+// FAIL-1 (epic `unified-payload-sanitize`, task 010): `content` LÀ optional, và
+// `post.controller.ts:392` làm `post.content = content;` VÔ ĐIỀU KIỆN. `sanitizeText()` trả `""`
+// cho input `undefined` — nếu `.transform(sanitizeText)` áp thẳng lên field optional này, request
+// update KHÔNG kèm `content` (vd. chỉ update `survey`) sẽ khiến `content` sau validate thành `""`
+// thay vì `undefined`, ghi đè xóa sạch nội dung cũ một cách im lặng. Guard dưới đây bắt buộc: chỉ
+// gọi `sanitizeText` khi có giá trị, giữ nguyên `undefined` khi field vắng mặt.
 export const updatePostSchema = {
   body: z.object({
     _id: objectIdSchema,
     userId: objectIdSchema,
-    content: z.string().optional(),
+    content: z
+      .string()
+      .max(500)
+      .optional()
+      .transform((val) => (val === undefined ? val : sanitizeText(val))),
     media: z.array(z.any()).optional(),
     survey: z.array(z.any()).optional(),
   }),
