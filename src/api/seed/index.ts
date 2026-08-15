@@ -15,7 +15,7 @@
 //   --mediaRate=0-1    fraction of new posts that get 1-3 media items
 //                       (default 0.4, pass 1 to force every post to have media)
 //   --reset            delete all previously seeded fake_ users + their posts first
-import "dotenv/config";
+import "dotenv/config.js";
 import mongoose from "mongoose";
 import crypto from "crypto";
 import Post from "../models/post.model.js";
@@ -44,7 +44,7 @@ const run = async () => {
 
   if (args.users === undefined || args.posts === undefined) {
     console.log(
-      "Usage: npx tsx src/api/seed/index.ts --users=<N> --posts=<N> [--batchSize=2000] [--authorPool=300000] [--reset]"
+      "Usage: npx tsx src/api/seed/index.ts --users=<N> --posts=<N> [--batchSize=2000] [--authorPool=300000] [--reset]",
     );
     process.exit(1);
   }
@@ -67,8 +67,13 @@ const run = async () => {
   console.log("Connected to MongoDB");
 
   if (reset) {
-    console.log("Removing previously seeded fake data (username matching /^fake_/)...");
-    const fakeUsers = await User.find({ username: /^fake_/ }, { _id: 1 }).lean();
+    console.log(
+      "Removing previously seeded fake data (username matching /^fake_/)...",
+    );
+    const fakeUsers = await User.find(
+      { username: /^fake_/ },
+      { _id: 1 },
+    ).lean();
     const fakeUserIds = fakeUsers.map((u) => u._id);
     const { deletedCount: postsDeleted } = await Post.deleteMany({
       authorId: { $in: fakeUserIds },
@@ -76,7 +81,9 @@ const run = async () => {
     const { deletedCount: usersDeleted } = await User.deleteMany({
       username: /^fake_/,
     });
-    console.log(`Removed ${usersDeleted} fake users and ${postsDeleted} of their posts`);
+    console.log(
+      `Removed ${usersDeleted} fake users and ${postsDeleted} of their posts`,
+    );
   }
 
   const runId = crypto.randomBytes(4).toString("hex");
@@ -84,7 +91,9 @@ const run = async () => {
 
   let authorPool;
   if (userCount > 0) {
-    console.log(`Seeding ${userCount} users (run=${runId}, batch=${batchSize})...`);
+    console.log(
+      `Seeding ${userCount} users (run=${runId}, batch=${batchSize})...`,
+    );
     authorPool = await seedUsers({
       runId,
       count: userCount,
@@ -104,10 +113,12 @@ const run = async () => {
   if (postCount > 0) {
     if (authorPool.size === 0) {
       throw new Error(
-        "No author pool available for posts — seed users first (drop --users=0), or ensure fake_ users already exist."
+        "No author pool available for posts — seed users first (drop --users=0), or ensure fake_ users already exist.",
       );
     }
-    console.log(`Seeding ${postCount} posts (batch=${batchSize}, mediaRate=${mediaRate})...`);
+    console.log(
+      `Seeding ${postCount} posts (batch=${batchSize}, mediaRate=${mediaRate})...`,
+    );
     await seedPosts({
       count: postCount,
       authorPool,

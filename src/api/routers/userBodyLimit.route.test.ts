@@ -131,6 +131,7 @@ const EXPECTED_LIMITS: Record<string, string | null> = {
   GET_USERS_WITH_STATUS: null,
   LOGOUT: null,
   CRAWL_USER: null,
+  REFRESH_TOKEN: null,
 };
 
 /** Payload hợp lệ TỐI THIỂU cho từng route (dùng cho smoke test 18/18). */
@@ -162,6 +163,7 @@ const REQUESTS: Record<string, { query?: string; body?: unknown }> = {
   CHECK_VALID_USER: { body: { userEmail: "an@example.com" } },
   GET_USER_ID_FROM_EMAIL: { body: { userEmail: "an@example.com" } },
   VALIDATE_USER_EMAIL: { body: { email: "an@example.com", code: "123456" } },
+  REFRESH_TOKEN: {},
 };
 
 /* --------------------------------------------------------------------------- test harness */
@@ -233,12 +235,12 @@ const send = (base: string, route: ParsedRoute, body?: unknown) =>
 
 /* ------------------------------------------------------- 1. wiring: đủ 18 route, đúng limit */
 
-test("FR-2: user.route.ts có ĐÚNG 18 route, không thiếu không thừa so với bảng 011.md", () => {
-  assert.equal(parsedRoutes.length, 18, "phải parse ra đúng 18 route");
+test("FR-2: user.route.ts có ĐÚNG 19 route, không thiếu không thừa so với bảng 011.md", () => {
+  assert.equal(parsedRoutes.length, 19, "phải parse ra đúng 19 route");
   assert.deepEqual(
     parsedRoutes.map((r) => r.key).sort(),
     Object.keys(EXPECTED_LIMITS).sort(),
-    "danh sách route trong source phải khớp 1-1 với bảng 18 route của task"
+    "danh sách route trong source phải khớp 1-1 với bảng 19 route của task"
   );
 });
 
@@ -257,8 +259,8 @@ test("FR-2: mỗi route mount ĐÚNG limit của nó (8×100kb + 1×50mb + 9×kh
     parsedRoutes.filter((r) => r.jsonLimit === limit).length;
   assert.equal(at("100kb"), 8);
   assert.equal(at("50mb"), 1);
-  assert.equal(at(null), 9);
-  assert.equal(at("100kb") + at("50mb") + at(null), 18);
+  assert.equal(at(null), 10);
+  assert.equal(at("100kb") + at("50mb") + at(null), 19);
 });
 
 // Bắt trực tiếp failure mode #2: quên mount cho 6 route có `.body` ngoài SIGN_UP/LOGIN. Kỳ vọng
@@ -335,7 +337,7 @@ test("FR-2 (SMOKE 18/18): mọi route xử lý bình thường, không route nà
     })
   );
 
-  assert.deepEqual(failures, [], `18 route phải pass hết:\n${failures.join("\n")}`);
+  assert.deepEqual(failures, [], `19 route phải pass hết:\n${failures.join("\n")}`);
 });
 
 // Đối chứng cho smoke test: nếu gỡ `express.json` khỏi các route có body (mô phỏng đúng lỗi đã
@@ -419,10 +421,10 @@ test("FR-2: 6 route từng bị quên (FOLLOW/CHANGE_PW/CHECK_VALID_USER/...) pa
 
 /* ------------------------------------------------- 4. 9 route không override: không regression */
 
-test("FR-2: 9 route không mount body-parser (GET listing + LOGOUT + CRAWL_USER) vẫn 200", async () => {
+test("FR-2: 10 route không mount body-parser (GET listing + LOGOUT + CRAWL_USER + REFRESH_TOKEN) vẫn 200", async () => {
   const app = buildAppFromSource();
   const noParser = parsedRoutes.filter((r) => !r.jsonLimit);
-  assert.equal(noParser.length, 9);
+  assert.equal(noParser.length, 10);
 
   await silenceWarn(() =>
     withServer(app, async (base) => {

@@ -73,7 +73,7 @@ export const getPostsQuerySchema = {
         user: optionalObjectIdOrEmpty.optional(),
       })
       .passthrough(),
-    userId: objectIdSchema.optional(),
+    userId: optionalObjectIdOrEmpty.optional(),
   }),
 };
 

@@ -20,6 +20,7 @@ import {
   getUsersPendingPost,
   getUsersWithStatus,
   validateEmailByCode,
+  refreshTokenHandler,
 } from "../controllers/user.controller.js";
 import { USER_PATH } from "../../Breads-Shared/APIConfig.js";
 import protectRoute from "../middlewares/protectRoute.js";
@@ -76,35 +77,36 @@ const {
   GET_USERS_PENDING_POST,
   GET_USERS_WITH_STATUS,
   VALIDATE_USER_EMAIL,
+  REFRESH_TOKEN,
 } = USER_PATH;
 
 router.get(ME, protectRoute, asyncHandler(getMe));
 router.get(
   USERS_FOLLOW,
   validate(getUsersFollowQuerySchema),
-  asyncHandler(getUsersFollow)
+  asyncHandler(getUsersFollow),
 );
 router.get(ADMIN, asyncHandler(getAdminAccount));
 router.get(
   PROFILE + ":userId",
   validate(getUserProfileSchema),
-  asyncHandler(getUserProfile)
+  asyncHandler(getUserProfile),
 );
 router.get(
   USERS_TO_FOLLOW,
   validate(getUserToFollowsQuerySchema),
-  asyncHandler(getUserToFollows)
+  asyncHandler(getUserToFollows),
 );
 router.get(
   USERS_TO_TAG,
   protectRoute,
   validate(getUsersToTagQuerySchema),
-  asyncHandler(getUsersToTag)
+  asyncHandler(getUsersToTag),
 );
 router.get(
   GET_USERS_WITH_STATUS,
   validate(getUsersWithStatusQuerySchema),
-  asyncHandler(getUsersWithStatus)
+  asyncHandler(getUsersWithStatus),
 );
 router.post(
   GET_USERS_PENDING_POST,
@@ -112,7 +114,7 @@ router.post(
   mongoSanitize(),
   hpp(),
   validate(getUsersPendingPostSchema),
-  asyncHandler(getUsersPendingPost)
+  asyncHandler(getUsersPendingPost),
 );
 router.post(
   SIGN_UP,
@@ -121,7 +123,7 @@ router.post(
   hpp(),
   authTierLimiter,
   validate(signupUserSchema),
-  asyncHandler(signupUser)
+  asyncHandler(signupUser),
 );
 router.post(
   LOGIN,
@@ -130,9 +132,10 @@ router.post(
   hpp(),
   authTierLimiter,
   validate(loginUserSchema),
-  asyncHandler(loginUser)
+  asyncHandler(loginUser),
 );
 router.post(LOGOUT, asyncHandler(logoutUser));
+router.post(REFRESH_TOKEN, asyncHandler(refreshTokenHandler));
 router.put(
   FOLLOW,
   express.json({ limit: "100kb" }),
@@ -140,7 +143,7 @@ router.put(
   hpp(),
   protectRoute,
   validate(followUserSchema),
-  asyncHandler(followUser)
+  asyncHandler(followUser),
 );
 // Route DUY NHẤT của router này cần limit lớn: `updateUser` nhận avatar base64 và đẩy sang
 // `uploadFileFromBase64` (user.controller.ts:226). KHÔNG được gộp chung limit 100kb của nhóm auth.
@@ -151,7 +154,7 @@ router.put(
   hpp(),
   protectRoute,
   validate(updateUserSchema),
-  asyncHandler(updateUser)
+  asyncHandler(updateUser),
 );
 router.put(
   CHANGE_PW + ":id",
@@ -159,7 +162,7 @@ router.put(
   mongoSanitize(),
   hpp(),
   validate(changePasswordSchema),
-  asyncHandler(changePassword)
+  asyncHandler(changePassword),
 );
 // AD-3 (task 012): CRAWL_USER thiếu auth guard (PRD C-4) -> áp auth-tier nghiêm ngặt thay vì loại
 // trừ khỏi rate-limit, vì đây là endpoint tốn tài nguyên (trigger seed).
@@ -170,7 +173,7 @@ router.post(
   mongoSanitize(),
   hpp(),
   validate(checkValidUserSchema),
-  asyncHandler(checkValidUser)
+  asyncHandler(checkValidUser),
 );
 router.post(
   GET_USER_ID_FROM_EMAIL,
@@ -178,7 +181,7 @@ router.post(
   mongoSanitize(),
   hpp(),
   validate(getUserIdFromEmailSchema),
-  asyncHandler(getUserIdFromEmail)
+  asyncHandler(getUserIdFromEmail),
 );
 router.post(
   VALIDATE_USER_EMAIL,
@@ -186,7 +189,7 @@ router.post(
   mongoSanitize(),
   hpp(),
   validate(validateEmailByCodeSchema),
-  asyncHandler(validateEmailByCode)
+  asyncHandler(validateEmailByCode),
 );
 
 export default router;

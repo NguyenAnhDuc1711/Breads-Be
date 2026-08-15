@@ -14,6 +14,7 @@ export default class UserController {
         );
         return;
       }
+      socket.join?.(`user:${authUserId}`);
       socket.data = {
         id: socket.id,
         userId: authUserId,

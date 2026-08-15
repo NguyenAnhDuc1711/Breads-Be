@@ -1,7 +1,7 @@
 import express from "express";
 import mongoSanitize from "express-mongo-sanitize";
 import hpp from "hpp";
-import { REPORT_PATH } from "../../Breads-Shared/APIConfig";
+import { REPORT_PATH } from "../../Breads-Shared/APIConfig.ts";
 import asyncHandler from "../../helpers/asyncHandler.ts";
 import {
   getReports,
@@ -25,22 +25,26 @@ router.use(express.json({ limit: "50mb" }));
 router.use(mongoSanitize());
 router.use(hpp());
 
-router.get(REPORT_PATH.GET, validate(getReportsSchema), asyncHandler(getReports));
+router.get(
+  REPORT_PATH.GET,
+  validate(getReportsSchema),
+  asyncHandler(getReports),
+);
 router.post(
   REPORT_PATH.CREATE,
   protectRoute,
   validate(sendReportSchema),
-  asyncHandler(sendReport)
+  asyncHandler(sendReport),
 );
 router.post(
   REPORT_PATH.RESPONSE,
   validate(responseReportSchema),
-  asyncHandler(responseReport)
+  asyncHandler(responseReport),
 );
 router.post(
   REPORT_PATH.REJECT,
   validate(rejectReportSchema),
-  asyncHandler(rejectReport)
+  asyncHandler(rejectReport),
 );
 
 export default router;

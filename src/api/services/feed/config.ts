@@ -86,17 +86,17 @@ export const FEED_CONFIG = Object.freeze({
   fanoutMode: process.env.FEED_FANOUT_MODE === "direct" ? "direct" : "queue",
   fanoutQueueConcurrency: int(
     process.env.FEED_FANOUT_QUEUE_CONCURRENCY,
-    20,
+    5,
     "FEED_FANOUT_QUEUE_CONCURRENCY",
   ),
   fanoutBatchConcurrency: int(
     process.env.FEED_FANOUT_BATCH_CONCURRENCY,
-    100,
+    10,
     "FEED_FANOUT_BATCH_CONCURRENCY",
   ),
   fanoutBatchRateLimitMax: int(
     process.env.FEED_FANOUT_BATCH_RATE_LIMIT_MAX,
-    100,
+    10,
     "FEED_FANOUT_BATCH_RATE_LIMIT_MAX",
   ),
   fanoutBatchRateLimitDurationMs: int(

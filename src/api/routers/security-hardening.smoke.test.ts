@@ -153,6 +153,7 @@ const REQUESTS: Record<string, { query?: string; body?: unknown }> = {
   CHECK_VALID_USER: { body: { userEmail: "an@example.com" } },
   GET_USER_ID_FROM_EMAIL: { body: { userEmail: "an@example.com" } },
   VALIDATE_USER_EMAIL: { body: { email: "an@example.com", code: "123456" } },
+  REFRESH_TOKEN: {},
 };
 
 const buildFullUserApp = () => {
@@ -191,8 +192,8 @@ const send = (base: string, route: ParsedRoute) =>
         }),
   });
 
-test("NFR-2 (SMOKE 18/18): mọi route user.route.ts hoạt động bình thường với TOÀN BỘ middleware Phase 2 (express.json+mongoSanitize+hpp+validate) cùng lúc", async () => {
-  assert.equal(parsedUserRoutes.length, 18, "phải parse đủ 18 route");
+test("NFR-2 (SMOKE 19/19): mọi route user.route.ts hoạt động bình thường với TOÀN BỘ middleware Phase 2 (express.json+mongoSanitize+hpp+validate) cùng lúc", async () => {
+  assert.equal(parsedUserRoutes.length, 19, "phải parse đủ 19 route");
   const app = buildFullUserApp();
   const failures: string[] = [];
 
@@ -212,7 +213,7 @@ test("NFR-2 (SMOKE 18/18): mọi route user.route.ts hoạt động bình thư�
     })
   );
 
-  assert.deepEqual(failures, [], `18 route phải pass hết:\n${failures.join("\n")}`);
+  assert.deepEqual(failures, [], `19 route phải pass hết:\n${failures.join("\n")}`);
 });
 
 /* ============================================================================================

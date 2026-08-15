@@ -2,6 +2,8 @@ import jwt from "jsonwebtoken";
 import HTTPStatus from "../../utils/httpStatus.js";
 import logger from "../../core/logger.js";
 import User from "../models/user.model.js";
+import RefreshToken from "../models/refreshToken.model.js";
+import { hashToken } from "../utils/generateTokens.js";
 
 // Avoid writing to the DB on every single request; only refresh the
 // timestamp once it's gone stale.
@@ -9,19 +11,37 @@ const LAST_ACTIVE_THROTTLE_MS = 5 * 60 * 1000;
 
 const protectRoute = async (req, res, next) => {
   try {
+    // Primary: Authorization header (access token)
+    // Fallback: legacy cookie (backward compat during transition)
     const token =
-      req.cookies?.jwt ||
       (req.headers.authorization?.startsWith("Bearer ")
         ? req.headers.authorization.split(" ")[1]
-        : null);
+        : null) || req.cookies?.jwt;
 
-    if (!token)
+    let userId: string | null = null;
+
+    if (token) {
+      const decoded: any = jwt.verify(token, process.env.JWT_SECRET);
+      userId = decoded.userId;
+    } else if (req.cookies?.refreshToken) {
+      // Fallback for SSR requests: verify identity from active refresh token in DB
+      const hashedToken = hashToken(req.cookies.refreshToken);
+      const stored = await RefreshToken.findOne({
+        token: hashedToken,
+        expiresAt: { $gt: new Date() },
+      });
+      if (stored) {
+        userId = stored.userId.toString();
+      }
+    }
+
+    if (!userId) {
       return res
         .status(HTTPStatus.UNAUTHORIZED)
         .json({ message: "Unauthorized" });
+    }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.userId).select("-password");
+    const user = await User.findById(userId).select("-password");
     req.user = user;
 
     if (
@@ -36,6 +56,13 @@ const protectRoute = async (req, res, next) => {
 
     next();
   } catch (err) {
+    // Differentiate between expired token and other errors so the FE
+    // interceptor can trigger a silent refresh on expiry.
+    if (err.name === "TokenExpiredError") {
+      return res
+        .status(HTTPStatus.UNAUTHORIZED)
+        .json({ message: "Token expired", code: "TOKEN_EXPIRED" });
+    }
     res.status(HTTPStatus.SERVER_ERR).json({ message: err.message });
     logger.error({ err }, "Error in protectRoute");
   }

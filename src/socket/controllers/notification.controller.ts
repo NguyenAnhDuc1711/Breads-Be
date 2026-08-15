@@ -17,7 +17,7 @@ export default class NotificationController {
         return;
       }
       const sendTo = toUsers?.filter((userId) => userId !== fromUser);
-      if (!sendTo?.length || fromUser === toUsers[0]) {
+      if (!sendTo?.length) {
         return;
       }
       const existingNotifications = await Notification.find({
@@ -50,7 +50,21 @@ export default class NotificationController {
         notificationInfo.target = target;
       }
       notificationInfo = new Notification(notificationInfo);
-      const newNotification = await notificationInfo.save();
+      let newNotification;
+      try {
+        newNotification = await notificationInfo.save();
+      } catch (err) {
+        if ((err as any)?.code === 11000) {
+          // Request khác đã tạo notification giống hệt (fromUser, action, target, toUsers) trong
+          // cùng khoảnh khắc — request đó đã emit rồi, request này rút lui, không phải lỗi thật.
+          logger.warn(
+            { fromUser, toUsers: sendTo, action, target },
+            "notifications/create duplicate skipped (race)"
+          );
+          return;
+        }
+        throw err;
+      }
       const notification = await Notification.aggregate([
         { $match: { _id: ObjectId(newNotification._id) } },
         {

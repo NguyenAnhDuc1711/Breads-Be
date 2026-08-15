@@ -22,6 +22,9 @@ const parseCookieString = (cookieHeader?: string): Record<string, string> => {
   );
 };
 
+import { createAdapter } from "@socket.io/redis-adapter";
+import { getRedisInstance } from "../dbs/redis.js";
+
 export const initSocket = (server: HttpServer, app: Application): void => {
   try {
     const io = new Server(server, {
@@ -32,10 +35,27 @@ export const initSocket = (server: HttpServer, app: Application): void => {
       path: "/socket",
     });
 
+    const redisClient = getRedisInstance();
+    if (redisClient) {
+      try {
+        const pubClient = redisClient.duplicate();
+        const subClient = redisClient.duplicate();
+        io.adapter(createAdapter(pubClient, subClient));
+        logger.info("Socket.IO Redis adapter enabled");
+      } catch (adapterErr) {
+        logger.warn(
+          { err: adapterErr },
+          "Failed to initialize Socket.IO Redis adapter, falling back to default adapter"
+        );
+      }
+    }
+
     io.use((socket: Socket, next) => {
       try {
+        // Primary: access token passed explicitly via handshake auth
+        // Fallback: legacy jwt cookie (backward compat during transition)
         const cookies = parseCookieString(socket.handshake.headers.cookie);
-        const token = cookies.jwt || socket.handshake.auth?.token;
+        const token = socket.handshake.auth?.token || cookies.jwt;
         if (token && process.env.JWT_SECRET) {
           const decoded = jwt.verify(token, process.env.JWT_SECRET);
           (socket as any).user = decoded;
@@ -51,6 +71,7 @@ export const initSocket = (server: HttpServer, app: Application): void => {
     io.on("connection", async (socket: Socket) => {
       const socketUserId = (socket as any).user?.userId;
       if (socketUserId) {
+        socket.join(`user:${socketUserId}`);
         User.updateOne(
           { _id: socketUserId },
           { lastActiveAt: new Date() }

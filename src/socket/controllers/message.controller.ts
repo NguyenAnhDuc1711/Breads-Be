@@ -1,5 +1,5 @@
 import axios from "axios";
-import { Server } from "socket.io";
+import { Server, Socket } from "socket.io";
 import Conversation from "../../api/models/conversation.model.js";
 import Link from "../../api/models/link.model.js";
 import Message from "../../api/models/message.model.js";
@@ -11,6 +11,25 @@ import { Constants } from "../../Breads-Shared/Constants/index.js";
 import { ObjectId, destructObjectId } from "../../utils/index.js";
 import { sendToSpecificUser } from "../services/message.js";
 import logger from "../../core/logger.js";
+import {
+  messageSendLimiter,
+  messageActionLimiter,
+  messageQueryLimiter,
+} from "../middlewares/rateLimiter.js";
+import {
+  sanitizeText,
+  sanitizeNoSqlPayload,
+  checkPayloadSize,
+  sendMessageSchema,
+  getConversationsSchema,
+  getMessagesSchema,
+  getMsgsToSearchMsgSchema,
+  reactMsgSchema,
+  changeSettingConversationSchema,
+  retrieveMsgSchema,
+  updateLastSeenSchema,
+  sendNextSchema,
+} from "../validators/message.validator.js";
 
 const { TEXT, MEDIA, FILE, SETTING } = Constants.MSG_TYPE;
 const previewLinkKey = (process.env.LINKPREVIEW_API_KEYS ?? "")
@@ -19,24 +38,88 @@ const previewLinkKey = (process.env.LINKPREVIEW_API_KEYS ?? "")
   .filter(Boolean);
 
 export default class MessageController {
-  static async sendMessage(payload: any, cb: Function, io: Server) {
+  static async sendMessage(payload: any, cb: Function, socket: Socket, io: Server) {
     try {
-      const { recipientId, senderId, message } = payload;
+      const authUserId = (socket as any)?.user?.userId;
+      if (!authUserId) {
+        logger.warn({ socketId: socket?.id }, "sendMessage rejected: unauthenticated");
+        cb?.({ status: "error", message: "Unauthorized", data: [] });
+        return;
+      }
+
+      // 1. Rate limiting check (max 5 msgs/sec)
+      const rateCheck = messageSendLimiter.check(authUserId);
+      if (!rateCheck.allowed) {
+        cb?.({
+          status: "error",
+          message: "Too many messages sent. Please slow down.",
+          code: "RATE_LIMIT_EXCEEDED",
+          data: [],
+        });
+        return;
+      }
+
+      // 2. Payload size check (max 25MB)
+      if (!checkPayloadSize(payload, 25 * 1024 * 1024)) {
+        cb?.({
+          status: "error",
+          message: "Payload size exceeds 25MB limit",
+          code: "PAYLOAD_TOO_LARGE",
+          data: [],
+        });
+        return;
+      }
+
+      // 3. Sanitize NoSQL operators
+      const cleanPayload = sanitizeNoSqlPayload(payload);
+
+      // 4. Schema validation
+      const validation = sendMessageSchema.safeParse(cleanPayload);
+      if (!validation.success) {
+        cb?.({
+          status: "error",
+          message: validation.error.issues[0]?.message || "Invalid message payload",
+          data: [],
+        });
+        return;
+      }
+
+      const { recipientId, message } = validation.data;
+      if (String(recipientId) === String(authUserId)) {
+        logger.warn(
+          { socketId: socket?.id, authUserId, recipientId },
+          "sendMessage rejected: invalid recipient"
+        );
+        cb?.({ status: "error", message: "Invalid recipient", data: [] });
+        return;
+      }
+
+      const senderId = authUserId;
       let conversation = await Conversation.findOne({
-        participants: { $all: [senderId, recipientId] },
+        participants: { $all: [ObjectId(senderId), ObjectId(recipientId)] },
       });
-      const listMsgId: any = [];
-      const listMsg: any = [];
-      const { files, media, content, respondTo } = message;
+
+      const listMsgId: any[] = [];
+      const listMsg: any[] = [];
+      const { files, media, respondTo } = message;
+      // Sanitize text content (remove dangerous script tags / control chars)
+      const content = sanitizeText(message.content);
+
       const numberNewMsg =
-        files?.length + (media?.length > 0 ? 1 : 0) + (content ? 1 : 0);
-      [...Array(numberNewMsg)].map((_) => {
+        (files?.length || 0) + ((media?.length ?? 0) > 0 ? 1 : 0) + (content ? 1 : 0);
+
+      if (numberNewMsg === 0) {
+        cb?.({ status: "error", message: "Empty message", data: [] });
+        return;
+      }
+
+      for (let i = 0; i < numberNewMsg; i++) {
         listMsgId.push(ObjectId());
-      });
+      }
+
       if (!conversation) {
         conversation = new Conversation({
-          participants: [senderId, recipientId],
-          msgIds: listMsgId,
+          participants: [ObjectId(senderId), ObjectId(recipientId)],
           lastMsgId: listMsgId[listMsgId.length - 1],
         });
         await conversation.save();
@@ -46,57 +129,56 @@ export default class MessageController {
             _id: ObjectId(conversation._id),
           },
           {
-            $push: {
-              msgIds: {
-                $each: listMsgId,
-              },
-            },
             $set: {
               lastMsgId: listMsgId[listMsgId.length - 1],
             },
           }
         );
       }
+
       let currentFileIndex = 0;
       let addMedia = false;
       let isReplied = false;
+
       for (let index = 0; index < listMsgId.length; index++) {
         const _id = listMsgId[index];
         let newMsg: any = null;
         const msgInfo = {
           _id: _id,
           conversationId: conversation._id,
-          sender: senderId,
+          sender: ObjectId(senderId),
         };
+
         if (content?.trim() && index === 0) {
           const urlRegex = /(https?:\/\/[^\s]+)/g;
           const urls = content.match(urlRegex);
-          const links: any = [];
+          const links: any[] = [];
           try {
             if (urls?.length) {
-              for (let url of urls) {
-                let result = null;
-                const previewLen = previewLinkKey?.length;
-                let index = 1;
+              for (const url of urls) {
+                let result: any = null;
+                const previewLen = previewLinkKey?.length || 0;
+                let kIdx = 1;
                 try {
                   do {
-                    let key = previewLinkKey[index - 1];
+                    const key = previewLinkKey[kIdx - 1];
                     try {
                       const { data } = await axios.get(
-                        `https://api.linkpreview.net?key=${key}&q=${url}`
+                        `https://api.linkpreview.net?key=${key}&q=${encodeURIComponent(url)}`
                       );
                       if (data) {
                         result = data;
                       }
                     } catch (err) {
-                      index += 1;
+                      kIdx += 1;
                     }
-                  } while (index < previewLen && !result);
+                  } while (kIdx <= previewLen && !result);
                 } catch (err) {
                   logger.error({ err }, "getLinkPreview key rotation failed");
                 }
                 if (
-                  typeof result == "object" &&
+                  typeof result === "object" &&
+                  result !== null &&
                   Object.keys(result).length > 0
                 ) {
                   links.push({
@@ -109,34 +191,43 @@ export default class MessageController {
           } catch (err) {
             logger.error({ err }, "getLinkPreview failed");
           }
-          if (links?.length > 0) {
+
+          if (links.length > 0) {
             await Link.insertMany(links, { ordered: false });
           }
+
           newMsg = {
             ...msgInfo,
             content: content,
-            links: links?.map((_id) => _id),
+            links: links.map((l) => l._id),
             type: TEXT,
           };
           if (respondTo) {
             newMsg.respondTo = ObjectId(respondTo);
             isReplied = true;
           }
-        } else if (media?.length !== 0 && !addMedia) {
+        } else if (media?.length && !addMedia) {
           const isAddGif =
-            media?.length === 1 && media[0].type === Constants.MEDIA_TYPE.GIF;
-          const uploadMedia = media;
+            media.length === 1 && media[0].type === Constants.MEDIA_TYPE.GIF;
+          let uploadMedia = media;
+
           if (!isAddGif) {
-            for (let i = 0; i < media.length; i++) {
-              const imgUrl = await uploadFileFromBase64({
-                base64: media[i].url,
-              });
-              uploadMedia[i] = {
-                url: imgUrl ?? media[i].url,
-                type: Constants.MEDIA_TYPE.IMAGE,
-              };
-            }
+            uploadMedia = await Promise.all(
+              media.map(async (m: any) => {
+                if (m.url && typeof m.url === "string" && m.url.startsWith("data:")) {
+                  const imgUrl = await uploadFileFromBase64({
+                    base64: m.url,
+                  });
+                  return {
+                    url: imgUrl ?? m.url,
+                    type: Constants.MEDIA_TYPE.IMAGE,
+                  };
+                }
+                return m;
+              })
+            );
           }
+
           newMsg = new Message({
             ...msgInfo,
             media: uploadMedia,
@@ -148,10 +239,10 @@ export default class MessageController {
           }
           addMedia = true;
         } else if (
-          files?.length !== 0 &&
-          (files?.length > 1
-            ? currentFileIndex < files?.length - 1
-            : currentFileIndex < files?.length)
+          files?.length &&
+          (files.length > 1
+            ? currentFileIndex < files.length - 1
+            : currentFileIndex < files.length)
         ) {
           newMsg = new Message({
             ...msgInfo,
@@ -164,9 +255,14 @@ export default class MessageController {
           }
           currentFileIndex += 1;
         }
-        listMsg.push(newMsg);
+
+        if (newMsg) {
+          listMsg.push(newMsg);
+        }
       }
+
       await Message.insertMany(listMsg, { ordered: false });
+
       const newMessages = await Message.find({
         _id: { $in: listMsgId },
       })
@@ -179,6 +275,7 @@ export default class MessageController {
         .populate({
           path: "respondTo",
         });
+
       const conversationInfo = await getConversationInfo({
         conversationId: conversation._id,
         userId: senderId,
@@ -187,6 +284,7 @@ export default class MessageController {
         conversationId: conversation._id,
         userId: recipientId,
       });
+
       await User.updateOne(
         {
           _id: ObjectId(recipientId),
@@ -195,6 +293,7 @@ export default class MessageController {
           hasNewMsg: true,
         }
       );
+
       await sendToSpecificUser({
         recipientId,
         io,
@@ -204,28 +303,51 @@ export default class MessageController {
           conversationInfo: conversationInfoToRecipient,
         },
       });
-      !!cb &&
-        cb({
-          status: "success",
-          data: {
-            msgs: newMessages,
-            conversationInfo: conversationInfo,
-          },
-        });
+
+      cb?.({
+        status: "success",
+        data: {
+          msgs: newMessages,
+          conversationInfo: conversationInfo,
+        },
+      });
     } catch (error) {
       logger.error({ err: error }, "sendMessage failed");
-      cb({ status: "error", data: [] });
+      cb?.({ status: "error", data: [] });
     }
   }
 
-  static async getConversations(payload: any, cb: Function) {
-    const { userId, page, limit, searchValue } = payload;
+  static async getConversations(payload: any, cb: Function, socket: Socket) {
     try {
+      const authUserId = (socket as any)?.user?.userId;
+      if (!authUserId) {
+        cb?.({ status: "error", message: "Unauthorized", data: [] });
+        return;
+      }
+
+      // Rate limiting check
+      const rateCheck = messageQueryLimiter.check(authUserId);
+      if (!rateCheck.allowed) {
+        cb?.({ status: "error", message: "Too many requests", code: "RATE_LIMIT_EXCEEDED", data: [] });
+        return;
+      }
+
+      const cleanPayload = sanitizeNoSqlPayload(payload);
+      const validation = getConversationsSchema.safeParse(cleanPayload);
+      if (!validation.success) {
+        cb?.({ status: "error", message: "Invalid query parameters", data: [] });
+        return;
+      }
+
+      const page = validation.data.page ?? 1;
+      const limit = validation.data.limit ?? 15;
+      const searchValue = sanitizeText(validation.data.searchValue);
       const skip = (page - 1) * limit;
-      const agg: any = [
+
+      const agg: any[] = [
         {
           $match: {
-            participants: ObjectId(userId),
+            participants: ObjectId(authUserId),
           },
         },
         {
@@ -240,7 +362,7 @@ export default class MessageController {
                 {
                   $filter: {
                     input: "$participants",
-                    cond: { $ne: ["$$this", ObjectId(userId)] }, // Exclude userId
+                    cond: { $ne: ["$$this", ObjectId(authUserId)] },
                   },
                 },
                 0,
@@ -277,7 +399,7 @@ export default class MessageController {
         {
           $match: {
             "participant.username": {
-              $regex: searchValue,
+              $regex: searchValue || "",
               $options: "i",
             },
           },
@@ -294,8 +416,9 @@ export default class MessageController {
           },
         },
       ];
+
       const conversations = await Conversation.aggregate(agg);
-      const result = conversations.map((conversation, index) => {
+      const result = conversations.map((conversation) => {
         delete conversation.otherParticipant;
         delete conversation.lastMsgId;
         if (conversation?.lastMsg) {
@@ -303,32 +426,52 @@ export default class MessageController {
         }
         return conversation;
       });
-      cb({ status: "success", data: result });
+
+      cb?.({ status: "success", data: result });
     } catch (error) {
       logger.error({ err: error }, "getConversations failed");
-      cb({ status: "error", data: [] });
+      cb?.({ status: "error", data: [] });
     }
   }
-  static async getMessages(payload: any, cb: Function) {
-    const { userId, conversationId, page, limit } = payload;
-    const skip = (page - 1) * limit;
+
+  static async getMessages(payload: any, cb: Function, socket: Socket) {
     try {
-      if (!userId) {
-        cb({ status: "error", data: [] });
+      const authUserId = (socket as any)?.user?.userId;
+      if (!authUserId) {
+        cb?.({ status: "error", message: "Unauthorized", data: [] });
         return;
       }
-      const conversation = await Conversation.findOne(
-        {
-          _id: ObjectId(conversationId),
-        },
-        {
-          msgIds: 1,
-        }
-      );
+
+      // Rate limiting check
+      const rateCheck = messageQueryLimiter.check(authUserId);
+      if (!rateCheck.allowed) {
+        cb?.({ status: "error", message: "Too many requests", code: "RATE_LIMIT_EXCEEDED", data: [] });
+        return;
+      }
+
+      const cleanPayload = sanitizeNoSqlPayload(payload);
+      const validation = getMessagesSchema.safeParse(cleanPayload);
+      if (!validation.success) {
+        cb?.({ status: "error", message: "Invalid parameters", data: [] });
+        return;
+      }
+
+      const { conversationId } = validation.data;
+      const page = validation.data.page ?? 1;
+      const limit = validation.data.limit ?? 30;
+
+      const conversation = await Conversation.findOne({
+        _id: ObjectId(conversationId),
+        participants: ObjectId(authUserId),
+      });
+
       if (!conversation) {
-        cb({ status: "error", data: [] });
+        cb?.({ status: "error", message: "Conversation not found or access denied", data: [] });
         return;
       }
+
+      const skip = (page - 1) * limit;
+
       const msgs = await Message.find({
         conversationId: ObjectId(conversationId),
       })
@@ -346,87 +489,160 @@ export default class MessageController {
         .populate({
           path: "respondTo",
         });
-      const result = msgs?.sort((a, b) => -1);
-      cb({ status: "success", data: result });
+
+      const result = msgs.sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      cb?.({ status: "success", data: result });
     } catch (error) {
-      logger.error({ err: error }, "getConversations failed");
-      cb({ status: "error", data: [] });
+      logger.error({ err: error }, "getMessages failed");
+      cb?.({ status: "error", data: [] });
     }
   }
-  static async getMsgsToSearchMsg(payload: any, cb: Function) {
+
+  static async getMsgsToSearchMsg(payload: any, cb: Function, socket: Socket) {
     try {
-      const { userId, conversationId, limit, searchMsgId, currentPage } =
-        payload;
-      if (!userId) {
-        cb({ status: "error", data: [] });
+      const authUserId = (socket as any)?.user?.userId;
+      if (!authUserId) {
+        cb?.({ status: "error", data: [], page: 1 });
         return;
       }
-      const conversation = await Conversation.findOne(
-        {
-          _id: ObjectId(conversationId),
-        },
-        {
-          msgIds: 1,
-        }
-      );
+
+      const rateCheck = messageQueryLimiter.check(authUserId);
+      if (!rateCheck.allowed) {
+        cb?.({ status: "error", message: "Too many requests", code: "RATE_LIMIT_EXCEEDED", data: [], page: 1 });
+        return;
+      }
+
+      const cleanPayload = sanitizeNoSqlPayload(payload);
+      const validation = getMsgsToSearchMsgSchema.safeParse(cleanPayload);
+      if (!validation.success) {
+        cb?.({ status: "error", data: [], page: 1 });
+        return;
+      }
+
+      const { conversationId, searchMsgId } = validation.data;
+      const limit = validation.data.limit ?? 30;
+      const currentPage = validation.data.currentPage ?? 1;
+
+      const conversation = await Conversation.findOne({
+        _id: ObjectId(conversationId),
+        participants: ObjectId(authUserId),
+      });
+
       if (!conversation) {
-        cb({ status: "error", data: [] });
+        cb?.({ status: "error", data: [], page: 1 });
         return;
       }
-      const msgIds = conversation?.msgIds.map((id) => destructObjectId(id));
-      const searchMsgIndex = msgIds?.findIndex((id) => id === searchMsgId);
-      const page = Math.ceil((msgIds.length - searchMsgIndex) / limit);
-      if (page <= currentPage) {
-        cb({ status: "success", data: [] });
-      } else {
-        const skip = currentPage * limit;
-        const newLimit = (page - currentPage) * limit;
-        const msgs = await Message.find({
-          _id: { $in: msgIds },
-        })
-          .sort({
-            createdAt: -1,
-          })
-          .skip(skip)
-          .limit(newLimit)
-          .populate({
-            path: "file",
-          })
-          .populate({
-            path: "links",
-          });
-        const result = msgs?.sort((a, b) => -1);
-        cb({ status: "success", data: result, page: page });
+
+      const targetMsg = await Message.findOne({
+        _id: ObjectId(searchMsgId),
+        conversationId: ObjectId(conversationId),
+      });
+
+      if (!targetMsg) {
+        cb?.({ status: "error", data: [], page: 1 });
+        return;
       }
+
+      const newerCount = await Message.countDocuments({
+        conversationId: ObjectId(conversationId),
+        createdAt: { $gte: targetMsg.createdAt },
+      });
+
+      const page = Math.ceil(newerCount / limit);
+      if (page <= currentPage) {
+        cb?.({ status: "success", data: [] });
+        return;
+      }
+
+      const skip = currentPage * limit;
+      const newLimit = (page - currentPage) * limit;
+
+      const msgs = await Message.find({
+        conversationId: ObjectId(conversationId),
+      })
+        .sort({
+          createdAt: -1,
+        })
+        .skip(skip)
+        .limit(newLimit)
+        .populate({
+          path: "file",
+        })
+        .populate({
+          path: "links",
+        });
+
+      const result = msgs.sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      cb?.({ status: "success", data: result, page: page });
     } catch (err) {
       logger.error({ err }, "getMsgsToSearchMsg failed");
-      cb({ status: "error", data: [], page: 1 });
+      cb?.({ status: "error", data: [], page: 1 });
     }
   }
-  static async reactMsg(payload: any, cb: Function, io: Server) {
+
+  static async reactMsg(payload: any, cb: Function, socket: Socket, io: Server) {
     try {
-      const { participantId, userId, msgId, react } = payload;
-      if (!msgId || !participantId) {
-        cb({ status: "error", data: [] });
+      const authUserId = (socket as any)?.user?.userId;
+      if (!authUserId) {
+        cb?.({ status: "error", message: "Unauthorized", data: null });
         return;
       }
+
+      // Rate limit check
+      const rateCheck = messageActionLimiter.check(authUserId);
+      if (!rateCheck.allowed) {
+        cb?.({ status: "error", message: "Too many actions", code: "RATE_LIMIT_EXCEEDED", data: null });
+        return;
+      }
+
+      const cleanPayload = sanitizeNoSqlPayload(payload);
+      const validation = reactMsgSchema.safeParse(cleanPayload);
+      if (!validation.success) {
+        cb?.({ status: "error", message: "Invalid react parameters", data: null });
+        return;
+      }
+
+      const { msgId } = validation.data;
+      const react = sanitizeText(validation.data.react);
+
       const msgInfo = await Message.findOne({
         _id: ObjectId(msgId),
       });
-      const msgReact = msgInfo?.reacts;
-      const validUserReact = msgReact?.find(
-        (userReact) => userReact?.userId === userId
+
+      if (!msgInfo) {
+        cb?.({ status: "error", message: "Message not found", data: null });
+        return;
+      }
+
+      const conversation = await Conversation.findOne({
+        _id: msgInfo.conversationId,
+        participants: ObjectId(authUserId),
+      });
+
+      if (!conversation) {
+        cb?.({ status: "error", message: "Access denied", data: null });
+        return;
+      }
+
+      const msgReact = msgInfo.reacts || [];
+      const validUserReact = msgReact.find(
+        (userReact: any) => userReact?.userId === authUserId
       );
+
       let result: any = null;
       if (validUserReact) {
-        let newReacts: any = [];
+        let newReacts: any[] = [];
         if (validUserReact?.react === react) {
-          newReacts = msgReact?.filter((react) => react?.userId !== userId);
+          newReacts = msgReact.filter((r: any) => r?.userId !== authUserId);
         } else {
-          newReacts = msgReact?.map((reactInfo) => {
-            if (reactInfo?.userId === userId) {
+          newReacts = msgReact.map((reactInfo: any) => {
+            if (reactInfo?.userId === authUserId) {
               return {
-                userId: userId,
+                userId: authUserId,
                 react: react,
               };
             }
@@ -446,7 +662,7 @@ export default class MessageController {
         );
       } else {
         const newReact = {
-          userId: userId,
+          userId: authUserId,
           react: react,
         };
         await Message.updateOne(
@@ -461,6 +677,7 @@ export default class MessageController {
           { timestamps: false }
         );
       }
+
       result = await Message.findOne({
         _id: ObjectId(msgId),
       })
@@ -473,99 +690,164 @@ export default class MessageController {
         .populate({
           path: "respondTo",
         });
-      await sendToSpecificUser({
-        recipientId: participantId,
-        io,
-        path: Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG,
-        payload: result,
-      });
-      !!cb && cb({ status: "success", data: result });
+
+      const otherParticipants = (conversation.participants || []).filter(
+        (p: any) => destructObjectId(p) !== authUserId
+      );
+
+      for (const p of otherParticipants) {
+        await sendToSpecificUser({
+          recipientId: destructObjectId(p),
+          io,
+          path: Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG,
+          payload: result,
+        });
+      }
+
+      cb?.({ status: "success", data: result });
     } catch (err) {
       logger.error({ err }, "reactMsg failed");
-      cb({ status: "error", data: null });
+      cb?.({ status: "error", data: null });
     }
   }
+
   static async changeSettingConversation(
     payload: any,
     cb: Function,
+    socket: Socket,
     io: Server
   ) {
     try {
-      const {
-        key,
-        value,
-        conversationId,
-        userId,
-        recipientId,
-        changeSettingContent,
-      } = payload;
-      if (!conversationId || !userId) {
-        cb({ status: "error", data: null });
+      const authUserId = (socket as any)?.user?.userId;
+      if (!authUserId) {
+        cb?.({ status: "error", message: "Unauthorized", data: null });
         return;
       }
+
+      // Rate limit check
+      const rateCheck = messageActionLimiter.check(authUserId);
+      if (!rateCheck.allowed) {
+        cb?.({ status: "error", message: "Too many actions", code: "RATE_LIMIT_EXCEEDED", data: null });
+        return;
+      }
+
+      const cleanPayload = sanitizeNoSqlPayload(payload);
+      const validation = changeSettingConversationSchema.safeParse(cleanPayload);
+      if (!validation.success) {
+        cb?.({ status: "error", message: "Invalid setting parameters", data: null });
+        return;
+      }
+
+      const { key, value, conversationId } = validation.data;
+      const changeSettingContent = sanitizeText(validation.data.changeSettingContent);
+
       const conversation = await Conversation.findOne({
         _id: ObjectId(conversationId),
+        participants: ObjectId(authUserId),
       });
+
       if (!conversation) {
-        cb({ status: "error", data: null });
+        cb?.({ status: "error", message: "Conversation not found or access denied", data: null });
         return;
       }
+
       const msgId = ObjectId();
       const settingMsg = new Message({
         _id: msgId,
         conversationId: ObjectId(conversationId),
         content: changeSettingContent,
-        sender: ObjectId(userId),
+        sender: ObjectId(authUserId),
         type: SETTING,
       });
+
       const result = await settingMsg.save();
       conversation[key] = value;
-      conversation.msgIds.push(msgId);
+      conversation.lastMsgId = msgId;
       await conversation.save();
+
       const conversationInfo = await getConversationInfo({
         conversationId: conversation._id,
-        userId: userId,
+        userId: authUserId,
       });
-      const conversationInfoToRecipient = await getConversationInfo({
-        conversationId: conversation._id,
-        userId: recipientId,
-      });
-      await sendToSpecificUser({
-        recipientId,
-        io,
-        path: Route.MESSAGE + MESSAGE_PATH.GET_MESSAGE,
-        payload: {
-          msgs: [result],
-          conversationInfo: conversationInfoToRecipient,
-        },
-      });
-      !!cb &&
-        cb({
-          status: "success",
-          data: {
+
+      const otherParticipants = (conversation.participants || []).filter(
+        (p: any) => destructObjectId(p) !== authUserId
+      );
+
+      for (const p of otherParticipants) {
+        const recipientId = destructObjectId(p);
+        const conversationInfoToRecipient = await getConversationInfo({
+          conversationId: conversation._id,
+          userId: recipientId,
+        });
+
+        await sendToSpecificUser({
+          recipientId,
+          io,
+          path: Route.MESSAGE + MESSAGE_PATH.GET_MESSAGE,
+          payload: {
             msgs: [result],
-            conversationInfo,
+            conversationInfo: conversationInfoToRecipient,
           },
         });
+      }
+
+      cb?.({
+        status: "success",
+        data: {
+          msgs: [result],
+          conversationInfo,
+        },
+      });
     } catch (err) {
       logger.error({ err }, "changeSettingConversation failed");
-      cb({ status: "error", data: null });
+      cb?.({ status: "error", data: null });
     }
   }
-  static async retrieveMsg(payload: any, cb: Function, io: Server) {
+
+  static async retrieveMsg(payload: any, cb: Function, socket: Socket, io: Server) {
     try {
-      const { msgId, userId, participantId } = payload;
-      if (!msgId || !userId) {
-        cb({ status: "error", data: null });
+      const authUserId = (socket as any)?.user?.userId;
+      if (!authUserId) {
+        cb?.({ status: "error", message: "Unauthorized", data: null });
         return;
       }
+
+      // Rate limit check
+      const rateCheck = messageActionLimiter.check(authUserId);
+      if (!rateCheck.allowed) {
+        cb?.({ status: "error", message: "Too many actions", code: "RATE_LIMIT_EXCEEDED", data: null });
+        return;
+      }
+
+      const cleanPayload = sanitizeNoSqlPayload(payload);
+      const validation = retrieveMsgSchema.safeParse(cleanPayload);
+      if (!validation.success) {
+        cb?.({ status: "error", message: "Invalid message ID", data: null });
+        return;
+      }
+
+      const { msgId } = validation.data;
+
       const msgInfo = await Message.findOne({
         _id: ObjectId(msgId),
       });
-      if (!msgInfo || destructObjectId(msgInfo?.sender) !== userId) {
-        cb({ status: "error", data: null });
+
+      if (!msgInfo || destructObjectId(msgInfo.sender) !== authUserId) {
+        cb?.({ status: "error", message: "Only sender can retrieve message", data: null });
         return;
       }
+
+      const conversation = await Conversation.findOne({
+        _id: msgInfo.conversationId,
+        participants: ObjectId(authUserId),
+      });
+
+      if (!conversation) {
+        cb?.({ status: "error", data: null });
+        return;
+      }
+
       await Message.updateOne(
         {
           _id: ObjectId(msgId),
@@ -575,38 +857,73 @@ export default class MessageController {
         },
         { timestamps: false }
       );
+
       const result = await Message.findOne({
         _id: ObjectId(msgId),
       });
-      await sendToSpecificUser({
-        recipientId: participantId,
-        io,
-        path: Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG,
-        payload: result,
-      });
-      !!cb &&
-        cb({
-          status: "success",
-          data: result,
+
+      const otherParticipants = (conversation.participants || []).filter(
+        (p: any) => destructObjectId(p) !== authUserId
+      );
+
+      for (const p of otherParticipants) {
+        await sendToSpecificUser({
+          recipientId: destructObjectId(p),
+          io,
+          path: Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG,
+          payload: result,
         });
+      }
+
+      cb?.({
+        status: "success",
+        data: result,
+      });
     } catch (err) {
       logger.error({ err }, "retrieveMsg failed");
-      cb({ status: "error", data: null });
+      cb?.({ status: "error", data: null });
     }
   }
-  static async updateLastSeen(payload: any, cb: Function, io: Server) {
+
+  static async updateLastSeen(payload: any, cb: Function, socket: Socket, io: Server) {
     try {
-      const { userId, lastMsg, recipientId } = payload;
-      if (!userId || !lastMsg) {
-        cb({ status: "error", data: null });
+      const authUserId = (socket as any)?.user?.userId;
+      if (!authUserId) {
+        cb?.({ status: "error", message: "Unauthorized", data: null });
         return;
       }
+
+      // Rate limit check
+      const rateCheck = messageActionLimiter.check(authUserId);
+      if (!rateCheck.allowed) {
+        cb?.({ status: "error", message: "Too many actions", code: "RATE_LIMIT_EXCEEDED", data: null });
+        return;
+      }
+
+      const cleanPayload = sanitizeNoSqlPayload(payload);
+      const validation = updateLastSeenSchema.safeParse(cleanPayload);
+      if (!validation.success) {
+        cb?.({ status: "error", message: "Invalid payload", data: null });
+        return;
+      }
+
+      const { lastMsg } = validation.data;
       const conversationId = ObjectId(lastMsg.conversationId);
+      const conversation = await Conversation.findOne({
+        _id: conversationId,
+        participants: ObjectId(authUserId),
+      });
+
+      if (!conversation) {
+        cb?.({ status: "error", data: null });
+        return;
+      }
+
       await Message.updateMany(
         {
           conversationId: conversationId,
           usersSeen: {
-            $nin: [ObjectId(userId)],
+            $nin: [ObjectId(authUserId)],
           },
           createdAt: {
             $lte: lastMsg.createdAt,
@@ -614,10 +931,11 @@ export default class MessageController {
         },
         {
           $push: {
-            usersSeen: ObjectId(userId),
+            usersSeen: ObjectId(authUserId),
           },
         }
       );
+
       const lastMsgUpdated = await Message.findOne({
         _id: ObjectId(lastMsg._id),
       })
@@ -630,86 +948,126 @@ export default class MessageController {
         .populate({
           path: "respondTo",
         });
-      await sendToSpecificUser({
-        recipientId,
-        io,
-        path: Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG,
-        payload: lastMsgUpdated,
-      });
-      !!cb && cb({ status: "success", data: lastMsgUpdated });
+
+      const otherParticipants = (conversation.participants || []).filter(
+        (p: any) => destructObjectId(p) !== authUserId
+      );
+
+      for (const p of otherParticipants) {
+        await sendToSpecificUser({
+          recipientId: destructObjectId(p),
+          io,
+          path: Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG,
+          payload: lastMsgUpdated,
+        });
+      }
+
+      cb?.({ status: "success", data: lastMsgUpdated });
     } catch (err) {
       logger.error({ err }, "updateLastSeen failed");
+      cb?.({ status: "error", data: null });
     }
   }
-  static async sendNext(payload: any, cb: Function, io: Server) {
-    const { userId, msgInfo, conversationsInfo } = payload;
-    const listMsg = conversationsInfo.map((ele) => {
-      const newMsgInfo = {
-        ...msgInfo,
-        _id: ObjectId(),
-        sender: userId,
-        usersSeen: [],
-        reacts: [],
-        conversationId: ele._id,
-        parentMsg: msgInfo._id,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      return newMsgInfo;
-    });
 
-    await Message.insertMany(listMsg, { ordered: false });
+  static async sendNext(payload: any, cb: Function, socket: Socket, io: Server) {
+    try {
+      const authUserId = (socket as any)?.user?.userId;
+      if (!authUserId) {
+        cb?.({ status: "error", message: "Unauthorized", data: null });
+        return;
+      }
 
-    for (let i = 0; i < conversationsInfo.length; i++) {
-      const recipientId = conversationsInfo[i].recipientId;
-      await Conversation.updateOne(
-        {
-          _id: conversationsInfo[i]._id,
-        },
-        {
-          lastMsgId: listMsg[i]._id,
-        }
-      );
-      await User.updateOne(
-        {
-          _id: ObjectId(recipientId),
-        },
-        {
-          hasNewMsg: true,
-        }
-      );
-    }
+      // Rate limit check
+      const rateCheck = messageSendLimiter.check(authUserId);
+      if (!rateCheck.allowed) {
+        cb?.({ status: "error", message: "Too many messages forwarded. Please slow down.", code: "RATE_LIMIT_EXCEEDED", data: null });
+        return;
+      }
 
-    const listConversationInfo: any = [];
-    for (let index = 0; index < listMsg.length; index++) {
-      const msg = listMsg[index];
-      const recipientId = conversationsInfo[index].recipientId;
-      const conversationInfoToRecipient = await getConversationInfo({
-        conversationId: msg.conversationId,
-        userId: recipientId,
+      const cleanPayload = sanitizeNoSqlPayload(payload);
+      const validation = sendNextSchema.safeParse(cleanPayload);
+      if (!validation.success) {
+        cb?.({ status: "error", message: "Invalid forward payload", data: null });
+        return;
+      }
+
+      const { msgInfo, conversationsInfo } = validation.data;
+
+      const listMsg = conversationsInfo.map((ele: any) => {
+        const newMsgInfo = {
+          ...msgInfo,
+          _id: ObjectId(),
+          sender: ObjectId(authUserId),
+          usersSeen: [],
+          reacts: [],
+          conversationId: ele._id,
+          parentMsg: msgInfo._id,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        return newMsgInfo;
       });
-      const conversationInfo = await getConversationInfo({
-        conversationId: msg.conversationId,
-        userId: userId,
-      });
-      listConversationInfo[index] = conversationInfo;
-      await sendToSpecificUser({
-        recipientId,
-        io,
-        path: Route.MESSAGE + MESSAGE_PATH.GET_MESSAGE,
-        payload: {
-          msgs: [msg],
-          conversationInfo: conversationInfoToRecipient,
-        },
-      });
-    }
-    !!cb &&
-      cb({
+
+      await Message.insertMany(listMsg, { ordered: false });
+
+      for (let i = 0; i < conversationsInfo.length; i++) {
+        const recipientId = conversationsInfo[i].recipientId;
+        await Conversation.updateOne(
+          {
+            _id: conversationsInfo[i]._id,
+            participants: ObjectId(authUserId),
+          },
+          {
+            $set: {
+              lastMsgId: listMsg[i]._id,
+            },
+          }
+        );
+        await User.updateOne(
+          {
+            _id: ObjectId(recipientId),
+          },
+          {
+            hasNewMsg: true,
+          }
+        );
+      }
+
+      const listConversationInfo: any[] = [];
+      for (let index = 0; index < listMsg.length; index++) {
+        const msg = listMsg[index];
+        const recipientId = conversationsInfo[index].recipientId;
+        const conversationInfoToRecipient = await getConversationInfo({
+          conversationId: msg.conversationId,
+          userId: recipientId,
+        });
+        const convInfo = await getConversationInfo({
+          conversationId: msg.conversationId,
+          userId: authUserId,
+        });
+        listConversationInfo[index] = convInfo;
+
+        await sendToSpecificUser({
+          recipientId,
+          io,
+          path: Route.MESSAGE + MESSAGE_PATH.GET_MESSAGE,
+          payload: {
+            msgs: [msg],
+            conversationInfo: conversationInfoToRecipient,
+          },
+        });
+      }
+
+      cb?.({
         status: "success",
         data: {
           msgs: listMsg,
           listConversationInfo: listConversationInfo,
         },
       });
+    } catch (err) {
+      logger.error({ err }, "sendNext failed");
+      cb?.({ status: "error", data: null });
+    }
   }
 }

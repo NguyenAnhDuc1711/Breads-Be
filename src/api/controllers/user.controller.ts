@@ -17,7 +17,14 @@ import SavedPost from "../models/savedPost.model.js";
 import User from "../models/user.model.js";
 import { getUserInfo, getUsersByPage, toggleFollow } from "../services/user.js";
 import { sendMailService } from "../services/util.js";
-import generateTokenAndSetCookie from "../utils/genarateTokenAndSetCookie.js";
+import generateTokens, {
+  clearRefreshTokenCookie,
+  generateAccessToken,
+  hashToken,
+} from "../utils/generateTokens.js";
+import RefreshToken from "../models/refreshToken.model.js";
+import TokenBlacklist from "../models/tokenBlacklist.model.js";
+import logger from "../../core/logger.js";
 import bcrypt from "bcryptjs";
 import { uploadFileFromBase64, validateEmailForm } from "../utils/index.js";
 
@@ -165,22 +172,105 @@ export const loginUser = async (req, res) => {
     throw new AuthFailureError("Wrong password");
   }
 
-  // generateTokenAndSetCookie(user._id, res);
   const result = await getUserInfo(user._id);
-  generateTokenAndSetCookie(user._id, res);
+  const { accessToken } = await generateTokens(user._id.toString(), res);
 
   new OK({
     message: "Login successfully",
-    metadata: result,
+    metadata: { ...result, accessToken },
   }).send(res);
 };
 
 // logout
 export const logoutUser = async (req, res) => {
-  res.cookie("jwt", "", { maxAge: 1 });
+  const rawRefreshToken = req.cookies?.refreshToken;
+  if (rawRefreshToken) {
+    const hashedToken = hashToken(rawRefreshToken);
+    await RefreshToken.deleteOne({ token: hashedToken });
+  }
+  clearRefreshTokenCookie(res);
   new OK({
     message: "User log out successfully",
     metadata: {},
+  }).send(res);
+};
+
+// refresh token with rotation + reuse detection
+export const refreshTokenHandler = async (req, res) => {
+  const rawRefreshToken = req.cookies?.refreshToken;
+  if (!rawRefreshToken) {
+    throw new AuthFailureError("No refresh token provided");
+  }
+
+  const hashedToken = hashToken(rawRefreshToken);
+  const storedToken = await RefreshToken.findOne({ token: hashedToken });
+
+  if (!storedToken) {
+    // Token reuse detection: this token was already consumed by rotation
+    // or was never valid. Possible token theft — revoke ALL refresh tokens
+    // for the user who originally owned this token and blacklist them.
+    //
+    // Try to decode the refresh token to identify the user — but since
+    // refresh tokens are opaque (not JWT), we can't extract userId from
+    // the token itself. Instead, log the incident and return 401.
+    logger.warn(
+      { hashedToken: hashedToken.substring(0, 16) + "..." },
+      "Refresh token reuse detected — possible token theft",
+    );
+
+    // We cannot determine the userId from an opaque token that's not in DB,
+    // but if the request has a valid (expired) access token we can try to
+    // extract the userId from it to revoke all their sessions.
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith("Bearer ")) {
+      try {
+        const jwt = await import("jsonwebtoken");
+        const decoded: any = jwt.default.decode(
+          authHeader.split(" ")[1],
+        );
+        if (decoded?.userId) {
+          // Force revoke ALL refresh tokens for this user
+          await RefreshToken.deleteMany({ userId: decoded.userId });
+          // Record in blacklist
+          await TokenBlacklist.create({
+            userId: decoded.userId,
+            reason: "TOKEN_REUSE",
+            metadata: {
+              detectedAt: new Date(),
+              tokenPrefix: hashedToken.substring(0, 16),
+            },
+          });
+          logger.warn(
+            { userId: decoded.userId },
+            "All refresh tokens revoked due to token reuse — user blacklisted",
+          );
+        }
+      } catch {
+        // Can't decode — just return 401
+      }
+    }
+
+    clearRefreshTokenCookie(res);
+    throw new AuthFailureError("Invalid refresh token");
+  }
+
+  // Check if token has expired (belt-and-suspenders; TTL index handles cleanup)
+  if (storedToken.expiresAt < new Date()) {
+    await RefreshToken.deleteOne({ _id: storedToken._id });
+    clearRefreshTokenCookie(res);
+    throw new AuthFailureError("Refresh token expired");
+  }
+
+  // Rotation: delete the old refresh token BEFORE issuing a new one
+  await RefreshToken.deleteOne({ _id: storedToken._id });
+
+  // Issue new token pair
+  const userId = storedToken.userId.toString();
+  const { accessToken } = await generateTokens(userId, res);
+
+  new OK({
+    message: "Token refreshed successfully",
+    metadata: { accessToken },
   }).send(res);
 };
 
@@ -337,24 +427,24 @@ export const getUserToFollows = async (req, res) => {
     ).limit(20);
     return res.status(HTTPStatus.OK).json(users);
   }
-  if (!userId) {
-    throw new AuthFailureError("Unauthorize");
-  }
   if (!page || !limit) {
     throw new BadRequestError("Need page and limit");
   }
-  const userInfo = await User.findOne({ _id: ObjectId(userId) });
-  const userCatesCare = userInfo?.catesCare;
-  // let userFollowed = userInfo?.following ?? [];
-  // userFollowed = userFollowed.map((id) => ObjectId(id));
-  // const invalidToFollow = [...userFollowed, ObjectId(userId)];
-  const invalidToFollow = [ObjectId(userId)];
+
+  let invalidToFollow: any[] = [];
+  let userCatesCare: any[] = [];
+
+  if (userId) {
+    const userInfo = await User.findOne({ _id: ObjectId(userId) });
+    userCatesCare = userInfo?.catesCare ?? [];
+    invalidToFollow = [ObjectId(userId)];
+  }
 
   const agg = [
     {
       $match: {
-        _id: { $nin: invalidToFollow },
-        username: { $regex: searchValue, $options: "i" },
+        ...(invalidToFollow.length ? { _id: { $nin: invalidToFollow } } : {}),
+        ...(searchValue ? { username: { $regex: searchValue, $options: "i" } } : {}),
       },
     },
     {

@@ -8,19 +8,17 @@ export const sendToSpecificUser = async ({
   path,
   payload,
 }: {
-  recipientId: string;
+  recipientId: string | any;
   io: Server;
   path: string;
   payload: any;
 }) => {
   try {
-    if (!recipientId) {
+    if (!recipientId || !io) {
       return;
     }
-    const recipientSocketId = await getUserSocketByUserId(recipientId, io);
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit(path, payload);
-    }
+    const targetRoom = `user:${String(recipientId)}`;
+    io.to(targetRoom).emit(path, payload);
   } catch (err) {
     logger.error({ err }, "sendToSpecificUser failed");
   }
