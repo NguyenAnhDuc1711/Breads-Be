@@ -160,3 +160,13 @@ export const updatePostVisibilitySchema = {
     visibility: visibilitySchema,
   }),
 };
+
+export const getPostActivitiesSchema = {
+  params: z.object({ id: objectIdSchema }),
+  query: z.object({
+    type: z.enum(["likes", "comments", "reposts"]).optional(),
+    page: z.coerce.number().optional(),
+    limit: z.coerce.number().optional(),
+  }),
+};
+

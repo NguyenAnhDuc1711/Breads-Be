@@ -6,6 +6,7 @@ import {
   createPost,
   deletePost,
   getPost,
+  getPostActivities,
   getPosts,
   likeUnlikePost,
   tickPostSurvey,
@@ -22,6 +23,7 @@ import Post from "../models/post.model.js";
 import {
   createPostSchema,
   deletePostSchema,
+  getPostActivitiesSchema,
   getPostSchema,
   getPostsQuerySchema,
   likeUnlikePostSchema,
@@ -54,6 +56,7 @@ const {
 // không đọc payload) và TRƯỚC controller. `CRAWL_POST` cố ý không có schema: tool seed/dev, không
 // nhận payload từ client.
 router.get(GET_ALL, optionalAuth, validate(getPostsQuerySchema), asyncHandler(getPosts));
+router.get("/:id/activities", optionalAuth, validate(getPostActivitiesSchema), asyncHandler(getPostActivities));
 router.get("/:id", optionalAuth, validate(getPostSchema), asyncHandler(getPost));
 router.post(CREATE, validate(createPostSchema), createPost);
 router.delete("/:id", validate(deletePostSchema), asyncHandler(deletePost));

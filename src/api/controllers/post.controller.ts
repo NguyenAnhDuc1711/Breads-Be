@@ -7,6 +7,7 @@ import logger from "../../core/logger.js";
 import HTTPStatus from "../../utils/httpStatus.js";
 import { ObjectId } from "../../utils/index.js";
 import Category from "../models/category.model.js";
+import Follow from "../models/follow.model.js";
 import Like from "../models/like.model.js";
 import Link from "../models/link.model.js";
 import Post from "../models/post.model.js";
@@ -555,3 +556,98 @@ export const updatePostVisibility = async (req, res) => {
     metadata: {},
   }).send(res);
 };
+
+export const getPostActivities = async (req, res) => {
+  const { id: postId } = req.params;
+  const type = req.query.type || "likes";
+  const limit = Math.min(Number(req.query.limit) || 20, 50);
+  const page = Math.max(Number(req.query.page) || 1, 1);
+  const skip = (page - 1) * limit;
+
+  const post = await Post.findById(postId);
+  if (!post) {
+    return res.status(HTTPStatus.NOT_FOUND).json({ error: "Post not found" });
+  }
+
+  let users: any[] = [];
+  let total = 0;
+
+  if (type === "likes") {
+    total = await Like.countDocuments({ postId: ObjectId(postId) });
+    const likes = await Like.find({ postId: ObjectId(postId) })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate("userId", "_id username name avatar bio followersCount");
+    users = likes.map((l: any) => l.userId).filter(Boolean);
+  } else if (type === "comments") {
+    const filterQuery = {
+      $or: [
+        { parentPost: ObjectId(postId) },
+        { _id: { $in: post.replies || [] } },
+      ],
+      status: { $ne: Constants.POST_STATUS.DELETED },
+    };
+    total = await Post.countDocuments(filterQuery);
+    const commentPosts = await Post.find(filterQuery)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate("authorId", "_id username name avatar bio followersCount");
+
+    users = commentPosts
+      .map((c: any) => ({
+        ...((c.authorId as any)?.toObject?.() || c.authorId),
+        commentContent: c.content,
+        commentCreatedAt: c.createdAt,
+      }))
+      .filter((u) => u && u._id);
+  } else if (type === "reposts") {
+    const filterQuery = {
+      $or: [
+        { "quote._id": ObjectId(postId) },
+        { "quote._id": String(postId) },
+        { parentPost: ObjectId(postId), type: Constants.POST_TYPE.REPOST },
+      ],
+      status: { $ne: Constants.POST_STATUS.DELETED },
+    };
+    total = await Post.countDocuments(filterQuery);
+    const repostPosts = await Post.find(filterQuery)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate("authorId", "_id username name avatar bio followersCount");
+
+    users = repostPosts
+      .map((r: any) => ((r.authorId as any)?.toObject?.() || r.authorId))
+      .filter((u) => u && u._id);
+  }
+
+  if (req.viewerId && users.length > 0) {
+    const userIds = users.map((u) => ObjectId(u._id));
+    const followingDocs = await Follow.find({
+      followerId: ObjectId(req.viewerId),
+      followeeId: { $in: userIds },
+    });
+    const followingSet = new Set(
+      followingDocs.map((f: any) => f.followeeId.toString())
+    );
+    users = users.map((u) => ({
+      ...(typeof u.toObject === "function" ? u.toObject() : u),
+      isFollowing: followingSet.has(u._id.toString()),
+      isSelf: req.viewerId.toString() === u._id.toString(),
+    }));
+  }
+
+  new OK({
+    message: "Get post activities successfully",
+    metadata: {
+      type,
+      total,
+      page,
+      limit,
+      users,
+    },
+  }).send(res);
+};
+
