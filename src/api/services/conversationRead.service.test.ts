@@ -296,3 +296,76 @@ test("NFR-4: lazy-create defaults lastReadAt to the rollout cutover, not the mes
     else process.env.UNREAD_COUNT_ROLLOUT_AT = originalEnv;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Task 020 — race-condition self-healing (NFR-3). Bởi thiết kế, MỖI lời gọi
+// recomputeUnreadCount/markConversationRead luôn đọc lại lastReadAt HIỆN TẠI trong DB (qua
+// findOneAndUpdate) trước khi đếm — nên dù 1 lần ghi "trúng" đúng lúc race (dùng lastReadAt cũ,
+// ghi đè sau 1 lần ghi khác dùng lastReadAt mới hơn) khiến cache tạm sai, lần gọi KẾ TIẾP BẤT KỲ
+// sẽ luôn tự đọc lại lastReadAt mới nhất và tính đúng lại — test này verify chính tính chất đó,
+// không phải verify race tự nó không bao giờ xảy ra (không thể, và không cần — đó là điểm của
+// recompute-from-truth: chấp nhận có thể lệch tạm thời, nhưng KHÔNG BAO GIỜ lệch vĩnh viễn).
+// ---------------------------------------------------------------------------
+test("NFR-3: a stale write from a race self-heals on the next recompute call", async () => {
+  // Kịch bản: markConversationRead vừa chạy xong, set lastReadAt = T1 (mới), unreadCount = 0
+  // trong DB. Nhưng 1 lời gọi recomputeUnreadCount KHÁC (trigger tin nhắn mới) đã ĐỌC lastReadAt
+  // CŨ = T0 (trước khi mark-read) từ TRƯỚC race, và giờ mới GHI ĐÈ — kết quả: cache tạm thời sai
+  // (unreadCount bị ghi lại thành > 0 dù thực ra user đã đọc hết).
+  const staleLastReadAt = new Date("2026-01-01T00:00:00Z"); // T0 — cũ, đọc trước race
+  const currentLastReadAtInDb = new Date("2026-01-02T00:00:00Z"); // T1 — DB thực tế đã có sau mark-read
+
+  let dbUnreadCount = 0; // trạng thái DB TRƯỚC lần ghi "trúng race"
+
+  // Bước 1 — mô phỏng lần ghi "trúng race": recompute dùng T0 (cũ) nhưng ghi SAU markConversationRead
+  // (đã set lastReadAt=T1 trong DB thật — ở đây ta không mô phỏng chính xác thứ tự đọc/ghi thật,
+  // mà mô phỏng TRỰC TIẾP kết quả của việc đó: DB đang ở trạng thái cache sai, "coi như" đã bị
+  // 1 lần ghi race ghi đè thành 1 (dựa trên T0, đáng lẽ phải dựa trên T1).
+  dbUnreadCount = await (async () => {
+    let result = 0;
+    await withStubbedModel(
+      [
+        [ConversationRead, "findOneAndUpdate", async () => ({ _id: DOC_ID, lastReadAt: staleLastReadAt })],
+        [ConversationRead, "updateOne", async (_f: any, update: any) => { result = update.unreadCount; }],
+        [
+          Message,
+          "countDocuments",
+          async () =>
+            applyGroundTruthFilter(
+              [{ sender: USER_B, isRetrieve: false, createdAt: new Date("2026-01-01T12:00:00Z") }],
+              { lastReadAt: staleLastReadAt, userId: USER_A }
+            ),
+        ],
+      ],
+      async () => { await recomputeUnreadCount({ conversationId: CONV_ID, userId: USER_A }); }
+    );
+    return result;
+  })();
+
+  assert.equal(dbUnreadCount, 1, "the stale write does land a wrong (non-zero) value — that's the race");
+
+  // Bước 2 — "lần ghi kế tiếp" (NFR-3's guarantee): 1 recompute MỚI, lần này đọc đúng lastReadAt
+  // hiện tại trong DB (T1) — phải tự sửa về giá trị đúng, KHÔNG cộng/trừ dựa trên dbUnreadCount cũ.
+  let healedCount = -1;
+  await withStubbedModel(
+    [
+      [ConversationRead, "findOneAndUpdate", async () => ({ _id: DOC_ID, lastReadAt: currentLastReadAtInDb })],
+      [ConversationRead, "updateOne", async (_f: any, update: any) => { healedCount = update.unreadCount; }],
+      [
+        Message,
+        "countDocuments",
+        async () =>
+          applyGroundTruthFilter(
+            [{ sender: USER_B, isRetrieve: false, createdAt: new Date("2026-01-01T12:00:00Z") }],
+            { lastReadAt: currentLastReadAtInDb, userId: USER_A }
+          ),
+      ],
+    ],
+    async () => { await recomputeUnreadCount({ conversationId: CONV_ID, userId: USER_A }); }
+  );
+
+  assert.equal(
+    healedCount,
+    0,
+    "the next recompute call must self-heal to the correct value (message predates T1, already read)"
+  );
+});
