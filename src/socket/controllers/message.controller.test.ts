@@ -1185,3 +1185,45 @@ test("retrieveMsg: unread bookkeeping failure does not break the existing recall
   assert.ok(updateMsgEmit, "the pre-existing recall notification must still fire despite unread bookkeeping failure");
   assert.equal(updateMsgEmit.target, `user:${USER_B}`);
 });
+
+// ---------------------------------------------------------------------------
+// Task 021 — SC-4 (NFR-1) và SC-7 across-the-board check.
+// ---------------------------------------------------------------------------
+
+const MESSAGE_CONTROLLER_SRC_PATH = "src/socket/controllers/message.controller.ts";
+
+test("SC-4: unread-message-count code never calls fetchSockets()/getUserSocketsByUserIds() (NFR-1)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(MESSAGE_CONTROLLER_SRC_PATH, "utf8");
+  assert.equal(
+    /fetchSockets\(\)|getUserSocketsByUserIds/.test(src),
+    false,
+    "message.controller.ts must only reuse sendToSpecificUser's room-based emit, never the full-socket-scan pattern"
+  );
+});
+
+test("SC-7: every UNREAD_UPDATE call site in the source sends all 3 payload fields", async () => {
+  // Kiểm tra tĩnh (static), bổ sung cho assertion runtime đã có riêng ở từng handler (task
+  // 010/011/012): mỗi khối gọi `sendToSpecificUser` với path `UNREAD_UPDATE` trong nguồn phải có
+  // đủ literal `conversationId`, `unreadCount`, `globalTotal` trong payload — bắt được regression
+  // dạng "thêm 1 call site mới nhưng quên 1 field" mà runtime test riêng lẻ có thể bỏ sót.
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(MESSAGE_CONTROLLER_SRC_PATH, "utf8");
+
+  const callSites = src.split("MESSAGE_PATH.UNREAD_UPDATE").length - 1;
+  assert.ok(callSites >= 3, `expected at least 3 UNREAD_UPDATE call sites (sendMessage/sendNext, updateLastSeen, retrieveMsg), found ${callSites}`);
+
+  // Mỗi khối payload theo path UNREAD_UPDATE (tìm bằng khoảng cách gần trong source) đều có đủ
+  // 3 field — kiểm tra bằng cách quét từng đoạn 300 ký tự SAU mỗi lần xuất hiện MESSAGE_PATH.UNREAD_UPDATE.
+  let idx = src.indexOf("MESSAGE_PATH.UNREAD_UPDATE");
+  let checked = 0;
+  while (idx !== -1) {
+    const window = src.slice(idx, idx + 300);
+    assert.match(window, /conversationId/, `call site at offset ${idx} missing conversationId`);
+    assert.match(window, /unreadCount/, `call site at offset ${idx} missing unreadCount`);
+    assert.match(window, /globalTotal/, `call site at offset ${idx} missing globalTotal`);
+    checked += 1;
+    idx = src.indexOf("MESSAGE_PATH.UNREAD_UPDATE", idx + 1);
+  }
+  assert.ok(checked >= 3);
+});
