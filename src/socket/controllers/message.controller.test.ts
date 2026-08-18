@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import axios from "axios";
 import Conversation from "../../api/models/conversation.model.js";
 import Message from "../../api/models/message.model.js";
 import User from "../../api/models/user.model.js";
@@ -291,6 +292,214 @@ test("sendMessage: authenticated user emits to room user:recipientId and saves m
   assert.equal(io.emits.length, 1);
   assert.equal(io.emits[0].target, `user:${USER_B}`);
   messageSendLimiter.reset(USER_A);
+});
+
+// ---------------------------------------------------------------------------
+// FR-4 / Phần A — `sendMessage` media cutover (epic presigned-media-upload, task 010).
+// Thứ tự check per-item BẮT BUỘC: (1) GIF skip → (2) flag + `data:` fallback → (3) validate strict.
+// ---------------------------------------------------------------------------
+
+const TEST_CLOUD_NAME = "test-cloud";
+// `sortedPairId` = [senderId, recipientId].sort().join("_") — cùng công thức với task 001.
+const SORTED_PAIR_AB = [USER_A, USER_B].sort().join("_");
+const VALID_MEDIA_URL = `https://res.cloudinary.com/${TEST_CLOUD_NAME}/image/upload/v1700000000/message/${SORTED_PAIR_AB}/6512f0a1b2c3d4e5f6a7b8ff.png`;
+// Đúng domain + đúng namespace nhưng SAI cặp hội thoại (key của cặp A-C).
+const WRONG_PAIR_MEDIA_URL = `https://res.cloudinary.com/${TEST_CLOUD_NAME}/image/upload/v1700000000/message/${[
+  USER_A,
+  USER_C,
+]
+  .sort()
+  .join("_")}/6512f0a1b2c3d4e5f6a7b8fe.png`;
+const EXTERNAL_GIF_URL = "https://media.giphy.com/media/abc123/giphy.gif";
+const DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+const LEGACY_UPLOADED_URL = `https://res.cloudinary.com/${TEST_CLOUD_NAME}/image/upload/v1/legacy-fallback.png`;
+
+/**
+ * Chạy `sendMessage` với toàn bộ tầng DB được stub, trả về:
+ *  - `res`: giá trị cb nhận được
+ *  - `inserted`: mảng message thực sự được đưa vào `Message.insertMany` ([] nếu không gọi)
+ *  - `uploadCalls`: các lần `uploadFileFromBase64` thực sự chạy — SPY thật, bắt qua `axios.post`
+ *    tới endpoint upload của Cloudinary (đây là side-effect duy nhất của hàm đó). Dùng để chứng
+ *    minh nhánh (2) có chạy hay không, không chỉ suy ra từ kết quả cuối.
+ */
+const runSendMessageWithMedia = async (
+  media: any[],
+  { legacyFallback }: { legacyFallback: boolean }
+) => {
+  messageSendLimiter.reset(USER_A);
+  const socket = fakeSocket(USER_A);
+  const io = fakeIo() as any;
+
+  const prevFlag = process.env.MEDIA_LEGACY_FALLBACK_ENABLED;
+  const prevCloud = process.env.CLOUDINARY_CLOUD_NAME;
+  process.env.CLOUDINARY_CLOUD_NAME = TEST_CLOUD_NAME;
+  if (legacyFallback) {
+    process.env.MEDIA_LEGACY_FALLBACK_ENABLED = "true";
+  } else {
+    delete process.env.MEDIA_LEGACY_FALLBACK_ENABLED;
+  }
+
+  const mockConvQuery: any = {
+    _id: CONV_ID,
+    participants: [USER_A, USER_B],
+    save: async () => {},
+    populate: () => ({
+      populate: () => ({
+        lean: async () => ({
+          _id: CONV_ID,
+          participants: [{ _id: USER_A }, { _id: USER_B }],
+          lastMsgId: { _id: MSG_ID },
+        }),
+      }),
+    }),
+  };
+
+  let res: any = null;
+  let inserted: any[] = [];
+  const uploadCalls: string[] = [];
+
+  try {
+    await withStubbedModel(
+      [
+        [Conversation, "findOne", () => mockConvQuery],
+        [Conversation, "updateOne", async () => {}],
+        [
+          Message,
+          "insertMany",
+          async (msgs: any) => {
+            inserted = msgs;
+          },
+        ],
+        [
+          Message,
+          "find",
+          () => ({
+            populate: () => ({
+              populate: () => ({
+                populate: async () => [{ _id: MSG_ID, conversationId: CONV_ID }],
+              }),
+            }),
+          }),
+        ],
+        [User, "updateOne", async () => {}],
+        [
+          axios,
+          "post",
+          async (url: string) => {
+            uploadCalls.push(url);
+            return { data: { url: LEGACY_UPLOADED_URL } };
+          },
+        ],
+      ],
+      async () => {
+        await MessageController.sendMessage(
+          { recipientId: USER_B, message: { media } },
+          (r: any) => {
+            res = r;
+          },
+          socket as any,
+          io
+        );
+      }
+    );
+  } finally {
+    if (prevFlag === undefined) delete process.env.MEDIA_LEGACY_FALLBACK_ENABLED;
+    else process.env.MEDIA_LEGACY_FALLBACK_ENABLED = prevFlag;
+    if (prevCloud === undefined) delete process.env.CLOUDINARY_CLOUD_NAME;
+    else process.env.CLOUDINARY_CLOUD_NAME = prevCloud;
+    messageSendLimiter.reset(USER_A);
+  }
+
+  return { res, inserted, uploadCalls };
+};
+
+test("sendMessage: valid Cloudinary media URL is accepted and stored as-is", async () => {
+  const { res, inserted } = await runSendMessageWithMedia(
+    [{ url: VALID_MEDIA_URL, type: "image" }],
+    { legacyFallback: false }
+  );
+
+  assert.equal(res?.status, "success");
+  assert.equal(inserted.length, 1);
+  assert.equal(inserted[0].media.length, 1);
+  assert.equal(inserted[0].media[0].url, VALID_MEDIA_URL);
+});
+
+test("sendMessage: Cloudinary URL of ANOTHER conversation pair is rejected", async () => {
+  const { res, inserted } = await runSendMessageWithMedia(
+    [{ url: WRONG_PAIR_MEDIA_URL, type: "image" }],
+    { legacyFallback: false }
+  );
+
+  assert.equal(res?.status, "error");
+  assert.equal(res?.code, "INVALID_MEDIA_URL");
+  assert.equal(inserted.length, 0);
+});
+
+test("sendMessage: mixed GIF + image batch (2 items) — both accepted (item-level carve-out)", async () => {
+  const { res, inserted } = await runSendMessageWithMedia(
+    [
+      { url: EXTERNAL_GIF_URL, type: "gif" },
+      { url: VALID_MEDIA_URL, type: "image" },
+    ],
+    { legacyFallback: false }
+  );
+
+  assert.equal(res?.status, "success");
+  assert.equal(inserted.length, 1);
+  // Cả 2 item cùng sống sót — GIF ngoài Cloudinary KHÔNG bị strict-validate loại bỏ dù
+  // batch có nhiều hơn 1 phần tử (bug SCOPE-3 của flag `isAddGif` cấp batch cũ).
+  assert.equal(inserted[0].media.length, 2);
+  assert.equal(inserted[0].media[0].url, EXTERNAL_GIF_URL);
+  assert.equal(inserted[0].media[1].url, VALID_MEDIA_URL);
+});
+
+test("sendMessage: `data:` URI is rejected explicitly when the legacy flag is OFF", async () => {
+  const { res, inserted, uploadCalls } = await runSendMessageWithMedia(
+    [{ url: DATA_URI, type: "image" }],
+    { legacyFallback: false }
+  );
+
+  assert.equal(res?.status, "error");
+  assert.equal(res?.code, "INVALID_MEDIA_URL");
+  assert.match(res?.message, /invalid media url/i);
+  assert.equal(inserted.length, 0);
+  // Flag tắt ⇒ nhánh (2) bị bỏ qua, không có upload base64 nào chạy.
+  assert.equal(uploadCalls.length, 0);
+});
+
+test("sendMessage: `data:` URI goes through the legacy base64 upload when the flag is ON", async () => {
+  const { res, inserted } = await runSendMessageWithMedia(
+    [{ url: DATA_URI, type: "image" }],
+    { legacyFallback: true }
+  );
+
+  assert.equal(res?.status, "success");
+  assert.equal(inserted.length, 1);
+  assert.equal(inserted[0].media[0].url, LEGACY_UPLOADED_URL);
+  assert.equal(inserted[0].media[0].type, "image");
+});
+
+test("sendMessage: check ORDER — flag+`data:` branch fires BEFORE validateMediaUrl (AD5-1)", async () => {
+  // Cùng 1 input, chỉ khác giá trị flag. `uploadCalls` là spy trên side-effect DUY NHẤT của
+  // `uploadFileFromBase64` (POST tới Cloudinary), nên nó chứng minh nhánh nào đã thực sự chạy.
+  const flagOn = await runSendMessageWithMedia([{ url: DATA_URI, type: "image" }], {
+    legacyFallback: true,
+  });
+  const flagOff = await runSendMessageWithMedia([{ url: DATA_URI, type: "image" }], {
+    legacyFallback: false,
+  });
+
+  // Flag BẬT: nhánh (2) chặn trước ⇒ upload chạy, `validateMediaUrl` không bao giờ được tới
+  // (nếu nó chạy trước thì `data:` URI đã bị reject và không có POST nào cả).
+  assert.equal(flagOn.uploadCalls.length, 1);
+  assert.match(flagOn.uploadCalls[0], /api\.cloudinary\.com\/v1_1\/.+\/auto\/upload$/);
+  assert.equal(flagOn.res?.status, "success");
+
+  // Flag TẮT: nhánh (2) bị bỏ qua ⇒ rơi xuống (3) và bị reject, không upload gì.
+  assert.equal(flagOff.uploadCalls.length, 0);
+  assert.equal(flagOff.res?.status, "error");
+  assert.equal(flagOff.res?.code, "INVALID_MEDIA_URL");
 });
 
 test("getMessages: unauthenticated socket returns unauthorized error", async () => {

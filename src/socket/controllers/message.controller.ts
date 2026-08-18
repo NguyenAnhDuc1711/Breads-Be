@@ -1,4 +1,5 @@
 import axios from "axios";
+import mongoose from "mongoose";
 import { Server, Socket } from "socket.io";
 import Conversation from "../../api/models/conversation.model.js";
 import Link from "../../api/models/link.model.js";
@@ -8,6 +9,8 @@ import { getConversationInfo } from "../../api/services/message.js";
 import { uploadFileFromBase64 } from "../../api/utils/index.js";
 import { MESSAGE_PATH, Route } from "../../Breads-Shared/APIConfig.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
+import { isMediaLegacyFallbackEnabled } from "../../api/services/mediaConvention.js";
+import { validateMediaUrl } from "../../api/validators/validateMediaUrl.js";
 import { ObjectId, destructObjectId } from "../../utils/index.js";
 import { sendToSpecificUser } from "../services/message.js";
 import logger from "../../core/logger.js";
@@ -113,6 +116,63 @@ export default class MessageController {
         return;
       }
 
+      // FR-4 (cutover): media phải là URL Cloudinary hợp lệ, không còn nhận base64 mặc định.
+      // Chạy TRƯỚC khi tạo/cập nhật conversation để 1 item không hợp lệ không để lại
+      // `lastMsgId` trỏ tới message không bao giờ được insert.
+      // Thứ tự check per-ITEM BẮT BUỘC (epic.md AD-4/AD-5): (1) GIF → bỏ qua validate;
+      // (2) flag break-glass + `data:` → fallback base64 cũ; (3) else → validate strict.
+      // Đảo (2) và (3) khiến flag thành dead code (bug AD5-1).
+      let processedMedia: any[] = media ?? [];
+      if (media?.length) {
+        const sortedPairId = [String(senderId), String(recipientId)].sort().join("_");
+        const checkedMedia = await Promise.all(
+          media.map(async (m: any) => {
+            const url = typeof m?.url === "string" ? m.url : "";
+
+            // (1) Carve-out GIF ở cấp ITEM (AD-4) — GIF từ provider ngoài Cloudinary là hợp lệ,
+            // bất kể batch có bao nhiêu item khác.
+            if (
+              typeof m?.type === "string" &&
+              m.type.toLowerCase() === Constants.MEDIA_TYPE.GIF
+            ) {
+              return { valid: true, item: m };
+            }
+
+            // (2) Lối thoát khẩn cấp khi Be/Fe lệch deploy (AD-5), mặc định TẮT.
+            if (isMediaLegacyFallbackEnabled() && url.startsWith("data:")) {
+              const imgUrl = await uploadFileFromBase64({ base64: url });
+              return {
+                valid: true,
+                item: { url: imgUrl ?? url, type: Constants.MEDIA_TYPE.IMAGE },
+              };
+            }
+
+            // (3) Đường mặc định sau cutover.
+            const valid = validateMediaUrl(url, {
+              namespace: "message",
+              expectedKey: sortedPairId,
+            });
+            return { valid, item: m };
+          })
+        );
+
+        if (checkedMedia.some((m) => !m.valid)) {
+          logger.warn(
+            { socketId: socket?.id, authUserId },
+            "sendMessage rejected: invalid media url"
+          );
+          cb?.({
+            status: "error",
+            message: "Invalid media URL. Upload media via the signed upload flow first.",
+            code: "INVALID_MEDIA_URL",
+            data: [],
+          });
+          return;
+        }
+
+        processedMedia = checkedMedia.map((m) => m.item);
+      }
+
       for (let i = 0; i < numberNewMsg; i++) {
         listMsgId.push(ObjectId());
       }
@@ -207,30 +267,9 @@ export default class MessageController {
             isReplied = true;
           }
         } else if (media?.length && !addMedia) {
-          const isAddGif =
-            media.length === 1 && media[0].type === Constants.MEDIA_TYPE.GIF;
-          let uploadMedia = media;
-
-          if (!isAddGif) {
-            uploadMedia = await Promise.all(
-              media.map(async (m: any) => {
-                if (m.url && typeof m.url === "string" && m.url.startsWith("data:")) {
-                  const imgUrl = await uploadFileFromBase64({
-                    base64: m.url,
-                  });
-                  return {
-                    url: imgUrl ?? m.url,
-                    type: Constants.MEDIA_TYPE.IMAGE,
-                  };
-                }
-                return m;
-              })
-            );
-          }
-
           newMsg = new Message({
             ...msgInfo,
-            media: uploadMedia,
+            media: processedMedia,
             type: MEDIA,
           });
           if (respondTo && !isReplied) {
@@ -993,9 +1032,41 @@ export default class MessageController {
 
       const { msgInfo, conversationsInfo } = validation.data;
 
+      // FR-4 / AD-2 (revised): KHÔNG tin `msgInfo.media` do client gửi. `msgInfo._id` chính là
+      // `_id` của message GỐC đang forward (xác nhận qua `parentMsg: msgInfo._id` bên dưới), nên
+      // tra thẳng DB và dùng media đã lưu — vừa chặn client inject media tuỳ ý, vừa không reject
+      // media cũ (có từ trước epic này, không theo convention public_id mới).
+      if (!msgInfo?._id || !mongoose.isValidObjectId(msgInfo._id)) {
+        cb?.({ status: "error", message: "Invalid forward payload", data: null });
+        return;
+      }
+
+      const originalMsg = await Message.findOne({ _id: ObjectId(msgInfo._id) });
+      if (!originalMsg) {
+        cb?.({ status: "error", message: "Original message not found", data: null });
+        return;
+      }
+
+      // Fix IDOR (SEC-1/AD2-1): `_id` tồn tại là chưa đủ — client có thể gửi `_id` của message
+      // thuộc conversation họ không tham gia để copy media riêng tư của người khác. Bắt buộc
+      // kiểm tra quyền sở hữu, reject TOÀN BỘ batch nếu không phải participant.
+      const originalConv = await Conversation.findOne({
+        _id: ObjectId(originalMsg.conversationId),
+        participants: ObjectId(authUserId),
+      });
+      if (!originalConv) {
+        logger.warn(
+          { socketId: socket?.id, authUserId, msgId: String(msgInfo._id) },
+          "sendNext rejected: user is not a participant of the original conversation"
+        );
+        cb?.({ status: "error", message: "Forward not allowed", data: null });
+        return;
+      }
+
       const listMsg = conversationsInfo.map((ele: any) => {
         const newMsgInfo = {
           ...msgInfo,
+          media: originalMsg.media,
           _id: ObjectId(),
           sender: ObjectId(authUserId),
           usersSeen: [],
