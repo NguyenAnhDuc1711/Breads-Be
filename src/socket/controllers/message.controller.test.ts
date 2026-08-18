@@ -679,6 +679,154 @@ test("sendMessage: check ORDER — flag+`data:` branch fires BEFORE validateMedi
   assert.equal(flagOff.res?.code, "INVALID_MEDIA_URL");
 });
 
+// ---------------------------------------------------------------------------
+// getConversations — chưa có coverage trước epic unread-message-count (task 013).
+// ---------------------------------------------------------------------------
+
+const CONV_ID_2 = "6512f0a1b2c3d4e5f6a7b8c4";
+
+const mockAggregateResult = () => [
+  {
+    _id: CONV_ID,
+    theme: "default",
+    emoji: ":thumbsup:",
+    participant: { _id: USER_B, username: "userB", avatar: "avaB" },
+    lastMsg: [{ _id: MSG_ID, content: "Hello", sender: USER_B }],
+  },
+  {
+    _id: CONV_ID_2,
+    theme: "dark",
+    emoji: ":heart:",
+    participant: { _id: USER_C, username: "userC", avatar: "avaC" },
+    lastMsg: [],
+  },
+];
+
+test("getConversations: unauthenticated socket returns unauthorized error", async () => {
+  let cbResult: any = null;
+  const socket = fakeSocket();
+
+  await MessageController.getConversations(
+    {},
+    (res: any) => { cbResult = res; },
+    socket as any
+  );
+
+  assert.equal(cbResult?.status, "error");
+  assert.equal(cbResult?.message, "Unauthorized");
+});
+
+test("getConversations: returns unreadCount per item + globalTotal, preserving original response shape (FR-6/FR-7, backward-compat)", async () => {
+  let cbResult: any = null;
+  const socket = fakeSocket(USER_A);
+
+  await withStubbedModel(
+    [
+      [Conversation, "aggregate", async () => mockAggregateResult()],
+      [
+        ConversationRead,
+        "find",
+        () => ({
+          lean: async () => [{ conversationId: CONV_ID, unreadCount: 3 }],
+        }),
+      ],
+      [ConversationRead, "aggregate", async () => [{ _id: null, total: 3 }]],
+    ],
+    async () => {
+      await MessageController.getConversations(
+        { page: 1, limit: 15 },
+        (res: any) => { cbResult = res; },
+        socket as any
+      );
+    }
+  );
+
+  assert.equal(cbResult?.status, "success");
+  // Backward-compat: `data` vẫn là MẢNG, field cũ còn nguyên.
+  assert.ok(Array.isArray(cbResult.data));
+  assert.equal(cbResult.data.length, 2);
+  assert.equal(cbResult.data[0].theme, "default");
+  assert.equal(cbResult.data[0].emoji, ":thumbsup:");
+  assert.equal(cbResult.data[0].participant.username, "userB");
+  assert.equal(cbResult.data[0].lastMsg._id, MSG_ID);
+  // Field mới: unreadCount đúng cho conversation có cache (CONV_ID) và mặc định 0 cho
+  // conversation chưa từng có ConversationRead (CONV_ID_2).
+  assert.equal(cbResult.data[0].unreadCount, 3);
+  assert.equal(cbResult.data[1].unreadCount, 0);
+  // globalTotal ở CẤP NGOÀI response, không lồng vào từng item.
+  assert.equal(cbResult.globalTotal, 3);
+});
+
+test("getConversations: NEVER calls recomputeUnreadCount from the read path (plan-review CRIT-2)", async () => {
+  let cbResult: any = null;
+  const socket = fakeSocket(USER_A);
+  let recomputeEntryPointCalled = false;
+
+  await withStubbedModel(
+    [
+      [Conversation, "aggregate", async () => mockAggregateResult()],
+      [
+        ConversationRead,
+        "find",
+        () => ({ lean: async () => [] }),
+      ],
+      [ConversationRead, "aggregate", async () => []],
+      [
+        ConversationRead,
+        "findOneAndUpdate",
+        async () => {
+          // Đây là entry point DUY NHẤT của recomputeUnreadCount/markConversationRead — nếu
+          // getConversations gọi tới đây tức là đã vi phạm CRIT-2 (đọc kèm ghi/recompute).
+          recomputeEntryPointCalled = true;
+          return { _id: "doc-1", lastReadAt: new Date(0) };
+        },
+      ],
+    ],
+    async () => {
+      await MessageController.getConversations(
+        {},
+        (res: any) => { cbResult = res; },
+        socket as any
+      );
+    }
+  );
+
+  assert.equal(cbResult?.status, "success");
+  assert.equal(
+    recomputeEntryPointCalled,
+    false,
+    "getConversations must only use getCachedUnreadCounts/getGlobalUnreadTotal — never recomputeUnreadCount"
+  );
+});
+
+test("getConversations: degrades gracefully when unread read fails — original fields still returned", async () => {
+  let cbResult: any = null;
+  const socket = fakeSocket(USER_A);
+
+  await withStubbedModel(
+    [
+      [Conversation, "aggregate", async () => mockAggregateResult()],
+      [
+        ConversationRead,
+        "find",
+        () => { throw new Error("simulated DB failure"); },
+      ],
+    ],
+    async () => {
+      await MessageController.getConversations(
+        {},
+        (res: any) => { cbResult = res; },
+        socket as any
+      );
+    }
+  );
+
+  assert.equal(cbResult?.status, "success", "unread read failure must not fail the whole getConversations request");
+  assert.equal(cbResult.data.length, 2);
+  assert.equal(cbResult.data[0].theme, "default");
+  assert.equal(cbResult.data[0].unreadCount, undefined, "degraded response simply omits unreadCount, doesn't crash");
+});
+
 test("getMessages: unauthenticated socket returns unauthorized error", async () => {
   let cbResult: any = null;
   const socket = fakeSocket();

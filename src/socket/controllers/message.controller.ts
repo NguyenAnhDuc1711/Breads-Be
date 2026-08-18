@@ -17,6 +17,7 @@ import {
   recomputeUnreadCount,
   markConversationRead,
   getGlobalUnreadTotal,
+  getCachedUnreadCounts,
 } from "../../api/services/conversationRead.service.js";
 import logger from "../../core/logger.js";
 import {
@@ -496,7 +497,28 @@ export default class MessageController {
         return conversation;
       });
 
-      cb?.({ status: "success", data: result });
+      // Unread-count read (FR-6/FR-7, AD-5/AD-8) — path đọc gọi thường xuyên nhất (mỗi lần mở
+      // app). CHỈ dùng hàm chỉ-đọc (getCachedUnreadCounts/getGlobalUnreadTotal) — TUYỆT ĐỐI
+      // không gọi recomputeUnreadCount ở đây (sẽ biến path đọc thành N+1 + ghi-khi-đọc, đi
+      // ngược nguyên lý cache-để-đọc-rẻ — plan-review CRIT-2). Additive-only: giữ nguyên `data`
+      // là mảng, chỉ thêm field `unreadCount` vào từng item + `globalTotal` ở cấp ngoài response,
+      // không đổi shape cũ (backward-compat cho client hiện tại). Degrade gracefully nếu lỗi.
+      let globalTotal = 0;
+      try {
+        const conversationIds = result.map((c: any) => c._id);
+        const unreadCounts = await getCachedUnreadCounts({
+          conversationIds,
+          userId: authUserId,
+        });
+        for (const conversation of result) {
+          (conversation as any).unreadCount = unreadCounts[String(conversation._id)] ?? 0;
+        }
+        globalTotal = await getGlobalUnreadTotal(authUserId);
+      } catch (err) {
+        logger.error({ err }, "getConversations: unread read failed (non-fatal, degrading)");
+      }
+
+      cb?.({ status: "success", data: result, globalTotal });
     } catch (error) {
       logger.error({ err: error }, "getConversations failed");
       cb?.({ status: "error", data: [] });
