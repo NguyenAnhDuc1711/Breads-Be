@@ -32,3 +32,12 @@ export const authTierLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 // Global-tier: toàn bộ /api còn lại. Route đã có authTierLimiter riêng vẫn nhận thêm global-tier
 // (2 lớp rate-limit độc lập, lớp nghiêm ngặt hơn trigger trước — không xung đột).
 export const globalTierLimiter = createRateLimiter({ windowMs: 60_000, max: 100 });
+
+// Media-sign tier (epic presigned-media-upload, AD-3 + FR-6): endpoint ký batch upload Cloudinary.
+// Cùng cơ chế `createRateLimiter` với 2 limiter trên — KHÔNG phải `messageSendLimiter`/
+// `messageActionLimiter` ở `src/socket/middlewares/rateLimiter.ts` (SocketRateLimiter, cửa sổ theo
+// giây, dành cho throughput socket liên tục).
+//
+// 20/phút thay vì 5 như authTierLimiter: FR-1/FR-2 gộp theo BATCH (1 lần gọi cho cả hành động
+// compose, không phải 1 lần/file), nên 5/phút sẽ chặn nhầm user soạn nhiều tin/post liên tiếp.
+export const mediaSignLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
