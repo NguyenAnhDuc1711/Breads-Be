@@ -4,6 +4,8 @@ import axios from "axios";
 import Conversation from "../../api/models/conversation.model.js";
 import Message from "../../api/models/message.model.js";
 import User from "../../api/models/user.model.js";
+import ConversationRead from "../../api/models/conversationRead.model.js";
+import { MESSAGE_PATH, Route } from "../../Breads-Shared/APIConfig.js";
 import logger from "../../core/logger.js";
 import MessageController from "./message.controller.js";
 import { messageSendLimiter, messageActionLimiter } from "../middlewares/rateLimiter.js";
@@ -132,6 +134,10 @@ test("sendMessage: rate limit blocks spamming exceeding limit", async () => {
         }),
       ],
       [User, "updateOne", async () => {}],
+      [ConversationRead, "findOneAndUpdate", async () => ({ _id: "doc-1", lastReadAt: new Date(0) })],
+      [ConversationRead, "updateOne", async () => {}],
+      [ConversationRead, "aggregate", async () => []],
+      [Message, "countDocuments", async () => 0],
     ],
     async () => {
       for (let i = 0; i < 6; i++) {
@@ -201,6 +207,10 @@ test("sendMessage: sanitized text removes dangerous script tags", async () => {
         }),
       ],
       [User, "updateOne", async () => {}],
+      [ConversationRead, "findOneAndUpdate", async () => ({ _id: "doc-1", lastReadAt: new Date(0) })],
+      [ConversationRead, "updateOne", async () => {}],
+      [ConversationRead, "aggregate", async () => []],
+      [Message, "countDocuments", async () => 0],
     ],
     async () => {
       await MessageController.sendMessage(
@@ -273,6 +283,10 @@ test("sendMessage: authenticated user emits to room user:recipientId and saves m
         }),
       ],
       [User, "updateOne", async () => {}],
+      [ConversationRead, "findOneAndUpdate", async () => ({ _id: "doc-1", lastReadAt: new Date(0) })],
+      [ConversationRead, "updateOne", async () => {}],
+      [ConversationRead, "aggregate", async () => []],
+      [Message, "countDocuments", async () => 0],
     ],
     async () => {
       await MessageController.sendMessage(
@@ -289,8 +303,167 @@ test("sendMessage: authenticated user emits to room user:recipientId and saves m
   assert.equal(cbResult?.status, "success");
   assert.equal(updateOneCalled, true);
   assert.equal(insertManyCalled, true);
-  assert.equal(io.emits.length, 1);
-  assert.equal(io.emits[0].target, `user:${USER_B}`);
+  // Regression (plan-review CRIT-1): hành vi GỐC — đúng 1 emit GET_MESSAGE tới recipient — phải
+  // còn nguyên, cộng thêm 1 emit UNREAD_UPDATE mới (FR-2/FR-3) cho cùng recipient (là participant
+  // duy nhất khác sender trong conversation 1-1 này).
+  assert.equal(io.emits.length, 2);
+  const getMessageEmit = io.emits.find((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.GET_MESSAGE);
+  assert.equal(getMessageEmit?.target, `user:${USER_B}`);
+  const unreadEmit = io.emits.find((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.UNREAD_UPDATE);
+  assert.equal(unreadEmit?.target, `user:${USER_B}`);
+  assert.equal(unreadEmit?.d.conversationId, CONV_ID);
+  assert.equal(typeof unreadEmit?.d.unreadCount, "number");
+  assert.equal(typeof unreadEmit?.d.globalTotal, "number");
+  messageSendLimiter.reset(USER_A);
+});
+
+test("sendMessage: with 3+ participants, unread is pushed to EVERY participant except sender (AD-6)", async () => {
+  messageSendLimiter.reset(USER_A);
+  let cbResult: any = null;
+  const socket = fakeSocket(USER_A);
+  const io = fakeIo() as any;
+
+  // `sendMessage` chỉ biết 1 `recipientId` tường minh (USER_B), nhưng conversation thực tế có
+  // 3 participant (USER_A, USER_B, USER_C) — vòng lặp unread-bookkeeping (AD-6) phải tự lấy
+  // TOÀN BỘ participants từ `conversation`, không chỉ dựa vào biến `recipientId`.
+  const mockConvQuery: any = {
+    _id: CONV_ID,
+    participants: [USER_A, USER_B, USER_C],
+    save: async () => {},
+    populate: () => ({
+      populate: () => ({
+        lean: async () => ({
+          _id: CONV_ID,
+          participants: [{ _id: USER_A }, { _id: USER_B }, { _id: USER_C }],
+          lastMsgId: { _id: MSG_ID },
+        }),
+      }),
+    }),
+  };
+
+  const recomputedFor: string[] = [];
+
+  await withStubbedModel(
+    [
+      [Conversation, "findOne", () => mockConvQuery],
+      [Conversation, "updateOne", async () => {}],
+      [Message, "insertMany", async () => {}],
+      [
+        Message,
+        "find",
+        () => ({
+          populate: () => ({
+            populate: () => ({
+              populate: async () => [
+                { _id: MSG_ID, conversationId: CONV_ID, sender: USER_A, content: "Hi group" },
+              ],
+            }),
+          }),
+        }),
+      ],
+      [User, "updateOne", async () => {}],
+      [
+        ConversationRead,
+        "findOneAndUpdate",
+        async (filter: any) => {
+          recomputedFor.push(String(filter.userId));
+          return { _id: `doc-${filter.userId}`, lastReadAt: new Date(0) };
+        },
+      ],
+      [ConversationRead, "updateOne", async () => {}],
+      [ConversationRead, "aggregate", async () => []],
+      [Message, "countDocuments", async () => 0],
+    ],
+    async () => {
+      await MessageController.sendMessage(
+        { recipientId: USER_B, message: { content: "Hi group" } },
+        (res: any) => {
+          cbResult = res;
+        },
+        socket as any,
+        io
+      );
+    }
+  );
+
+  assert.equal(cbResult?.status, "success");
+  // 2 participant khác sender (USER_B, USER_C) — cả 2 phải được recompute VÀ nhận UNREAD_UPDATE,
+  // không chỉ đúng 1 người theo `recipientId` cũ.
+  assert.deepEqual(recomputedFor.sort(), [USER_B, USER_C].sort());
+  const unreadEmits = io.emits.filter((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.UNREAD_UPDATE);
+  assert.equal(unreadEmits.length, 2);
+  assert.deepEqual(
+    unreadEmits.map((e: any) => e.target).sort(),
+    [`user:${USER_B}`, `user:${USER_C}`].sort()
+  );
+  messageSendLimiter.reset(USER_A);
+});
+
+test("sendMessage: unread bookkeeping failure does not break the send response (failure isolation)", async () => {
+  messageSendLimiter.reset(USER_A);
+  let cbResult: any = null;
+  const socket = fakeSocket(USER_A);
+  const io = fakeIo() as any;
+
+  const mockConvQuery: any = {
+    _id: CONV_ID,
+    participants: [USER_A, USER_B],
+    save: async () => {},
+    populate: () => ({
+      populate: () => ({
+        lean: async () => ({
+          _id: CONV_ID,
+          participants: [{ _id: USER_A }, { _id: USER_B }],
+          lastMsgId: { _id: MSG_ID },
+        }),
+      }),
+    }),
+  };
+
+  await withStubbedModel(
+    [
+      [Conversation, "findOne", () => mockConvQuery],
+      [Conversation, "updateOne", async () => {}],
+      [Message, "insertMany", async () => {}],
+      [
+        Message,
+        "find",
+        () => ({
+          populate: () => ({
+            populate: () => ({
+              populate: async () => [
+                { _id: MSG_ID, conversationId: CONV_ID, sender: USER_A, content: "Hello" },
+              ],
+            }),
+          }),
+        }),
+      ],
+      [User, "updateOne", async () => {}],
+      [
+        ConversationRead,
+        "findOneAndUpdate",
+        async () => {
+          throw new Error("simulated DB failure in unread bookkeeping");
+        },
+      ],
+    ],
+    async () => {
+      await MessageController.sendMessage(
+        { recipientId: USER_B, message: { content: "Hello" } },
+        (res: any) => {
+          cbResult = res;
+        },
+        socket as any,
+        io
+      );
+    }
+  );
+
+  assert.equal(
+    cbResult?.status,
+    "success",
+    "a thrown error in unread bookkeeping must not fail the sender's response"
+  );
   messageSendLimiter.reset(USER_A);
 });
 
@@ -382,6 +555,10 @@ const runSendMessageWithMedia = async (
           }),
         ],
         [User, "updateOne", async () => {}],
+        [ConversationRead, "findOneAndUpdate", async () => ({ _id: "doc-1", lastReadAt: new Date(0) })],
+        [ConversationRead, "updateOne", async () => {}],
+        [ConversationRead, "aggregate", async () => []],
+        [Message, "countDocuments", async () => 0],
         [
           axios,
           "post",

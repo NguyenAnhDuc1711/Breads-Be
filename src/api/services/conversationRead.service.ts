@@ -11,9 +11,19 @@ import Message from "../models/message.model.js";
 import { ObjectId } from "../../utils/index.js";
 
 // Hàm (không phải const cố định lúc import module) để task test được NFR-4 bằng cách
-// stub giá trị trả về, thay vì phụ thuộc Date.now() thật lúc chạy test.
+// set env var trước khi gọi, thay vì phụ thuộc thời điểm chạy thật.
+//
+// QUAN TRỌNG: mặc định KHÔNG được là `Date.now()` — nếu vậy, lazy-create cho 1 tin nhắn VỪA
+// MỚI tạo (trigger chính lazy-create này) sẽ có `lastReadAt` = "bây giờ", và điều kiện đếm
+// `createdAt > lastReadAt` loại trừ NHẦM chính tin nhắn vừa kích hoạt recompute (vì createdAt
+// của nó luôn <= thời điểm recompute chạy ngay sau đó) — bug tự loại trừ tin mới nhất. Mặc định
+// = epoch (không hồi tố gì) khi chưa cấu hình `UNREAD_COUNT_ROLLOUT_AT` — biến môi trường này
+// chỉ nên được set TƯỜNG MINH tại đúng thời điểm rollout thật (production), không phải để mỗi
+// lần gọi tự suy ra "bây giờ".
 export const getRolloutCutoverAt = (): Date =>
-  new Date(process.env.UNREAD_COUNT_ROLLOUT_AT || Date.now());
+  process.env.UNREAD_COUNT_ROLLOUT_AT
+    ? new Date(process.env.UNREAD_COUNT_ROLLOUT_AT)
+    : new Date(0);
 
 const countUnread = async (conversationId: any, userId: any, lastReadAt: Date) => {
   return Message.countDocuments({
