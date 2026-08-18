@@ -33,6 +33,9 @@ uploads/
 test/results/*
 !test/results/.gitkeep
 
+# k6 test credentials (contains real access tokens)
+test/.k6-creds.json
+
 .claude
 .ccpm
 skill

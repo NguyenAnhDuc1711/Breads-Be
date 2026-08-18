@@ -6,13 +6,25 @@
 import { z } from "zod";
 import { objectIdSchema } from "./common.ts";
 
+// `entityType` + context quyết định `public_id` (`generatePublicId`, xem `util.route.ts`), theo
+// đúng convention đã dùng cho `media` (`mediaSignSchema`). `recipientId` bắt buộc cho message
+// (không có nó thì `generatePublicId` throw); vô nghĩa cho post. Danh tính người upload
+// (`senderId`/`authorId`) LUÔN lấy từ `req.user`, không nhận từ client.
 export const uploadSchema = {
   query: z.object({
     userId: objectIdSchema,
   }),
-  body: z.object({
-    filesName: z.string().min(1),
-  }),
+  body: z.discriminatedUnion("entityType", [
+    z.object({
+      entityType: z.literal("message"),
+      recipientId: objectIdSchema,
+      filesName: z.string().min(1),
+    }),
+    z.object({
+      entityType: z.literal("post"),
+      filesName: z.string().min(1),
+    }),
+  ]),
 };
 
 export const sendForgotPWMailSchema = {

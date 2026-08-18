@@ -127,6 +127,8 @@ export const updatePostSchema = {
       .transform((val) => (val === undefined ? val : sanitizeText(val))),
     media: z.array(z.any()).optional(),
     survey: z.array(z.any()).optional(),
+    visibility: z.number().optional(),
+    files: z.array(z.any()).optional(),
   }),
 };
 

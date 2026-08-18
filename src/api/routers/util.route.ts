@@ -11,8 +11,8 @@ import asyncHandler from "../../helpers/asyncHandler.js";
 import { ObjectId } from "../../utils/index.js";
 import { sendForgotPWMail } from "../controllers/util.controller.js";
 import protectRoute from "../middlewares/protectRoute.js";
+import { generatePublicId } from "../services/mediaConvention.js";
 import {
-  getAllFiles,
   rejectUnsupportedFileTypes,
   upload,
   validateUploadUserId,
@@ -54,28 +54,30 @@ router.post(
   upload.array("files"),
   rejectUnsupportedFileTypes,
   validate(uploadSchema),
-  asyncHandler(async (req, res) => {
+  asyncHandler(async (req: any, res) => {
     const userId = req.query.userId;
+    const { entityType, recipientId } = req.body;
     const filesName = req.body.filesName.split(",");
     const filesInfo = JSON.parse(JSON.stringify(req.files));
     const dir = `./uploads/${userId}`;
-    const filesPath = await getAllFiles(dir);
+    // Cùng convention `public_id` với `media` (`generatePublicId`, FR-1 epic
+    // presigned-media-upload) — danh tính người upload LUÔN lấy từ `req.user`, không từ client.
+    const context =
+      entityType === "message"
+        ? { senderId: req.user._id.toString(), recipientId }
+        : { authorId: req.user._id.toString() };
     const urls = [];
-    let i = 0;
-    for (let filePath of filesPath) {
-      await cloudinary.v2.uploader.upload(
-        filePath,
-        { resource_type: "raw" },
-        function (error, result) {
-          if (error) {
-            logger.error({ err: error }, "cloudinary upload failed");
-          }
-          if (result?.secure_url) {
-            urls[i] = result.secure_url;
-            i++;
-          }
-        }
-      );
+    for (const file of filesInfo) {
+      try {
+        const result = await cloudinary.v2.uploader.upload(file.path, {
+          resource_type: "raw",
+          public_id: generatePublicId(entityType, context),
+        });
+        urls.push(result.secure_url);
+      } catch (error) {
+        logger.error({ err: error }, "cloudinary upload failed");
+        urls.push("");
+      }
     }
     fs.rmSync(dir, { recursive: true, force: true });
     // Save files to db
