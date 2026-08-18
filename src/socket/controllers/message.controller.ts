@@ -936,12 +936,33 @@ export default class MessageController {
       );
 
       for (const p of otherParticipants) {
+        const participantId = destructObjectId(p);
+
         await sendToSpecificUser({
-          recipientId: destructObjectId(p),
+          recipientId: participantId,
           io,
           path: Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG,
           payload: result,
         });
+
+        // Unread-count bookkeeping (FR-2 trigger b / FR-3) — try/catch RIÊNG cho từng participant,
+        // tách khỏi push báo-thu-hồi ở trên: 1 lỗi tính unread không được chặn báo-thu-hồi của
+        // participant đó hay của những participant khác trong cùng vòng lặp.
+        try {
+          const unreadCount = await recomputeUnreadCount({
+            conversationId: msgInfo.conversationId,
+            userId: participantId,
+          });
+          const globalTotal = await getGlobalUnreadTotal(participantId);
+          await sendToSpecificUser({
+            recipientId: participantId,
+            io,
+            path: Route.MESSAGE + MESSAGE_PATH.UNREAD_UPDATE,
+            payload: { conversationId: msgInfo.conversationId, unreadCount, globalTotal },
+          });
+        } catch (err) {
+          logger.error({ err }, "retrieveMsg: unread bookkeeping failed (non-fatal)");
+        }
       }
 
       cb?.({

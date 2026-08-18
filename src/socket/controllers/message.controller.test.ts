@@ -932,6 +932,10 @@ test("retrieveMsg: sender can retrieve and emits update to room", async () => {
       [Message, "findOne", async () => mockMsg],
       [Conversation, "findOne", async () => mockConv],
       [Message, "updateOne", async () => { updateOneCalled = true; }],
+      [ConversationRead, "findOneAndUpdate", async () => ({ _id: "doc-1", lastReadAt: new Date(0) })],
+      [ConversationRead, "updateOne", async () => {}],
+      [ConversationRead, "aggregate", async () => []],
+      [Message, "countDocuments", async () => 0],
     ],
     async () => {
       await MessageController.retrieveMsg(
@@ -947,6 +951,89 @@ test("retrieveMsg: sender can retrieve and emits update to room", async () => {
 
   assert.equal(cbResult?.status, "success");
   assert.equal(updateOneCalled, true);
-  assert.equal(io.emits.length, 1);
-  assert.equal(io.emits[0].target, `user:${USER_B}`);
+  // Regression (plan-review CRIT-1): push báo-thu-hồi GỐC (UPDATE_MSG) phải còn nguyên, cộng
+  // thêm push UNREAD_UPDATE mới (FR-2 trigger b / FR-3) cho cùng participant.
+  assert.equal(io.emits.length, 2);
+  const updateMsgEmit = io.emits.find((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG);
+  assert.equal(updateMsgEmit?.target, `user:${USER_B}`);
+  const unreadEmit = io.emits.find((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.UNREAD_UPDATE);
+  assert.equal(unreadEmit?.target, `user:${USER_B}`);
+  assert.equal(unreadEmit?.d.conversationId, CONV_ID);
+});
+
+test("retrieveMsg: with 3+ participants, unread is recomputed and pushed to EVERY participant except sender", async () => {
+  let cbResult: any = null;
+  const socket = fakeSocket(USER_A);
+  const io = fakeIo() as any;
+
+  const mockMsg = { _id: MSG_ID, conversationId: CONV_ID, sender: USER_A, isRetrieve: true };
+  const mockConv = { _id: CONV_ID, participants: [USER_A, USER_B, USER_C] };
+  const recomputedFor: string[] = [];
+
+  await withStubbedModel(
+    [
+      [Message, "findOne", async () => mockMsg],
+      [Conversation, "findOne", async () => mockConv],
+      [Message, "updateOne", async () => {}],
+      [
+        ConversationRead,
+        "findOneAndUpdate",
+        async (filter: any) => {
+          recomputedFor.push(String(filter.userId));
+          return { _id: `doc-${filter.userId}`, lastReadAt: new Date(0) };
+        },
+      ],
+      [ConversationRead, "updateOne", async () => {}],
+      [ConversationRead, "aggregate", async () => []],
+      [Message, "countDocuments", async () => 0],
+    ],
+    async () => {
+      await MessageController.retrieveMsg(
+        { msgId: MSG_ID },
+        (res: any) => { cbResult = res; },
+        socket as any,
+        io
+      );
+    }
+  );
+
+  assert.equal(cbResult?.status, "success");
+  assert.deepEqual(recomputedFor.sort(), [USER_B, USER_C].sort());
+  const unreadEmits = io.emits.filter((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.UNREAD_UPDATE);
+  assert.equal(unreadEmits.length, 2);
+});
+
+test("retrieveMsg: unread bookkeeping failure does not break the existing recall notification (failure isolation)", async () => {
+  let cbResult: any = null;
+  const socket = fakeSocket(USER_A);
+  const io = fakeIo() as any;
+
+  const mockMsg = { _id: MSG_ID, conversationId: CONV_ID, sender: USER_A, isRetrieve: true };
+  const mockConv = { _id: CONV_ID, participants: [USER_A, USER_B] };
+
+  await withStubbedModel(
+    [
+      [Message, "findOne", async () => mockMsg],
+      [Conversation, "findOne", async () => mockConv],
+      [Message, "updateOne", async () => {}],
+      [
+        ConversationRead,
+        "findOneAndUpdate",
+        async () => { throw new Error("simulated DB failure"); },
+      ],
+    ],
+    async () => {
+      await MessageController.retrieveMsg(
+        { msgId: MSG_ID },
+        (res: any) => { cbResult = res; },
+        socket as any,
+        io
+      );
+    }
+  );
+
+  assert.equal(cbResult?.status, "success");
+  const updateMsgEmit = io.emits.find((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG);
+  assert.ok(updateMsgEmit, "the pre-existing recall notification must still fire despite unread bookkeeping failure");
+  assert.equal(updateMsgEmit.target, `user:${USER_B}`);
 });
