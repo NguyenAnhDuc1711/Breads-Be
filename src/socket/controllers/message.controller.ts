@@ -13,6 +13,12 @@ import { isMediaLegacyFallbackEnabled } from "../../api/services/mediaConvention
 import { validateMediaUrl } from "../../api/validators/validateMediaUrl.js";
 import { ObjectId, destructObjectId } from "../../utils/index.js";
 import { sendToSpecificUser } from "../services/message.js";
+import {
+  recomputeUnreadCount,
+  markConversationRead,
+  getGlobalUnreadTotal,
+  getCachedUnreadCounts,
+} from "../../api/services/conversationRead.service.js";
 import logger from "../../core/logger.js";
 import {
   messageSendLimiter,
@@ -343,6 +349,31 @@ export default class MessageController {
         },
       });
 
+      // Unread-count bookkeeping (PRD unread-message-count, FR-2/FR-3). Cô lập lỗi ở
+      // try/catch RIÊNG — không được để lỗi ở đây làm fail response gửi tin cho sender.
+      try {
+        const otherParticipants = (conversation.participants || []).filter(
+          (p: any) => destructObjectId(p) !== senderId
+        );
+        await Promise.allSettled(
+          otherParticipants.map(async (participantId: any) => {
+            const unreadCount = await recomputeUnreadCount({
+              conversationId: conversation._id,
+              userId: participantId,
+            });
+            const globalTotal = await getGlobalUnreadTotal(participantId);
+            await sendToSpecificUser({
+              recipientId: participantId,
+              io,
+              path: Route.MESSAGE + MESSAGE_PATH.UNREAD_UPDATE,
+              payload: { conversationId: conversation._id, unreadCount, globalTotal },
+            });
+          })
+        );
+      } catch (err) {
+        logger.error({ err }, "sendMessage: unread bookkeeping failed (non-fatal)");
+      }
+
       cb?.({
         status: "success",
         data: {
@@ -466,7 +497,28 @@ export default class MessageController {
         return conversation;
       });
 
-      cb?.({ status: "success", data: result });
+      // Unread-count read (FR-6/FR-7, AD-5/AD-8) — path đọc gọi thường xuyên nhất (mỗi lần mở
+      // app). CHỈ dùng hàm chỉ-đọc (getCachedUnreadCounts/getGlobalUnreadTotal) — TUYỆT ĐỐI
+      // không gọi recomputeUnreadCount ở đây (sẽ biến path đọc thành N+1 + ghi-khi-đọc, đi
+      // ngược nguyên lý cache-để-đọc-rẻ — plan-review CRIT-2). Additive-only: giữ nguyên `data`
+      // là mảng, chỉ thêm field `unreadCount` vào từng item + `globalTotal` ở cấp ngoài response,
+      // không đổi shape cũ (backward-compat cho client hiện tại). Degrade gracefully nếu lỗi.
+      let globalTotal = 0;
+      try {
+        const conversationIds = result.map((c: any) => c._id);
+        const unreadCounts = await getCachedUnreadCounts({
+          conversationIds,
+          userId: authUserId,
+        });
+        for (const conversation of result) {
+          (conversation as any).unreadCount = unreadCounts[String(conversation._id)] ?? 0;
+        }
+        globalTotal = await getGlobalUnreadTotal(authUserId);
+      } catch (err) {
+        logger.error({ err }, "getConversations: unread read failed (non-fatal, degrading)");
+      }
+
+      cb?.({ status: "success", data: result, globalTotal });
     } catch (error) {
       logger.error({ err: error }, "getConversations failed");
       cb?.({ status: "error", data: [] });
@@ -906,12 +958,33 @@ export default class MessageController {
       );
 
       for (const p of otherParticipants) {
+        const participantId = destructObjectId(p);
+
         await sendToSpecificUser({
-          recipientId: destructObjectId(p),
+          recipientId: participantId,
           io,
           path: Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG,
           payload: result,
         });
+
+        // Unread-count bookkeeping (FR-2 trigger b / FR-3) — try/catch RIÊNG cho từng participant,
+        // tách khỏi push báo-thu-hồi ở trên: 1 lỗi tính unread không được chặn báo-thu-hồi của
+        // participant đó hay của những participant khác trong cùng vòng lặp.
+        try {
+          const unreadCount = await recomputeUnreadCount({
+            conversationId: msgInfo.conversationId,
+            userId: participantId,
+          });
+          const globalTotal = await getGlobalUnreadTotal(participantId);
+          await sendToSpecificUser({
+            recipientId: participantId,
+            io,
+            path: Route.MESSAGE + MESSAGE_PATH.UNREAD_UPDATE,
+            payload: { conversationId: msgInfo.conversationId, unreadCount, globalTotal },
+          });
+        } catch (err) {
+          logger.error({ err }, "retrieveMsg: unread bookkeeping failed (non-fatal)");
+        }
       }
 
       cb?.({
@@ -1001,6 +1074,26 @@ export default class MessageController {
         });
       }
 
+      // Unread-count bookkeeping (FR-4/FR-5) — đồng bộ CHÍNH authUserId (đa thiết bị), tách biệt
+      // hoàn toàn khỏi vòng push otherParticipants ở trên (mục đích khác: báo "tin đã được xem"
+      // cho người gửi). Cô lập lỗi riêng — không được làm fail response usersSeen đã hoạt động.
+      try {
+        const unreadCount = await markConversationRead({
+          conversationId,
+          userId: authUserId,
+          lastMsg: lastMsgUpdated,
+        });
+        const globalTotal = await getGlobalUnreadTotal(authUserId);
+        await sendToSpecificUser({
+          recipientId: authUserId,
+          io,
+          path: Route.MESSAGE + MESSAGE_PATH.UNREAD_UPDATE,
+          payload: { conversationId, unreadCount, globalTotal },
+        });
+      } catch (err) {
+        logger.error({ err }, "updateLastSeen: unread bookkeeping failed (non-fatal)");
+      }
+
       cb?.({ status: "success", data: lastMsgUpdated });
     } catch (err) {
       logger.error({ err }, "updateLastSeen failed");
@@ -1081,9 +1174,13 @@ export default class MessageController {
 
       await Message.insertMany(listMsg, { ordered: false });
 
+      // participants[i] được lấy lại từ chính findOneAndUpdate bên dưới (không thêm query
+      // riêng) — dùng cho vòng lặp unread-bookkeeping ở dưới (AD-6: forward có thể vào 1
+      // conversation nhiều thành viên, không chỉ đúng 1 recipientId tường minh).
+      const conversationParticipants: any[][] = [];
       for (let i = 0; i < conversationsInfo.length; i++) {
         const recipientId = conversationsInfo[i].recipientId;
-        await Conversation.updateOne(
+        const updatedConv = await Conversation.findOneAndUpdate(
           {
             _id: conversationsInfo[i]._id,
             participants: ObjectId(authUserId),
@@ -1094,6 +1191,7 @@ export default class MessageController {
             },
           }
         );
+        conversationParticipants[i] = updatedConv?.participants || [];
         await User.updateOne(
           {
             _id: ObjectId(recipientId),
@@ -1127,6 +1225,30 @@ export default class MessageController {
             conversationInfo: conversationInfoToRecipient,
           },
         });
+
+        // Unread-count bookkeeping (FR-2/FR-3) — cô lập lỗi riêng, không chặn forward.
+        try {
+          const otherParticipants = (conversationParticipants[index] || []).filter(
+            (p: any) => destructObjectId(p) !== authUserId
+          );
+          await Promise.allSettled(
+            otherParticipants.map(async (participantId: any) => {
+              const unreadCount = await recomputeUnreadCount({
+                conversationId: msg.conversationId,
+                userId: participantId,
+              });
+              const globalTotal = await getGlobalUnreadTotal(participantId);
+              await sendToSpecificUser({
+                recipientId: participantId,
+                io,
+                path: Route.MESSAGE + MESSAGE_PATH.UNREAD_UPDATE,
+                payload: { conversationId: msg.conversationId, unreadCount, globalTotal },
+              });
+            })
+          );
+        } catch (err) {
+          logger.error({ err }, "sendNext: unread bookkeeping failed (non-fatal)");
+        }
       }
 
       cb?.({

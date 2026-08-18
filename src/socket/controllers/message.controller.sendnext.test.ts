@@ -16,8 +16,10 @@ import mongoose from "mongoose";
 import Conversation from "../../api/models/conversation.model.js";
 import Message from "../../api/models/message.model.js";
 import User from "../../api/models/user.model.js";
+import ConversationRead from "../../api/models/conversationRead.model.js";
 import { messageSendLimiter } from "../middlewares/rateLimiter.js";
 import MessageController from "./message.controller.js";
+import { MESSAGE_PATH, Route } from "../../Breads-Shared/APIConfig.js";
 
 const MONGO_PORT = 47_100 + (process.pid % 500);
 const DB_NAME = "breads_sendnext_test";
@@ -144,7 +146,7 @@ const callSendNext = async (authUserId: string, payload: any) => {
 };
 
 test("sendNext: participant forwards a message — media comes from the DB, not from the client", async () => {
-  const { res } = await callSendNext(String(userA._id), {
+  const { res, io } = await callSendNext(String(userA._id), {
     msgInfo: {
       _id: String(msgInAC._id),
       type: "media",
@@ -155,6 +157,24 @@ test("sendNext: participant forwards a message — media comes from the DB, not 
   });
 
   assert.equal(res?.status, "success");
+
+  // FR-2/FR-3 (unread-message-count, task 010): forward tạo 1 message mới trong convAB — userB
+  // (participant khác sender duy nhất trong conversation 1-1 này) phải được recompute + nhận
+  // UNREAD_UPDATE, chạy trên DB THẬT (không stub) để chứng minh query đếm thật sự đúng.
+  const unreadDoc = await ConversationRead.findOne({
+    conversationId: convAB._id,
+    userId: userB._id,
+  }).lean();
+  assert.ok(unreadDoc, "ConversationRead document should be lazy-created for userB");
+  assert.equal((unreadDoc as any)?.unreadCount, 1);
+
+  const unreadEmit = io.emits.find(
+    (e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.UNREAD_UPDATE
+  );
+  assert.ok(unreadEmit, "sendNext must push an UNREAD_UPDATE event for the recipient");
+  assert.equal(unreadEmit.target, `user:${userB._id}`);
+  assert.equal(String(unreadEmit.d.conversationId), String(convAB._id));
+  assert.equal(unreadEmit.d.unreadCount, 1);
 
   const forwarded = await Message.find({ conversationId: convAB._id }).lean();
   assert.equal(forwarded.length, 1);
