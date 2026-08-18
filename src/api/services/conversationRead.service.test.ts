@@ -369,3 +369,30 @@ test("NFR-3: a stale write from a race self-heals on the next recompute call", a
     "the next recompute call must self-heal to the correct value (message predates T1, already read)"
   );
 });
+
+// ---------------------------------------------------------------------------
+// Verify Phase A, G-1 — guard against undefined conversationId/userId, closing the
+// ObjectId(undefined) footgun (silently returns a random ObjectId instead of throwing).
+// ---------------------------------------------------------------------------
+test("G-1: recomputeUnreadCount throws on missing conversationId/userId instead of silently using a random id", async () => {
+  await assert.rejects(() => recomputeUnreadCount({ conversationId: undefined, userId: USER_A }));
+  await assert.rejects(() => recomputeUnreadCount({ conversationId: CONV_ID, userId: undefined }));
+});
+
+test("G-1: markConversationRead throws on missing arguments", async () => {
+  await assert.rejects(() =>
+    markConversationRead({ conversationId: undefined, userId: USER_A, lastMsg: { _id: "x", createdAt: new Date() } })
+  );
+  await assert.rejects(() =>
+    markConversationRead({ conversationId: CONV_ID, userId: USER_A, lastMsg: {} as any })
+  );
+});
+
+test("G-1: getGlobalUnreadTotal throws on missing userId", async () => {
+  await assert.rejects(() => getGlobalUnreadTotal(undefined));
+});
+
+test("G-1: getCachedUnreadCounts throws on missing userId or non-array conversationIds", async () => {
+  await assert.rejects(() => getCachedUnreadCounts({ conversationIds: [CONV_ID], userId: undefined }));
+  await assert.rejects(() => getCachedUnreadCounts({ conversationIds: undefined as any, userId: USER_A }));
+});

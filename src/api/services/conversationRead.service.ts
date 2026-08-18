@@ -45,6 +45,12 @@ export const recomputeUnreadCount = async ({
   conversationId: any;
   userId: any;
 }): Promise<number> => {
+  // Verify-G-1: `ObjectId(undefined)` không throw — sinh id NGẪU NHIÊN thay vì báo lỗi (cùng
+  // footgun đã ghi nhận ở A-4, notification.controller.ts). Guard tường minh TRƯỚC mọi ObjectId(...).
+  if (!conversationId || !userId) {
+    throw new Error("recomputeUnreadCount: conversationId and userId are required");
+  }
+
   const doc = await ConversationRead.findOneAndUpdate(
     { conversationId: ObjectId(conversationId), userId: ObjectId(userId) },
     { $setOnInsert: { lastReadAt: getRolloutCutoverAt() } },
@@ -72,6 +78,12 @@ export const markConversationRead = async ({
   userId: any;
   lastMsg: { _id: any; createdAt: Date };
 }): Promise<number> => {
+  if (!conversationId || !userId || !lastMsg?._id || !lastMsg?.createdAt) {
+    throw new Error(
+      "markConversationRead: conversationId, userId, and lastMsg (_id + createdAt) are required"
+    );
+  }
+
   const doc = await ConversationRead.findOneAndUpdate(
     { conversationId: ObjectId(conversationId), userId: ObjectId(userId) },
     {
@@ -99,6 +111,10 @@ export const markConversationRead = async ({
  * Dùng ở: mọi payload real-time (FR-3/FR-5) và getConversations (FR-7).
  */
 export const getGlobalUnreadTotal = async (userId: any): Promise<number> => {
+  if (!userId) {
+    throw new Error("getGlobalUnreadTotal: userId is required");
+  }
+
   const result = await ConversationRead.aggregate([
     { $match: { userId: ObjectId(userId) } },
     { $group: { _id: null, total: { $sum: "$unreadCount" } } },
@@ -119,6 +135,10 @@ export const getCachedUnreadCounts = async ({
   conversationIds: any[];
   userId: any;
 }): Promise<Record<string, number>> => {
+  if (!userId || !Array.isArray(conversationIds)) {
+    throw new Error("getCachedUnreadCounts: userId and conversationIds (array) are required");
+  }
+
   const docs = await ConversationRead.find(
     {
       userId: ObjectId(userId),
