@@ -716,6 +716,169 @@ test("getMessages: non-participant socket gets access denied", async () => {
   assert.match(cbResult?.message, /access denied/i);
 });
 
+// ---------------------------------------------------------------------------
+// updateLastSeen — chưa có coverage trước epic unread-message-count (task 011).
+// Baseline hành vi GỐC (usersSeen update, push otherParticipants) + hành vi MỚI (FR-4/FR-5)
+// được viết cùng lúc để có 1 điểm quy chiếu regression rõ ràng cho các thay đổi sau này.
+// ---------------------------------------------------------------------------
+
+const mockUpdateLastSeenConversation = () => ({
+  _id: CONV_ID,
+  participants: [USER_A, USER_B],
+});
+
+const mockLastMsgUpdated = (overrides: any = {}) => ({
+  _id: MSG_ID,
+  conversationId: CONV_ID,
+  createdAt: new Date("2026-03-01T00:00:00Z"),
+  content: "Hello",
+  ...overrides,
+});
+
+const stubbedMessageFindOneChain = (result: any) => ({
+  populate: () => ({
+    populate: () => ({
+      populate: async () => result,
+    }),
+  }),
+});
+
+test("updateLastSeen: unauthenticated socket returns unauthorized error", async () => {
+  let cbResult: any = null;
+  const socket = fakeSocket();
+  const io = fakeIo() as any;
+
+  await MessageController.updateLastSeen(
+    { lastMsg: { _id: MSG_ID, conversationId: CONV_ID } },
+    (res: any) => { cbResult = res; },
+    socket as any,
+    io
+  );
+
+  assert.equal(cbResult?.status, "error");
+  assert.equal(cbResult?.message, "Unauthorized");
+});
+
+test("updateLastSeen: marks messages as seen and notifies otherParticipants (original behavior, regression baseline)", async () => {
+  let cbResult: any = null;
+  const socket = fakeSocket(USER_A);
+  const io = fakeIo() as any;
+  let updateManyFilter: any = null;
+
+  await withStubbedModel(
+    [
+      [Conversation, "findOne", async () => mockUpdateLastSeenConversation()],
+      [
+        Message,
+        "updateMany",
+        async (filter: any) => {
+          updateManyFilter = filter;
+          return { modifiedCount: 2 };
+        },
+      ],
+      [Message, "findOne", () => stubbedMessageFindOneChain(mockLastMsgUpdated())],
+      [ConversationRead, "findOneAndUpdate", async () => ({ _id: "doc-1", lastReadAt: new Date(0) })],
+      [ConversationRead, "updateOne", async () => {}],
+      [ConversationRead, "aggregate", async () => []],
+      [Message, "countDocuments", async () => 0],
+    ],
+    async () => {
+      await MessageController.updateLastSeen(
+        { lastMsg: { _id: MSG_ID, conversationId: CONV_ID, createdAt: new Date("2026-03-01T00:00:00Z") } },
+        (res: any) => { cbResult = res; },
+        socket as any,
+        io
+      );
+    }
+  );
+
+  // Hành vi GỐC không đổi:
+  assert.equal(cbResult?.status, "success");
+  assert.equal(cbResult?.data?._id, MSG_ID);
+  assert.equal(String(updateManyFilter.usersSeen.$nin[0]), USER_A);
+  const updateMsgEmit = io.emits.find((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG);
+  assert.ok(updateMsgEmit, "must still notify otherParticipants that the message was seen");
+  assert.equal(updateMsgEmit.target, `user:${USER_B}`);
+});
+
+test("updateLastSeen: syncs unreadCount=0 to the CALLER's own room, separate from the otherParticipants push (FR-4/FR-5)", async () => {
+  let cbResult: any = null;
+  const socket = fakeSocket(USER_A);
+  const io = fakeIo() as any;
+  let markReadArgs: any = null;
+
+  await withStubbedModel(
+    [
+      [Conversation, "findOne", async () => mockUpdateLastSeenConversation()],
+      [Message, "updateMany", async () => ({ modifiedCount: 1 })],
+      [Message, "findOne", () => stubbedMessageFindOneChain(mockLastMsgUpdated())],
+      [
+        ConversationRead,
+        "findOneAndUpdate",
+        async (filter: any) => {
+          markReadArgs = filter;
+          return { _id: "doc-1", lastReadAt: new Date(0) };
+        },
+      ],
+      [ConversationRead, "updateOne", async () => {}],
+      [ConversationRead, "aggregate", async () => [{ _id: null, total: 3 }]],
+      [Message, "countDocuments", async () => 0],
+    ],
+    async () => {
+      await MessageController.updateLastSeen(
+        { lastMsg: { _id: MSG_ID, conversationId: CONV_ID, createdAt: new Date("2026-03-01T00:00:00Z") } },
+        (res: any) => { cbResult = res; },
+        socket as any,
+        io
+      );
+    }
+  );
+
+  assert.equal(cbResult?.status, "success");
+  assert.equal(String(markReadArgs.userId), USER_A, "markConversationRead must target the caller (authUserId), not otherParticipants");
+
+  // 2 emit tách biệt: 1 tới otherParticipants (UPDATE_MSG, giữ nguyên), 1 tới CHÍNH authUserId
+  // (UNREAD_UPDATE, mới) — không được nhầm path/recipient giữa 2 vòng.
+  assert.equal(io.emits.length, 2);
+  const updateMsgEmit = io.emits.find((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG);
+  assert.equal(updateMsgEmit.target, `user:${USER_B}`);
+  const unreadEmit = io.emits.find((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.UNREAD_UPDATE);
+  assert.equal(unreadEmit.target, `user:${USER_A}`);
+  assert.equal(unreadEmit.d.unreadCount, 0);
+  assert.equal(unreadEmit.d.globalTotal, 3);
+});
+
+test("updateLastSeen: unread bookkeeping failure does not break the existing usersSeen response (failure isolation)", async () => {
+  let cbResult: any = null;
+  const socket = fakeSocket(USER_A);
+  const io = fakeIo() as any;
+
+  await withStubbedModel(
+    [
+      [Conversation, "findOne", async () => mockUpdateLastSeenConversation()],
+      [Message, "updateMany", async () => ({ modifiedCount: 1 })],
+      [Message, "findOne", () => stubbedMessageFindOneChain(mockLastMsgUpdated())],
+      [
+        ConversationRead,
+        "findOneAndUpdate",
+        async () => { throw new Error("simulated DB failure"); },
+      ],
+    ],
+    async () => {
+      await MessageController.updateLastSeen(
+        { lastMsg: { _id: MSG_ID, conversationId: CONV_ID, createdAt: new Date("2026-03-01T00:00:00Z") } },
+        (res: any) => { cbResult = res; },
+        socket as any,
+        io
+      );
+    }
+  );
+
+  assert.equal(cbResult?.status, "success", "unread bookkeeping failure must not break the existing mark-as-seen response");
+  const updateMsgEmit = io.emits.find((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG);
+  assert.ok(updateMsgEmit, "the pre-existing otherParticipants notification must still fire");
+});
+
 test("retrieveMsg: non-sender cannot retrieve message", async () => {
   let cbResult: any = null;
   const socket = fakeSocket(USER_B);

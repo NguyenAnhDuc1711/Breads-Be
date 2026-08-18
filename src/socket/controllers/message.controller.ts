@@ -15,6 +15,7 @@ import { ObjectId, destructObjectId } from "../../utils/index.js";
 import { sendToSpecificUser } from "../services/message.js";
 import {
   recomputeUnreadCount,
+  markConversationRead,
   getGlobalUnreadTotal,
 } from "../../api/services/conversationRead.service.js";
 import logger from "../../core/logger.js";
@@ -1028,6 +1029,26 @@ export default class MessageController {
           path: Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG,
           payload: lastMsgUpdated,
         });
+      }
+
+      // Unread-count bookkeeping (FR-4/FR-5) — đồng bộ CHÍNH authUserId (đa thiết bị), tách biệt
+      // hoàn toàn khỏi vòng push otherParticipants ở trên (mục đích khác: báo "tin đã được xem"
+      // cho người gửi). Cô lập lỗi riêng — không được làm fail response usersSeen đã hoạt động.
+      try {
+        const unreadCount = await markConversationRead({
+          conversationId,
+          userId: authUserId,
+          lastMsg: lastMsgUpdated,
+        });
+        const globalTotal = await getGlobalUnreadTotal(authUserId);
+        await sendToSpecificUser({
+          recipientId: authUserId,
+          io,
+          path: Route.MESSAGE + MESSAGE_PATH.UNREAD_UPDATE,
+          payload: { conversationId, unreadCount, globalTotal },
+        });
+      } catch (err) {
+        logger.error({ err }, "updateLastSeen: unread bookkeeping failed (non-fatal)");
       }
 
       cb?.({ status: "success", data: lastMsgUpdated });
