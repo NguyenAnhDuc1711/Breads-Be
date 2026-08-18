@@ -28,6 +28,7 @@ import { getPostsIdByFilter } from "../services/post.ts";
 import {
   createPostSchema,
   deletePostSchema,
+  getPostActivitiesSchema,
   getPostsQuerySchema,
   likeUnlikePostSchema,
   tickPostSurveySchema,
@@ -435,6 +436,16 @@ test("FR-9: likeUnlikePostSchema chặn param id không phải ObjectId", () => 
   assert.throws(() => likeUnlikePostSchema.params.parse({ id: "abc" }), z.ZodError);
 });
 
+test("getPostActivitiesSchema: validates id param and activity query types", () => {
+  assert.equal(getPostActivitiesSchema.params.parse({ id: VALID_ID }).id, VALID_ID);
+  assert.throws(() => getPostActivitiesSchema.params.parse({ id: "invalid-id" }), z.ZodError);
+
+  assert.equal(getPostActivitiesSchema.query.parse({ type: "likes", limit: "10" }).type, "likes");
+  assert.equal(getPostActivitiesSchema.query.parse({ type: "comments" }).type, "comments");
+  assert.equal(getPostActivitiesSchema.query.parse({ type: "reposts" }).type, "reposts");
+  assert.throws(() => getPostActivitiesSchema.query.parse({ type: "invalid-type" }), z.ZodError);
+});
+
 /* ------------------------------------------------------------------- HTTP thật */
 
 // AC FR-9: 400 phải xảy ra TRƯỚC controller — stub `reachedController` không được chạm tới.
@@ -546,7 +557,7 @@ test("NFR-4 (HTTP positive): payload hợp lệ chạm được controller trên
 // `post.route.ts` không import được trong test (xem đầu file: `feed/queue.ts` mở Redis lúc import),
 // nên kiểm wiring bằng cách đọc source — đúng cách `validate.test.ts` kiểm `src/app.ts`.
 // Đường dẫn theo cwd: `npm test` luôn chạy từ thư mục gốc repo.
-test("wiring: 9/10 route có validate(), CRAWL_POST cố ý không có", async () => {
+test("wiring: 10/11 route có validate(), CRAWL_POST cố ý không có", async () => {
   const src = await import("node:fs/promises").then((fs) =>
     fs.readFile("src/api/routers/post.route.ts", "utf8")
   );
@@ -557,10 +568,10 @@ test("wiring: 9/10 route có validate(), CRAWL_POST cố ý không có", async (
     .match(/router\.(get|post|put|delete)\([\s\S]*?\);/g);
 
   assert.ok(routeLines, "không parse được route nào từ post.route.ts");
-  assert.equal(routeLines.length, 10, "post.route.ts phải có đúng 10 route");
+  assert.equal(routeLines.length, 11, "post.route.ts phải có đúng 11 route");
 
   const withValidate = routeLines.filter((line) => line.includes("validate("));
-  assert.equal(withValidate.length, 9, "đúng 9 route phải có validate()");
+  assert.equal(withValidate.length, 10, "đúng 10 route phải có validate()");
 
   const crawl = routeLines.filter((line) => line.includes("CRAWL_POST"));
   assert.equal(crawl.length, 1);

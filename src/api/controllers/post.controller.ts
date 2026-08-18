@@ -7,6 +7,7 @@ import logger from "../../core/logger.js";
 import HTTPStatus from "../../utils/httpStatus.js";
 import { ObjectId } from "../../utils/index.js";
 import Category from "../models/category.model.js";
+import Follow from "../models/follow.model.js";
 import Like from "../models/like.model.js";
 import Link from "../models/link.model.js";
 import Post from "../models/post.model.js";
@@ -15,12 +16,14 @@ import User from "../models/user.model.js";
 import { FEED_CONFIG } from "../services/feed/config.ts";
 import { fanoutPostToFollowers } from "../services/feed/fanout.ts";
 import { dispatchQueue } from "../services/feed/queue.ts";
+import { isMediaLegacyFallbackEnabled } from "../services/mediaConvention.ts";
 import {
   getPostDetail,
   getPostsIdByFilter,
   handleReplyForParentPost,
 } from "../services/post.js";
 import { uploadFileFromBase64 } from "../utils/index.js";
+import { validateMediaUrl } from "../validators/validateMediaUrl.ts";
 
 /**
  * FR-10 / Task 090 fix: một payload "giống repost" (copy nội dung bài khác vào `quote.content`)
@@ -102,6 +105,41 @@ export const dispatchFanout = (
   }
 };
 
+/**
+ * Task 011 (FR-5, epic `presigned-media-upload`): 3-bước check dùng chung cho 1 item media MỚI
+ * (không phải toàn bộ batch) — ĐÚNG THỨ TỰ như task 010's `sendMessage` (xem `epic.md` AD-4/AD-5):
+ *   (1) `type === GIF` -> bỏ qua validate (carve-out cấp item, post CÓ data GIF thật -
+ *       `crawl.ts:54-84`).
+ *   (2) Else nếu flag break-glass bật VÀ `url` là `data:` URI -> fallback `uploadFileFromBase64`
+ *       cũ (giữ ở trạng thái ngủ, AD-5). Thứ tự (2) trước (3) là bắt buộc, nếu không flag thành
+ *       dead code (AD5-1).
+ *   (3) Else -> `validateMediaUrl` strict theo `namespace: "post"` + `expectedKey: authorId`.
+ * Trả về item đã xử lý (có thể đổi `url` nếu qua fallback base64) nếu hợp lệ, `null` nếu bị reject.
+ * Dùng bởi CẢ `createPost` (mọi item) LẪN `updatePost` (chỉ item MỚI, sau khi đã diff) — nhưng
+ * control-flow bao quanh (validate toàn bộ vs. diff-rồi-validate-phần-mới) vẫn tách riêng ở 2 hàm,
+ * không dùng chung 1 helper gọi giống nhau (đúng Key risk của epic T4).
+ */
+export const processNewPostMediaItem = async (
+  item: { url: string; type?: string; [key: string]: any },
+  authorId: string,
+): Promise<{ url: string; type?: string; [key: string]: any } | null> => {
+  if (item.type === Constants.MEDIA_TYPE.GIF) {
+    return item;
+  }
+  if (
+    isMediaLegacyFallbackEnabled() &&
+    typeof item.url === "string" &&
+    item.url.startsWith("data:")
+  ) {
+    const mediaUrl = await uploadFileFromBase64({ base64: item.url });
+    return { ...item, url: mediaUrl };
+  }
+  if (!validateMediaUrl(item.url, { namespace: "post", expectedKey: authorId })) {
+    return null;
+  }
+  return item;
+};
+
 //create post
 export const createPost = async (req, res) => {
   const payload = req.body;
@@ -154,20 +192,18 @@ export const createPost = async (req, res) => {
       .status(HTTPStatus.BAD_REQUEST)
       .json({ error: "Invalid visibility value" });
   }
+  // Task 011: media hoàn toàn mới ở `createPost` -> MỌI item đều qua 3-bước check
+  // (`processNewPostMediaItem`), thay cho `uploadFileFromBase64` relay bytes trực tiếp cũ.
   let newMedia = [];
   if (media.length) {
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
     for (let fileInfo of media) {
-      const isUrl = fileInfo.url.match(urlRegex)
-        ? fileInfo.url.match(urlRegex)?.length > 0
-        : false;
-      if (!isUrl) {
-        const mediaUrl = await uploadFileFromBase64({
-          base64: fileInfo.url,
-        });
-        fileInfo.url = mediaUrl;
+      const processed = await processNewPostMediaItem(fileInfo, authorId);
+      if (!processed) {
+        return res
+          .status(HTTPStatus.BAD_REQUEST)
+          .json({ error: `Invalid media URL: ${fileInfo.url}` });
       }
-      newMedia.push(fileInfo);
+      newMedia.push(processed);
     }
   }
   let newSurvey = [];
@@ -389,8 +425,38 @@ export const updatePost = async (req, res) => {
       await option.save();
     }
   }
+  // Task 011 (FR-5): `updatePost` trước đây KHÔNG validate `media` gì cả (`post.media = media;` vô
+  // điều kiện) — đây là thêm MỚI, không phải sửa/xoá 1 cơ chế cũ. Diff `media` (payload client gửi)
+  // với `post.media` HIỆN TẠI (đã fetch sẵn ở trên, dòng ~366 - không query lại DB): item nào đã có
+  // trong `post.media` cũ (khớp theo `url`) giữ nguyên, KHÔNG validate lại (tin dữ liệu đã lưu -
+  // media từ TRƯỚC epic này vẫn sửa post được bình thường). Item MỚI (chưa có trong `post.media`
+  // cũ) mới qua `processNewPostMediaItem` (cùng 3-bước check như `createPost`).
+  // `media === undefined` (client không gửi field này, vd. chỉ update `survey`) -> không đụng
+  // `post.media`, giữ nguyên giá trị hiện có.
+  if (media !== undefined) {
+    const existingUrls = new Set(
+      (post.media || []).map((m: any) => m?.url),
+    );
+    const processedMedia = [];
+    for (const item of media) {
+      if (existingUrls.has(item.url)) {
+        processedMedia.push(item);
+        continue;
+      }
+      const processed = await processNewPostMediaItem(
+        item,
+        post.authorId.toString(),
+      );
+      if (!processed) {
+        return res
+          .status(HTTPStatus.BAD_REQUEST)
+          .json({ error: `Invalid media URL: ${item.url}` });
+      }
+      processedMedia.push(processed);
+    }
+    post.media = processedMedia;
+  }
   post.content = content;
-  post.media = media;
   post.survey = newSurvey;
   post = await post.save();
   new OK({
@@ -555,3 +621,98 @@ export const updatePostVisibility = async (req, res) => {
     metadata: {},
   }).send(res);
 };
+
+export const getPostActivities = async (req, res) => {
+  const { id: postId } = req.params;
+  const type = req.query.type || "likes";
+  const limit = Math.min(Number(req.query.limit) || 20, 50);
+  const page = Math.max(Number(req.query.page) || 1, 1);
+  const skip = (page - 1) * limit;
+
+  const post = await Post.findById(postId);
+  if (!post) {
+    return res.status(HTTPStatus.NOT_FOUND).json({ error: "Post not found" });
+  }
+
+  let users: any[] = [];
+  let total = 0;
+
+  if (type === "likes") {
+    total = await Like.countDocuments({ postId: ObjectId(postId) });
+    const likes = await Like.find({ postId: ObjectId(postId) })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate("userId", "_id username name avatar bio followersCount");
+    users = likes.map((l: any) => l.userId).filter(Boolean);
+  } else if (type === "comments") {
+    const filterQuery = {
+      $or: [
+        { parentPost: ObjectId(postId) },
+        { _id: { $in: post.replies || [] } },
+      ],
+      status: { $ne: Constants.POST_STATUS.DELETED },
+    };
+    total = await Post.countDocuments(filterQuery);
+    const commentPosts = await Post.find(filterQuery)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate("authorId", "_id username name avatar bio followersCount");
+
+    users = commentPosts
+      .map((c: any) => ({
+        ...((c.authorId as any)?.toObject?.() || c.authorId),
+        commentContent: c.content,
+        commentCreatedAt: c.createdAt,
+      }))
+      .filter((u) => u && u._id);
+  } else if (type === "reposts") {
+    const filterQuery = {
+      $or: [
+        { "quote._id": ObjectId(postId) },
+        { "quote._id": String(postId) },
+        { parentPost: ObjectId(postId), type: Constants.POST_TYPE.REPOST },
+      ],
+      status: { $ne: Constants.POST_STATUS.DELETED },
+    };
+    total = await Post.countDocuments(filterQuery);
+    const repostPosts = await Post.find(filterQuery)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate("authorId", "_id username name avatar bio followersCount");
+
+    users = repostPosts
+      .map((r: any) => ((r.authorId as any)?.toObject?.() || r.authorId))
+      .filter((u) => u && u._id);
+  }
+
+  if (req.viewerId && users.length > 0) {
+    const userIds = users.map((u) => ObjectId(u._id));
+    const followingDocs = await Follow.find({
+      followerId: ObjectId(req.viewerId),
+      followeeId: { $in: userIds },
+    });
+    const followingSet = new Set(
+      followingDocs.map((f: any) => f.followeeId.toString())
+    );
+    users = users.map((u) => ({
+      ...(typeof u.toObject === "function" ? u.toObject() : u),
+      isFollowing: followingSet.has(u._id.toString()),
+      isSelf: req.viewerId.toString() === u._id.toString(),
+    }));
+  }
+
+  new OK({
+    message: "Get post activities successfully",
+    metadata: {
+      type,
+      total,
+      page,
+      limit,
+      users,
+    },
+  }).send(res);
+};
+
