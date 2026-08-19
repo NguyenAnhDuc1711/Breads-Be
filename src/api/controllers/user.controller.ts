@@ -8,7 +8,6 @@ import {
 } from "../../core/error.response.js";
 import { CREATED, OK } from "../../core/success.response.js";
 import { deleteCache, getCache, setCache } from "../../dbs/redis.ts";
-import HTTPStatus from "../../utils/httpStatus.js";
 import { ObjectId } from "../../utils/index.js";
 import { crawlUser } from "../crawl.js";
 import Follow from "../models/follow.model.js";
@@ -41,7 +40,10 @@ export const getAdminAccount = async (req, res) => {
       role: Constants.USER_ROLE.ADMIN,
     });
     const result = await newAdmin.save();
-    return res.status(HTTPStatus.CREATED).json(result);
+    return new CREATED({
+      message: "Admin account created successfully",
+      metadata: result,
+    }).send(res);
   }
   const savedPosts = await SavedPost.find(
     { userId: adminAccount._id },
@@ -69,25 +71,6 @@ export const signupUser = async (req, res) => {
     throw new BadRequestError("Email already exists");
   }
 
-  // const salt = await bcrypt.genSalt(10);
-  // const hashPassword = await bcrypt.hash(password, salt);
-
-  // const newUser = new User({
-  //   name,
-  //   email,
-  //   username,
-  //   password: password,
-  // });
-  // await newUser.save();
-
-  // if (newUser) {
-  //   // generateTokenAndSetCookie(newUser._id, res);
-  //   res.status(HTTPStatus.CREATED).json({ message: "Tạo mới thành công" });
-  // } else {
-  //   res
-  //     .status(HTTPStatus.BAD_REQUEST)
-  //     .json({ error: "Tạo mới không thành công" });
-  // }
   const expireTime = 10; // Minutes
   const code = genRandomCode();
   const result = await sendMailService({
@@ -410,7 +393,10 @@ export const getUserProfile = async (req, res) => {
   }
   user = await getUserInfo(userId, { includeRelations: false });
   if (!user) throw new BadRequestError("User not found!");
-  res.status(HTTPStatus.OK).json(user);
+  new OK({
+    message: "Get user profile successfully",
+    metadata: user,
+  }).send(res);
 };
 
 export const getUserToFollows = async (req, res) => {
@@ -425,7 +411,10 @@ export const getUserToFollows = async (req, res) => {
         avatar: 1,
       },
     ).limit(20);
-    return res.status(HTTPStatus.OK).json(users);
+    return new OK({
+      message: "Get users to follow (test) successfully",
+      metadata: users,
+    }).send(res);
   }
   if (!page || !limit) {
     throw new BadRequestError("Need page and limit");
@@ -665,16 +654,14 @@ export const getUsersPendingPost = async (req, res) => {
 export const getUsersWithStatus = async (req, res) => {
   const { userId, page, limit, searchValue } = req.query;
   if (!userId) {
-    return res.status(HTTPStatus.BAD_REQUEST).json({ error: "Empty userId" });
+    throw new BadRequestError("Empty userId");
   }
   const userInfo = await User.findOne({
     _id: ObjectId(userId),
   });
   const isAdmin = userInfo.role === Constants.USER_ROLE.ADMIN;
   if (!isAdmin) {
-    return res
-      .status(HTTPStatus.UNAUTHORIZED)
-      .json("You don't have access to this");
+    throw new AuthFailureError("You don't have access to this");
   }
   let agg = searchValue
     ? [

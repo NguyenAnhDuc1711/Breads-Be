@@ -219,7 +219,7 @@ test("validateEmailByCodeSchema: {email, code} hợp lệ pass", () => {
 
 test("FR-4 (signup): thiếu email -> 400, signupUser không được gọi (không có lỗi liên quan DB nào xảy ra)", async () => {
   await withServer(mountUserRouter(), async (base) => {
-    const res = await fetch(`${base}/users/signup`, {
+    const res = await fetch(`${base}/users`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -235,7 +235,7 @@ test("FR-4 (signup): thiếu email -> 400, signupUser không được gọi (kh�
 
 test("FR-4 (login, email format): {email: 'not-an-email', password: 'x'} -> 400", async () => {
   await withServer(mountUserRouter(), async (base) => {
-    const res = await fetch(`${base}/users/login`, {
+    const res = await fetch(`${base}/users/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ email: "not-an-email", password: "x" }),
@@ -245,17 +245,17 @@ test("FR-4 (login, email format): {email: 'not-an-email', password: 'x'} -> 400"
   });
 });
 
-test("FR-4 (ObjectId param): GET /users/profile/not-an-id -> 400 trước khi getUserProfile chạy", async () => {
+test("FR-4 (ObjectId param): GET /users/not-an-id -> 400 trước khi getUserProfile chạy (PROFILE = '/:userId', đăng ký sau cùng nhóm GET)", async () => {
   await withServer(mountUserRouter(), async (base) => {
-    const res = await fetch(`${base}/users/profile/not-an-id`);
+    const res = await fetch(`${base}/users/not-an-id`);
     assert.equal(res.status, 400);
     assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
   });
 });
 
-test("FR-4 (no-schema route): POST /users/logout không đổi hành vi — vẫn 200 bất kể body", async () => {
+test("FR-4 (no-schema route): POST /users/sessions/logout không đổi hành vi — vẫn 200 bất kể body", async () => {
   await withServer(mountUserRouter(), async (base) => {
-    const res = await fetch(`${base}/users/logout`, {
+    const res = await fetch(`${base}/users/sessions/logout`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ anything: "goes" }),
@@ -439,29 +439,29 @@ test("getUsersPendingPostSchema: limit=1000 KHÔNG bị chặn (cap .max(50) c�
 // — theo đúng rule ở đầu file, KHÔNG test 2 route này qua tầng HTTP; "không có validate() chen
 // vào" cho 2 route này được xác nhận qua code review + checklist `grep -c "validate("` thủ công.
 
-test("FR-4 (pagination cap, local): GET /users/users-follow?limit=1000 -> 400 (vượt cap .max(50))", async () => {
+test("FR-4 (pagination cap, local): GET /users/follow-list?limit=1000 -> 400 (vượt cap .max(50))", async () => {
   await withServer(mountUserRouter(), async (base) => {
     const res = await fetch(
-      `${base}/users/users-follow?userId=${VALID_OBJECT_ID}&type=following&limit=1000`
+      `${base}/users/follow-list?userId=${VALID_OBJECT_ID}&type=following&limit=1000`
     );
     assert.equal(res.status, 400);
     assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
   });
 });
 
-test("FR-4 (type enum): GET /users/users-follow?type=bogus -> 400 trước khi getUsersFollow chạy", async () => {
+test("FR-4 (type enum): GET /users/follow-list?type=bogus -> 400 trước khi getUsersFollow chạy", async () => {
   await withServer(mountUserRouter(), async (base) => {
     const res = await fetch(
-      `${base}/users/users-follow?userId=${VALID_OBJECT_ID}&type=bogus`
+      `${base}/users/follow-list?userId=${VALID_OBJECT_ID}&type=bogus`
     );
     assert.equal(res.status, 400);
     assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
   });
 });
 
-test("FR-4 (checkValidUser, body rỗng): POST /users/check-valid-user với body {} -> KHÔNG phải lỗi validate (either-or vẫn là controller kiểm, throw sớm trước khi chạm DB)", async () => {
+test("FR-4 (checkValidUser, body rỗng): POST /users/validity-checks với body {} -> KHÔNG phải lỗi validate (either-or vẫn là controller kiểm, throw sớm trước khi chạm DB)", async () => {
   await withServer(mountUserRouter(), async (base) => {
-    const res = await fetch(`${base}/users/check-valid-user`, {
+    const res = await fetch(`${base}/users/validity-checks`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({}),
@@ -504,8 +504,8 @@ test("NFR-4 (positive, body): signup payload hợp lệ chạm controller, đủ
     password: "123456",
   };
 
-  await withServer(mountEcho("post", "/users/signup", signupUserSchema), async (base) => {
-    const res = await fetch(`${base}/users/signup`, {
+  await withServer(mountEcho("post", "/users", signupUserSchema), async (base) => {
+    const res = await fetch(`${base}/users`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
@@ -516,12 +516,12 @@ test("NFR-4 (positive, body): signup payload hợp lệ chạm controller, đủ
   });
 });
 
-test("NFR-4 (positive, query): users-follow query hợp lệ chạm controller, page/limit coerce đúng kiểu", async () => {
+test("NFR-4 (positive, query): follow-list query hợp lệ chạm controller, page/limit coerce đúng kiểu", async () => {
   await withServer(
-    mountEcho("get", "/users/users-follow", getUsersFollowQuerySchema),
+    mountEcho("get", "/users/follow-list", getUsersFollowQuerySchema),
     async (base) => {
       const res = await fetch(
-        `${base}/users/users-follow?userId=${VALID_OBJECT_ID}&type=following&page=2&limit=50`
+        `${base}/users/follow-list?userId=${VALID_OBJECT_ID}&type=following&page=2&limit=50`
       );
       assert.equal(res.status, 200);
       const json = (await res.json()) as { query: any };
@@ -533,11 +533,11 @@ test("NFR-4 (positive, query): users-follow query hợp lệ chạm controller, 
   );
 });
 
-test("NFR-4 (positive, params): GET /users/profile/:userId với ObjectId hợp lệ chạm controller", async () => {
+test("NFR-4 (positive, params): GET /users/:userId với ObjectId hợp lệ chạm controller", async () => {
   await withServer(
-    mountEcho("get", "/users/profile/:userId", getUserProfileSchema),
+    mountEcho("get", "/users/:userId", getUserProfileSchema),
     async (base) => {
-      const res = await fetch(`${base}/users/profile/${VALID_OBJECT_ID}`);
+      const res = await fetch(`${base}/users/${VALID_OBJECT_ID}`);
       assert.equal(res.status, 200);
       const json = (await res.json()) as { params: Record<string, unknown> };
       assert.deepEqual(json.params, { userId: VALID_OBJECT_ID });
@@ -547,7 +547,7 @@ test("NFR-4 (positive, params): GET /users/profile/:userId với ObjectId hợp 
 
 test("FR-4 (getUserIdFromEmail): thiếu userEmail -> 400 trước khi controller chạy", async () => {
   await withServer(mountUserRouter(), async (base) => {
-    const res = await fetch(`${base}/users/get-user-id-from-email`, {
+    const res = await fetch(`${base}/users/id-lookup`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({}),
@@ -555,4 +555,53 @@ test("FR-4 (getUserIdFromEmail): thiếu userEmail -> 400 trước khi controlle
     assert.equal(res.status, 400);
     assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
   });
+});
+
+// ================================================================
+// Task 010 — bảng redesign 19 endpoint (epic restful-api-redesign, D-1)
+// ================================================================
+//
+// Route như ADMIN/CRAWL_USER/REFRESH_TOKEN chạm DB/mạng thật ngay cả với input hợp lệ và không có
+// validate() chặn trước (đúng rule ở đầu file — KHÔNG test qua tầng HTTP round-trip). "Happy-path
+// qua route/method mới" cho ĐỦ 19 endpoint được đảm bảo ở đây bằng cách đọc trực tiếp
+// `userRouter.stack` (router THẬT, KHÔNG parse lại source) và so khớp 1-1 (method, path) với đúng
+// thứ tự đăng ký — thứ tự QUAN TRỌNG vì PROFILE ("/:userId") và UPDATE ("/:id") là catch-all
+// 1-segment, phải đứng SAU các path literal cùng số segment (/me, /admin, /follow-list,
+// /with-status, /follow) để không "nuốt" chúng (xem comment trong user.route.ts).
+test("FR-2 (D-1): user.route.ts wiring khớp đúng 19 (method, path) mới, đúng thứ tự chống shadow route động", () => {
+  const routes = userRouter.stack
+    .filter((layer: any) => layer.route)
+    .map((layer: any) => ({
+      method: Object.keys(layer.route.methods)[0],
+      path: layer.route.path,
+    }));
+
+  const expected = [
+    { method: "get", path: "/me" },
+    { method: "get", path: "/admin" },
+    { method: "get", path: "/follow-list" },
+    { method: "get", path: "/suggestions/to-follow" },
+    { method: "get", path: "/suggestions/to-tag" },
+    { method: "get", path: "/with-status" },
+    { method: "get", path: "/:userId" },
+    { method: "post", path: "/pending-post-lookup" },
+    { method: "post", path: "/" },
+    { method: "post", path: "/sessions" },
+    { method: "post", path: "/sessions/logout" },
+    { method: "post", path: "/sessions/refresh" },
+    { method: "put", path: "/follow" },
+    { method: "put", path: "/:id" },
+    { method: "put", path: "/:id/password" },
+    { method: "post", path: "/crawl" },
+    { method: "post", path: "/validity-checks" },
+    { method: "post", path: "/id-lookup" },
+    { method: "post", path: "/email-validations" },
+  ];
+
+  assert.equal(routes.length, 19, "phải có đúng 19 route đăng ký trên router");
+  assert.deepEqual(
+    routes,
+    expected,
+    "method+path (và thứ tự đăng ký) phải khớp đúng bảng redesign 010.md"
+  );
 });
