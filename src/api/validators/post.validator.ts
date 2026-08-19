@@ -178,3 +178,11 @@ export const getPostActivitiesSchema = {
   }),
 };
 
+export const getPostRepliesSchema = {
+  params: z.object({ id: objectIdSchema }),
+  query: z.object({
+    page: z.coerce.number().optional(),
+    limit: z.coerce.number().optional(),
+  }),
+};
+

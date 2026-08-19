@@ -23,13 +23,19 @@ const postSchema = new mongoose.Schema(
       type: Array,
       required: false,
     },
-    replies: [
-      {
-        type: ObjectId,
-        ref: "Post",
-        default: [],
-      },
-    ],
+    // Quan hệ reply KHÔNG còn nhúng dạng mảng ObjectId ở đây (rủi ro document move/16MB khi 1 bài
+    // viral có hàng trăm nghìn reply — mỗi reply mới từng phải rewrite lại document CHA). Reply tự
+    // lưu `parentPost` trỏ ngược (như REPOST vốn đã làm từ trước), và cha chỉ giữ counter
+    // `repliesCount` — ghi rẻ (O(1) vào đúng 1 document), đọc "reply của post X" qua query
+    // `{parentPost, type: REPLY}` trên index bên dưới thay vì đọc thẳng mảng.
+    // Migration một-lần: `src/api/migrations/migrateReplyReferences.ts` (chạy TRƯỚC khi field
+    // `replies` cũ bị bỏ khỏi schema này, backfill parentPost/repliesCount từ dữ liệu cũ).
+    repliesCount: {
+      type: Number,
+      default: 0,
+    },
+    // Dùng chung cho CẢ repost lẫn reply (trước đây chỉ repost ghi field này) — phân biệt bằng
+    // `type` ở nơi query, không tách field riêng.
     parentPost: {
       type: ObjectId,
       ref: "Post",
@@ -104,8 +110,11 @@ const postSchema = new mongoose.Schema(
 );
 
 postSchema.index({ createdAt: -1 });
+// `sparse` vẫn đúng: đa số post (CREATE/EDIT) không có `parentPost`. Compound + `createdAt` phục vụ
+// trực tiếp query phân trang "reply/repost của post X" (`{parentPost, type}` sort `createdAt`) —
+// trước đây chỉ `{parentPost:1}` đơn vì field này gần như không có tải đọc thật (chỉ repost dùng).
 postSchema.index(
-  { parentPost: 1 },
+  { parentPost: 1, createdAt: -1 },
   {
     sparse: true,
   },

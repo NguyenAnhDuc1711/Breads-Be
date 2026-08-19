@@ -602,13 +602,13 @@ const parseRoutePairs = (src: string) =>
     return [method, path];
   });
 
-test("wiring: 10/11 route có validate(), CRAWL_POST cố ý không có", async () => {
+test("wiring: 11/12 route có validate(), CRAWL_POST cố ý không có", async () => {
   const routeLines = parseRouteLines(await readRouteSource());
 
-  assert.equal(routeLines.length, 11, "post.route.ts phải có đúng 11 route");
+  assert.equal(routeLines.length, 12, "post.route.ts phải có đúng 12 route");
 
   const withValidate = routeLines.filter((line) => line.includes("validate("));
-  assert.equal(withValidate.length, 10, "đúng 10 route phải có validate()");
+  assert.equal(withValidate.length, 11, "đúng 11 route phải có validate()");
 
   const crawl = routeLines.filter((line) => line.includes("CRAWL_POST"));
   assert.equal(crawl.length, 1);
@@ -620,15 +620,17 @@ test("wiring: 10/11 route có validate(), CRAWL_POST cố ý không có", async 
 
 /* --------------------------------------------- Task 011 (FR-3, D-1): bảng 11 endpoint mới */
 
-// AC FR-3: chốt CỨNG method + path của cả 11 endpoint theo đúng bảng trong `011.md`. Thứ tự trong
-// list cũng là thứ tự ĐĂNG KÝ — có ý nghĩa với express (route literal 1 segment như `/crawl` phải
-// đứng trước route dynamic 1 segment cùng method), nên assert nguyên list chứ không dùng Set.
-test("FR-3 (D-1): 11 endpoint posts đúng method + path RESTful mới, đúng thứ tự đăng ký", async () => {
+// AC FR-3: chốt CỨNG method + path của cả 12 endpoint (11 gốc + `/:id/replies` thêm sau, xem
+// "tối ưu Post.replies") theo đúng bảng trong `011.md`. Thứ tự trong list cũng là thứ tự ĐĂNG KÝ —
+// có ý nghĩa với express (route literal 1 segment như `/crawl` phải đứng trước route dynamic 1
+// segment cùng method), nên assert nguyên list chứ không dùng Set.
+test("FR-3 (D-1): 12 endpoint posts đúng method + path RESTful mới, đúng thứ tự đăng ký", async () => {
   const pairs = parseRoutePairs(await readRouteSource());
 
   assert.deepEqual(pairs, [
     ["get", "/"], // GET_ALL: /all -> /
     ["get", "/:id/activities"], // giữ nguyên
+    ["get", "/:id/replies"], // MỚI: danh sách reply phân trang, thay cho nhúng không giới hạn
     ["get", "/:id"], // giữ nguyên
     ["post", "/"], // CREATE: /create -> /
     ["delete", "/:id"], // giữ nguyên

@@ -111,13 +111,16 @@ test("buildVisibilityQuery KHÔNG loại PRE_ACCEPT (AD-5)", async () => {
   assert.equal(JSON.stringify(query).includes(`"$nin"`), false);
 });
 
-// Task 090 fix / GAP-1 (epic-verify Phase A): `getPostDetail({getFullInfo:true})` nhúng sẵn
-// `replies` của mỗi post — bản gốc chỉ lọc visibility ở top-level, không lọc lại từng reply theo
-// visibility CỦA CHÍNH REPLY ĐÓ (reply có thể tự đổi visibility riêng sau khi tạo, khác bài gốc).
-// Hậu quả live-tested: 1 reply ONLY_ME lộ nguyên văn qua GET /posts/:id cho viewer bất kỳ. Test
-// này tái tạo đúng kịch bản đó bằng `filterViewablePosts` (hàm được tái dùng để vá) — không dùng
-// ONLY_FOLLOWERS nên không chạm `Follow.find`/DB, giữ đúng tinh thần "hàm thuần" của file này.
-test("Task 090 regression: filterViewablePosts lọc đúng reply ONLY_ME của người khác trong mảng replies nhúng sẵn", async () => {
+// Task 090 fix / GAP-1 (epic-verify Phase A): bản gốc nhúng `replies` của mỗi post qua
+// `getPostDetail({getFullInfo:true})` và chỉ lọc visibility ở top-level, không lọc lại từng reply
+// theo visibility CỦA CHÍNH REPLY ĐÓ (reply có thể tự đổi visibility riêng sau khi tạo, khác bài
+// gốc). Hậu quả live-tested: 1 reply ONLY_ME lộ nguyên văn qua GET /posts/:id cho viewer bất kỳ.
+// `getFullInfo`/nhúng-sẵn đã bỏ (thay bằng `getReplyPage`, lọc NGAY TRONG QUERY qua
+// `buildVisibilityQuery` — xem post.ts) nhưng bài học vẫn đúng: `filterViewablePosts` phải luôn
+// xét visibility theo tác giả của TỪNG post trong danh sách, không suy luận từ post cha. Test này
+// giữ lại làm regression cho chính bất biến đó ở tầng hàm thuần — không dùng ONLY_FOLLOWERS nên
+// không chạm `Follow.find`/DB, giữ đúng tinh thần "hàm thuần" của file này.
+test("Task 090 regression: filterViewablePosts lọc đúng reply ONLY_ME của người khác trong 1 danh sách reply", async () => {
   const replies = [
     { _id: "r1", authorId: AUTHOR, visibility: V_PUBLIC },
     { _id: "r2", authorId: AUTHOR, visibility: ONLY_ME }, // reply riêng tư của người khác -> phải bị lọc

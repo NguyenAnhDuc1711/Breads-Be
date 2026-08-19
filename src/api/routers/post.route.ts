@@ -2,11 +2,13 @@ import express from "express";
 import mongoSanitize from "express-mongo-sanitize";
 import hpp from "hpp";
 import { POST_PATH } from "../../Breads-Shared/APIConfig.js";
+import asyncHandler from "../../helpers/asyncHandler.js";
 import {
   createPost,
   deletePost,
   getPost,
   getPostActivities,
+  getPostReplies,
   getPosts,
   likeUnlikePost,
   tickPostSurvey,
@@ -19,11 +21,11 @@ import optionalAuth from "../middlewares/optionalAuth.js";
 import protectRoute from "../middlewares/protectRoute.js";
 import { authTierLimiter } from "../middlewares/rateLimiter.js";
 import { validate } from "../middlewares/validate.js";
-import Post from "../models/post.model.js";
 import {
   createPostSchema,
   deletePostSchema,
   getPostActivitiesSchema,
+  getPostRepliesSchema,
   getPostSchema,
   getPostsQuerySchema,
   likeUnlikePostSchema,
@@ -32,7 +34,6 @@ import {
   updatePostStatusSchema,
   updatePostVisibilitySchema,
 } from "../validators/post.validator.js";
-import asyncHandler from "../../helpers/asyncHandler.js";
 
 const router = express.Router();
 // FR-2 (task 010): createPost/updatePost nhận `media`/`files` base64 -> giữ 50mb như global cũ.
@@ -59,9 +60,30 @@ const {
 // (`/crawl`) phải đứng TRƯỚC mọi route dynamic 1 segment cùng method, nếu không sẽ bị "nuốt"
 // (cảnh báo shadow-routing từ task 010). Hiện không method nào có `/:id` trần ngoài PUT/DELETE,
 // nên chỉ cần giữ nguyên trật tự dưới đây khi thêm route mới.
-router.get(GET_ALL, optionalAuth, validate(getPostsQuerySchema), asyncHandler(getPosts));
-router.get("/:id/activities", optionalAuth, validate(getPostActivitiesSchema), asyncHandler(getPostActivities));
-router.get("/:id", optionalAuth, validate(getPostSchema), asyncHandler(getPost));
+router.get(
+  GET_ALL,
+  optionalAuth,
+  validate(getPostsQuerySchema),
+  asyncHandler(getPosts),
+);
+router.get(
+  "/:id/activities",
+  optionalAuth,
+  validate(getPostActivitiesSchema),
+  asyncHandler(getPostActivities),
+);
+router.get(
+  "/:id/replies",
+  optionalAuth,
+  validate(getPostRepliesSchema),
+  asyncHandler(getPostReplies),
+);
+router.get(
+  "/:id",
+  optionalAuth,
+  validate(getPostSchema),
+  asyncHandler(getPost),
+);
 // Task 011 (FR-10): `createPost` giờ `throw new {XxxError}` thay vì `res.json({error})`. Express 4
 // KHÔNG tự bắt rejection của async handler -> BẮT BUỘC bọc `asyncHandler`, nếu không nhánh chặn
 // repost (task 090) sẽ TREO request thay vì trả 400. Trước đây đây là route duy nhất không bọc.
@@ -72,22 +94,26 @@ router.post(
   LIKE_TOGGLE,
   protectRoute,
   validate(likeUnlikePostSchema),
-  asyncHandler(likeUnlikePost)
+  asyncHandler(likeUnlikePost),
 );
 // AD-3 (task 012): CRAWL_POST thiếu auth guard (PRD C-4) -> áp auth-tier nghiêm ngặt thay vì loại
 // trừ khỏi rate-limit, vì đây là endpoint tốn tài nguyên (trigger crawl). Đăng ký TRƯỚC các POST
 // dynamic để `/crawl` không bị hiểu nhầm thành `:id`.
 router.post(CRAWL_POST, authTierLimiter, asyncHandler(crawlPosts));
-router.post(TICK_SURVEY, validate(tickPostSurveySchema), asyncHandler(tickPostSurvey));
+router.post(
+  TICK_SURVEY,
+  validate(tickPostSurveySchema),
+  asyncHandler(tickPostSurvey),
+);
 router.patch(
   UPDATE_POST_STATUS,
   validate(updatePostStatusSchema),
-  asyncHandler(updatePostStatus)
+  asyncHandler(updatePostStatus),
 );
 router.patch(
   UPDATE_POST_VISIBILITY,
   validate(updatePostVisibilitySchema),
-  asyncHandler(updatePostVisibility)
+  asyncHandler(updatePostVisibility),
 );
 
 export default router;

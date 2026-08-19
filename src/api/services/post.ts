@@ -131,7 +131,6 @@ const isAdminViewer = async (viewerId: any): Promise<boolean> => {
 export const getPostDetail = async ({
   postId = "",
   postIds = [],
-  getFullInfo = false,
   viewerId = null,
   isAdminPage = false,
   // Followee id list caller đã fetch sẵn (vd. feed "for_you") -> tránh Follow.find lần hai
@@ -140,7 +139,6 @@ export const getPostDetail = async ({
 }: {
   postId?: any;
   postIds?: any[];
-  getFullInfo?: boolean;
   viewerId?: any;
   isAdminPage?: boolean;
   followeeIds?: any[] | null;
@@ -243,17 +241,10 @@ export const getPostDetail = async ({
       ...getRelativeProp,
     ];
 
-    if (getFullInfo) {
-      agg.push({
-        $lookup: {
-          from: "posts",
-          localField: "replies",
-          foreignField: "_id",
-          pipeline: [...getRelativeProp],
-          as: "replies",
-        },
-      });
-    }
+    // Danh sách reply/repost đầy đủ của 1 post giờ lấy qua endpoint phân trang riêng
+    // (`getPostReplies`/`GET /:id/replies`), không còn nhúng ở đây — post.replies (mảng) đã bỏ
+    // khỏi schema (xem post.model.ts). `repliesCount` là field thường trên chính document nên tự
+    // có mặt trong kết quả, không cần lookup.
 
     // 1. Chạy song song 3 truy vấn độc lập: Aggregation chính, Check Like, và Đếm Repost
     const [posts, likedDocs, repostCounts] = await Promise.all([
@@ -264,8 +255,15 @@ export const getPostDetail = async ({
             { postId: 1 },
           )
         : Promise.resolve([]),
+      // `parentPost` giờ dùng chung cho cả REPOST lẫn REPLY (trước đây chỉ REPOST) — PHẢI lọc
+      // `type` ở đây, nếu không repostNum sẽ đếm nhầm cả reply.
       Post.aggregate([
-        { $match: { parentPost: { $in: targetIds } } },
+        {
+          $match: {
+            parentPost: { $in: targetIds },
+            type: PostConstants.ACTIONS.REPOST,
+          },
+        },
         { $group: { _id: "$parentPost", count: { $sum: 1 } } },
       ]),
     ]);
@@ -278,31 +276,6 @@ export const getPostDetail = async ({
       ? posts
       : await filterViewablePosts(posts, viewerId, followeeIds);
     if (viewablePosts.length === 0) return isBulk ? [] : null;
-
-    // Task 090 fix: `replies` nhúng qua `getFullInfo` KHÔNG được lọc theo visibility riêng —
-    // chỉ top-level post được gate ở bước trên. Một reply có thể lệch visibility khỏi bài gốc
-    // sau khi tạo (chính tác giả reply tự đổi qua `updatePostVisibility`), và ràng buộc
-    // ONLY_FOLLOWERS của 1 reply phải tính theo tác giả CỦA REPLY đó — không phải tác giả bài
-    // gốc — nên không thể suy luận "gốc xem được thì reply cũng xem được". Tái dùng đúng
-    // `filterViewablePosts` (AD-2), gộp 1 lượt cho toàn bộ reply của mọi post trong batch để
-    // chỉ tốn thêm đúng 1 `Follow` query.
-    if (getFullInfo && !isAdmin) {
-      const allReplies = viewablePosts.flatMap((p: any) => p.replies ?? []);
-      if (allReplies.length > 0) {
-        const viewableReplyIds = new Set(
-          (await filterViewablePosts(allReplies, viewerId, followeeIds)).map((r: any) =>
-            String(r._id),
-          ),
-        );
-        viewablePosts.forEach((p: any) => {
-          if (p.replies) {
-            p.replies = p.replies.filter((r: any) =>
-              viewableReplyIds.has(String(r._id)),
-            );
-          }
-        });
-      }
-    }
 
     const likedPostSet = new Set(likedDocs.map((doc) => doc.postId.toString()));
     const repostMap = new Map(
@@ -608,24 +581,60 @@ export const getPostsIdByFilter = async (payload) => {
   }
 };
 
+/**
+ * Cập nhật counter của post CHA khi 1 reply được tạo/xoá. Reply tự lưu `parentPost` trỏ về cha
+ * (set lúc `createPost`, xem `post.controller.ts`) — hàm này chỉ còn việc `$inc` 2 counter trên
+ * cha, không còn `$push/$pull` vào mảng nhúng (đã bỏ khỏi schema, xem `post.model.ts`).
+ */
 export const handleReplyForParentPost = async ({
   parentId,
-  replyId,
   addNew,
 }) => {
   try {
-    const action = addNew
-      ? { $push: { replies: replyId }, $inc: { engagementScore: 3 } }
-      : { $pull: { replies: replyId }, $inc: { engagementScore: -3 } };
+    const delta = addNew ? 1 : -1;
     await Post.updateOne(
       {
         _id: parentId,
       },
-      action,
+      { $inc: { repliesCount: delta, engagementScore: delta * 3 } },
     );
   } catch (err) {
     logger.error({ err }, "handleReplyForParentPost failed");
   }
+};
+
+/**
+ * Trang reply của 1 post, mới nhất trước. Lọc visibility NGAY TRONG QUERY (qua
+ * `buildVisibilityQuery`, không fetch-rồi-lọc như task 090 patch cũ từng làm cho nhánh
+ * `getFullInfo`) — quan trọng vì lọc sau `skip`/`limit` sẽ cho ra trang thiếu phần tử (đếm đủ
+ * `limit` rồi mới lọc khiến số item hiển thị thực tế < `limit`, sai ngữ nghĩa phân trang). Mỗi
+ * reply xét visibility theo TÁC GIẢ CỦA CHÍNH NÓ (đúng như task 090 đã chỉ ra), không phải tác giả
+ * bài gốc — `buildVisibilityQuery` vốn đã làm đúng việc này cho bất kỳ document Post nào.
+ */
+export const getReplyPage = async ({
+  postId,
+  viewerId = null,
+  followeeIds = null,
+  page = 1,
+  limit = 20,
+}: {
+  postId: any;
+  viewerId?: any;
+  followeeIds?: any[] | null;
+  page?: number;
+  limit?: number;
+}): Promise<{ ids: any[]; total: number }> => {
+  const skip = (page - 1) * limit;
+  const filter = {
+    parentPost: ObjectId(postId),
+    type: PostConstants.ACTIONS.REPLY,
+    ...(await buildVisibilityQuery(viewerId, followeeIds)),
+  };
+  const [total, rows] = await Promise.all([
+    Post.countDocuments(filter),
+    Post.find(filter, { _id: 1 }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+  ]);
+  return { ids: rows.map((r: any) => r._id), total };
 };
 
 export const getUsersTagInfo = async ({ usersTagId }) => {

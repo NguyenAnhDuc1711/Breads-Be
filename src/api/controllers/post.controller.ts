@@ -22,8 +22,10 @@ import { fanoutPostToFollowers } from "../services/feed/fanout.ts";
 import { dispatchQueue } from "../services/feed/queue.ts";
 import { isMediaLegacyFallbackEnabled } from "../services/mediaConvention.ts";
 import {
+  getFolloweeIds,
   getPostDetail,
   getPostsIdByFilter,
+  getReplyPage,
   handleReplyForParentPost,
 } from "../services/post.js";
 import { uploadFileFromBase64 } from "../utils/index.js";
@@ -293,6 +295,13 @@ export const createPost = async (req, res) => {
       newPostPayload.parentPost = parentPost;
     }
   }
+  // `parentPost` giờ dùng chung cho REPOST (nhánh trên) VÀ REPLY — trước đây chỉ REPOST ghi field
+  // này, nên 1 reply không có cách nào tự biết nó thuộc post nào ngoài mảng `replies` nhúng ở cha
+  // (đã bỏ, xem post.model.ts). Cùng điều kiện `action === REPLY` với `handleReplyForParentPost`
+  // bên dưới để 2 phía luôn đồng bộ: post con lưu cạnh, post cha lưu counter.
+  if (parentPost && action === PostConstants.ACTIONS.REPLY) {
+    newPostPayload.parentPost = parentPost;
+  }
   const newPost = new Post(newPostPayload);
   const postSaved = await newPost.save();
   // Fan-out-on-write (FR-5). KHÔNG `await`: NFR-2 cấm fan-out chặn response — một tác giả gần
@@ -303,7 +312,6 @@ export const createPost = async (req, res) => {
   if (parentPost && action === PostConstants.ACTIONS.REPLY) {
     await handleReplyForParentPost({
       parentId: parentPost,
-      replyId: newPost._id,
       addNew: true,
     });
   }
@@ -322,7 +330,6 @@ export const getPost = async (req, res) => {
   const postId = ObjectId(req.params.id);
   const post: IPost | null = await getPostDetail({
     postId,
-    getFullInfo: true,
     viewerId: req.viewerId,
   });
   if (!post) {
@@ -333,6 +340,39 @@ export const getPost = async (req, res) => {
     metadata: post,
   }).send(res);
 };
+
+// Danh sách reply của 1 post, phân trang — thay cho việc nhúng toàn bộ `replies` không giới hạn
+// vào response `getPost` cũ (rủi ro document-move ở tầng lưu trữ + payload không giới hạn kích
+// thước ở tầng response). Cùng convention page/limit/skip với `getPostActivities` bên dưới.
+export const getPostReplies = async (req, res) => {
+  const { id: postId } = req.params;
+  const limit = Math.min(Number(req.query.limit) || 20, 50);
+  const page = Math.max(Number(req.query.page) || 1, 1);
+
+  const post = await Post.findById(postId, { _id: 1 }).lean();
+  if (!post) {
+    throw new NotFoundError("Post not found");
+  }
+
+  const viewerId = req.viewerId;
+  const followeeIds = viewerId ? await getFolloweeIds(viewerId) : [];
+  const { ids, total } = await getReplyPage({
+    postId,
+    viewerId,
+    followeeIds,
+    page,
+    limit,
+  });
+  const replies = ids.length
+    ? await getPostDetail({ postIds: ids, viewerId, followeeIds })
+    : [];
+
+  new OK({
+    message: "Get post replies successfully",
+    metadata: { replies, total, page, limit },
+  }).send(res);
+};
+
 //delete Post
 export const deletePost = async (req, res) => {
   const postId = req.params.id;
@@ -347,26 +387,25 @@ export const deletePost = async (req, res) => {
   if (post.authorId.toString() !== userId.toString()) {
     throw new AuthFailureError("Unauthorized to delete post");
   }
-  const repliesId = post.replies;
-  if (repliesId?.length) {
-    await Post.updateMany(
-      { _id: { $in: repliesId } },
-      {
-        status: Constants.POST_STATUS.DELETED,
-      },
-    );
-  }
+  // Cascade xoá con: trước đây đọc `post.replies` (mảng nhúng) rồi `updateMany({_id:{$in:...}})`.
+  // Giờ con tự lưu `parentPost` nên query ngược trực tiếp — vẫn CHỈ nhắm reply (`type: REPLY`),
+  // không đụng repost: repost bị xoá không kéo theo cascade nào ở bài gốc, giữ đúng hành vi cũ
+  // (repost trước đây không hề nằm trong `replies`, `parentPost` của nó không do cơ chế này quản).
   await Post.updateMany(
+    { parentPost: postId, type: PostConstants.ACTIONS.REPLY },
     {
-      replies: postId,
-    },
-    {
-      $pull: {
-        replies: postId,
-      },
-      $inc: { engagementScore: -3 },
+      status: Constants.POST_STATUS.DELETED,
     },
   );
+  // Gỡ counter khỏi CHA nếu chính post đang xoá là 1 reply — trước đây phải `updateMany({replies:
+  // postId})` quét toàn collection tìm ai có id này trong mảng; giờ post tự biết cha của nó
+  // (`post.parentPost`) nên update thẳng đúng 1 document theo `_id`, rẻ hơn hẳn.
+  if (post.parentPost && post.type === PostConstants.ACTIONS.REPLY) {
+    await Post.updateOne(
+      { _id: post.parentPost },
+      { $inc: { repliesCount: -1, engagementScore: -3 } },
+    );
+  }
   await Post.updateMany(
     { "quote._id": postId },
     {
@@ -646,11 +685,11 @@ export const getPostActivities = async (req, res) => {
       .populate("userId", "_id username name avatar bio followersCount");
     users = likes.map((l: any) => l.userId).filter(Boolean);
   } else if (type === "comments") {
+    // `parentPost` giờ dùng chung cho reply LẪN repost (trước đây chỉ repost ghi field này, nên
+    // phải `$or` thêm nhánh đọc mảng nhúng `replies` để không bỏ sót reply). 1 điều kiện là đủ,
+    // và giữ đúng union hành vi cũ (tab "comments" gộp cả 2 loại).
     const filterQuery = {
-      $or: [
-        { parentPost: ObjectId(postId) },
-        { _id: { $in: post.replies || [] } },
-      ],
+      parentPost: ObjectId(postId),
       status: { $ne: Constants.POST_STATUS.DELETED },
     };
     total = await Post.countDocuments(filterQuery);
@@ -672,7 +711,7 @@ export const getPostActivities = async (req, res) => {
       $or: [
         { "quote._id": ObjectId(postId) },
         { "quote._id": String(postId) },
-        { parentPost: ObjectId(postId), type: Constants.POST_TYPE.REPOST },
+        { parentPost: ObjectId(postId), type: PostConstants.ACTIONS.REPOST },
       ],
       status: { $ne: Constants.POST_STATUS.DELETED },
     };
