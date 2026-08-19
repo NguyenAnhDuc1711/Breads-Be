@@ -45,7 +45,7 @@ const {
   GET_ALL,
   CREATE,
   UPDATE,
-  LIKE,
+  LIKE_TOGGLE,
   TICK_SURVEY,
   CRAWL_POST,
   UPDATE_POST_STATUS,
@@ -55,28 +55,36 @@ const {
 // Middleware `validate` luôn đứng SAU optionalAuth/protectRoute (auth gắn `req.viewerId`/`req.user`,
 // không đọc payload) và TRƯỚC controller. `CRAWL_POST` cố ý không có schema: tool seed/dev, không
 // nhận payload từ client.
+// Task 011 (D-1): thứ tự đăng ký trong mỗi nhóm method có ý nghĩa — route literal 1 segment
+// (`/crawl`) phải đứng TRƯỚC mọi route dynamic 1 segment cùng method, nếu không sẽ bị "nuốt"
+// (cảnh báo shadow-routing từ task 010). Hiện không method nào có `/:id` trần ngoài PUT/DELETE,
+// nên chỉ cần giữ nguyên trật tự dưới đây khi thêm route mới.
 router.get(GET_ALL, optionalAuth, validate(getPostsQuerySchema), asyncHandler(getPosts));
 router.get("/:id/activities", optionalAuth, validate(getPostActivitiesSchema), asyncHandler(getPostActivities));
 router.get("/:id", optionalAuth, validate(getPostSchema), asyncHandler(getPost));
-router.post(CREATE, validate(createPostSchema), createPost);
+// Task 011 (FR-10): `createPost` giờ `throw new {XxxError}` thay vì `res.json({error})`. Express 4
+// KHÔNG tự bắt rejection của async handler -> BẮT BUỘC bọc `asyncHandler`, nếu không nhánh chặn
+// repost (task 090) sẽ TREO request thay vì trả 400. Trước đây đây là route duy nhất không bọc.
+router.post(CREATE, validate(createPostSchema), asyncHandler(createPost));
 router.delete("/:id", validate(deletePostSchema), asyncHandler(deletePost));
 router.put(UPDATE, validate(updatePostSchema), asyncHandler(updatePost));
 router.post(
-  LIKE + ":id",
+  LIKE_TOGGLE,
   protectRoute,
   validate(likeUnlikePostSchema),
   asyncHandler(likeUnlikePost)
 );
-router.put(TICK_SURVEY, validate(tickPostSurveySchema), asyncHandler(tickPostSurvey));
 // AD-3 (task 012): CRAWL_POST thiếu auth guard (PRD C-4) -> áp auth-tier nghiêm ngặt thay vì loại
-// trừ khỏi rate-limit, vì đây là endpoint tốn tài nguyên (trigger crawl).
+// trừ khỏi rate-limit, vì đây là endpoint tốn tài nguyên (trigger crawl). Đăng ký TRƯỚC các POST
+// dynamic để `/crawl` không bị hiểu nhầm thành `:id`.
 router.post(CRAWL_POST, authTierLimiter, asyncHandler(crawlPosts));
-router.post(
+router.post(TICK_SURVEY, validate(tickPostSurveySchema), asyncHandler(tickPostSurvey));
+router.patch(
   UPDATE_POST_STATUS,
   validate(updatePostStatusSchema),
   asyncHandler(updatePostStatus)
 );
-router.post(
+router.patch(
   UPDATE_POST_VISIBILITY,
   validate(updatePostVisibilitySchema),
   asyncHandler(updatePostVisibility)

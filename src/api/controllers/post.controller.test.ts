@@ -153,7 +153,9 @@ test("FAIL-1 (CRITICAL, end-to-end): updatePost content vắng mặt -> content 
   };
 
   try {
-    await updatePost({ body: parsedBody }, res);
+    // Task 011 (D-1): `updatePost` đọc id từ `req.params.id` (route `PUT /posts/:id`), không còn
+    // từ `body._id` — mọi call site test phải truyền `params`.
+    await updatePost({ body: parsedBody, params: { id: VALID_ID } }, res);
 
     assert.equal(res._status, 200, "request hợp lệ phải thành công");
     assert.notEqual(
@@ -273,9 +275,8 @@ test("FR-5 (createPost end-to-end, AC3): item media mới KHÔNG hợp lệ -> 4
     };
 
     try {
-      await createPost(req, res);
-      assert.equal(res._status, 400);
-      assert.match(res._body.error, /Invalid media URL/);
+      // Task 011 (FR-10): envelope đổi `res.status(400).json({error})` -> `throw BadRequestError`.
+      await assert.rejects(createPost(req, res), /Invalid media URL/);
       assert.equal(saveCalled, false, "reject phải xảy ra TRƯỚC khi lưu post");
     } finally {
       (User as any).findById = originalFindById;
@@ -367,7 +368,7 @@ test("FR-5 scenario (updatePost, giữ media cũ): URL cũ KHÔNG đúng convent
     const res = buildRes();
 
     try {
-      await updatePost({ body: parsedBody }, res);
+      await updatePost({ body: parsedBody, params: { id: fakePost._id } }, res);
       assert.equal(res._status, 200);
       assert.deepEqual(fakePost.media, [{ url: legacyUrl, type: Constants.MEDIA_TYPE.IMAGE }]);
     } finally {
@@ -395,7 +396,7 @@ test("FR-5 scenario (updatePost, thêm media mới hợp lệ): item cũ giữ n
     const res = buildRes();
 
     try {
-      await updatePost({ body: parsedBody }, res);
+      await updatePost({ body: parsedBody, params: { id: fakePost._id } }, res);
       assert.equal(res._status, 200);
       assert.deepEqual(fakePost.media, [
         { url: legacyUrl, type: Constants.MEDIA_TYPE.IMAGE },
@@ -431,9 +432,11 @@ test("FR-5 scenario (updatePost, thêm media mới KHÔNG hợp lệ): chỉ ite
     const res = buildRes();
 
     try {
-      await updatePost({ body: parsedBody }, res);
-      assert.equal(res._status, 400);
-      assert.match((res as any)._body.error, /Invalid media URL/);
+      // Task 011 (FR-10): envelope đổi `res.status(400).json({error})` -> `throw BadRequestError`.
+      await assert.rejects(
+        updatePost({ body: parsedBody, params: { id: fakePost._id } }, res),
+        /Invalid media URL/,
+      );
       assert.equal(saveCalled, false, "reject phải xảy ra TRƯỚC khi lưu post");
       // Item cũ không bị đụng tới — `post.media` chưa từng bị gán lại khi reject giữa chừng.
       assert.deepEqual(fakePost.media, [{ url: legacyUrl, type: Constants.MEDIA_TYPE.IMAGE }]);
@@ -458,7 +461,7 @@ test("Task 011 Tests to Write #2: updatePost với post.media=[] (rỗng) -> dif
     const res = buildRes();
 
     try {
-      await updatePost({ body: parsedBody }, res);
+      await updatePost({ body: parsedBody, params: { id: fakePost._id } }, res);
       assert.equal(res._status, 200);
       assert.deepEqual(fakePost.media, [{ url: newValidUrl, type: Constants.MEDIA_TYPE.IMAGE }]);
     } finally {
@@ -482,7 +485,7 @@ test("Task 011 Tests to Write #3: updatePost với item media mới type=gif (UR
     const res = buildRes();
 
     try {
-      await updatePost({ body: parsedBody }, res);
+      await updatePost({ body: parsedBody, params: { id: fakePost._id } }, res);
       assert.equal(res._status, 200);
       assert.deepEqual(fakePost.media, [{ url: gifUrl, type: Constants.MEDIA_TYPE.GIF }]);
     } finally {

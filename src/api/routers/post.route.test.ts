@@ -13,17 +13,28 @@
 //  - Tầng integration: đẩy object đã parse vào `getPostsIdByFilter` THẬT, stub model ở tầng
 //    mongoose để không cần DB — đây là test bắt được đúng loại bug "schema nuốt field mà service
 //    cần" mà test schema thuần KHÔNG bắt được.
+//  - Tầng repost-guard end-to-end (Task 011, R-6): NGOẠI LỆ có chủ đích với ghi chú "không import
+//    post.route.ts" ở trên — phần cuối file import CHÍNH `createPost` thật để chạy guard chặn bypass
+//    task 090 qua ĐÚNG route/method mới (`POST /posts`). Redis/BullMQ mở lúc import được đóng lại
+//    bằng `after(closeFanoutQueues)` ở cuối file, đúng pattern `post.controller.test.ts` đã dùng.
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import express from "express";
 import { z } from "zod";
+import { POST_PATH, Route } from "../../Breads-Shared/APIConfig.ts";
 import PageConstant from "../../Breads-Shared/Constants/PageConstants.js";
+import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import logger from "../../core/logger.ts";
+import asyncHandler from "../../helpers/asyncHandler.ts";
+import { createPost } from "../controllers/post.controller.ts";
 import { VALIDATION_ERROR_MESSAGE, validate } from "../middlewares/validate.ts";
 import { sanitizeText } from "../middlewares/sanitize.ts";
+import Post from "../models/post.model.ts";
 import SavedPost from "../models/savedPost.model.ts";
+import User from "../models/user.model.ts";
+import { closeFanoutQueues } from "../services/feed/queue.ts";
 import { getPostsIdByFilter } from "../services/post.ts";
 import {
   createPostSchema,
@@ -73,14 +84,15 @@ const reachedController = (_req, res) => {
 };
 
 /** Mirror cách `post.route.ts` wire 3 route dùng trong tầng HTTP dưới đây, giữ nguyên thứ tự
- * middleware và việc `/create` KHÔNG có `asyncHandler`. */
+ * middleware. Task 011 (D-1): `POST /posts/create` -> `POST /posts`,
+ * `POST /posts/update-post-visibility` -> `PATCH /posts/:id/visibility`. */
 const routeApp = () => {
   const app = express();
   app.use(express.json());
-  app.post("/posts/create", validate(createPostSchema), reachedController);
+  app.post("/posts", validate(createPostSchema), asyncHandler(reachedController));
   app.delete("/posts/:id", validate(deletePostSchema), reachedController);
-  app.post(
-    "/posts/update-post-visibility",
+  app.patch(
+    "/posts/:id/visibility",
     validate(updatePostVisibilitySchema),
     reachedController
   );
@@ -461,24 +473,24 @@ test("FR-9 (HTTP): DELETE /posts/not-an-objectid -> 400 trước khi controller 
   );
 });
 
-// AC FR-5 (AD-4): `POST /create` là route DUY NHẤT không bọc `asyncHandler`. Nếu `validate()` lỡ
-// thành async (hoặc throw thay vì `next(err)`), express không có ai bắt -> request treo tới khi
-// client timeout. Test này fail bằng cách TREO, nên phải tự đặt hạn giờ thay vì chờ test runner.
-test("AD-4 (HTTP): POST /posts/create body sai -> 400, KHÔNG treo", async () => {
+// AC FR-5 (AD-4): `validate()` phải đồng bộ / `next(err)` chứ không throw vào khoảng không, nếu
+// không express không có ai bắt -> request treo tới khi client timeout. Test này fail bằng cách
+// TREO, nên phải tự đặt hạn giờ thay vì chờ test runner. Task 011: path `/posts/create` -> `/posts`.
+test("AD-4 (HTTP): POST /posts body sai -> 400, KHÔNG treo", async () => {
   await silenceWarn(() =>
     withServer(routeApp(), async (base) => {
       const started = Date.now();
       let timer: any;
       const deadline = new Promise((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error("TREO: /posts/create không trả response — validate() bị async?")),
+          () => reject(new Error("TREO: POST /posts không trả response — validate() bị async?")),
           5000
         );
       });
 
       try {
         const res: any = await Promise.race([
-          fetch(`${base}/posts/create`, {
+          fetch(`${base}/posts`, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ content: 123 }),
@@ -496,11 +508,11 @@ test("AD-4 (HTTP): POST /posts/create body sai -> 400, KHÔNG treo", async () =>
   );
 });
 
-test("FR-5 (HTTP): POST /posts/update-post-visibility visibility ngoài enum -> 400", async () => {
+test("FR-5 (HTTP): PATCH /posts/:id/visibility visibility ngoài enum -> 400", async () => {
   await silenceWarn(() =>
     withServer(routeApp(), async (base) => {
-      const res = await fetch(`${base}/posts/update-post-visibility`, {
-        method: "POST",
+      const res = await fetch(`${base}/posts/${OTHER_ID}/visibility`, {
+        method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ userId: VALID_ID, postId: OTHER_ID, visibility: 99 }),
       });
@@ -513,10 +525,10 @@ test("FR-5 (HTTP): POST /posts/update-post-visibility visibility ngoài enum -> 
 // Task 020 (NFR-4, positive path): 3 test HTTP ở trên đều là negative. Nếu `validate()` lỡ chặn
 // nhầm payload HỢP LỆ thì không test nào ở trên fail. Test này đi ngược chiều: payload đúng theo
 // bảng field của `012.md` phải CHẠM được controller trên cả 3 mặt reassignment (AD-6) —
-// `req.body` (/create), `req.params` + `req.query` (DELETE /posts/:id).
+// `req.body` (POST /posts), `req.params` + `req.query` (DELETE /posts/:id).
 test("NFR-4 (HTTP positive): payload hợp lệ chạm được controller trên cả body/params/query", async () => {
   await withServer(routeApp(), async (base) => {
-    const createRes = await fetch(`${base}/posts/create`, {
+    const createRes = await fetch(`${base}/posts`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -539,8 +551,8 @@ test("NFR-4 (HTTP positive): payload hợp lệ chạm được controller trên
     assert.equal(deleteRes.status, 200, "params + query hợp lệ không được bị chặn");
     assert.deepEqual(await deleteRes.json(), { reached: true });
 
-    const visibilityRes = await fetch(`${base}/posts/update-post-visibility`, {
-      method: "POST",
+    const visibilityRes = await fetch(`${base}/posts/${OTHER_ID}/visibility`, {
+      method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         userId: VALID_ID,
@@ -557,17 +569,37 @@ test("NFR-4 (HTTP positive): payload hợp lệ chạm được controller trên
 // `post.route.ts` không import được trong test (xem đầu file: `feed/queue.ts` mở Redis lúc import),
 // nên kiểm wiring bằng cách đọc source — đúng cách `validate.test.ts` kiểm `src/app.ts`.
 // Đường dẫn theo cwd: `npm test` luôn chạy từ thư mục gốc repo.
-test("wiring: 10/11 route có validate(), CRAWL_POST cố ý không có", async () => {
-  const src = await import("node:fs/promises").then((fs) =>
+const readRouteSource = async () =>
+  await import("node:fs/promises").then((fs) =>
     fs.readFile("src/api/routers/post.route.ts", "utf8")
   );
 
-  const routeLines = src
+const parseRouteLines = (src: string) =>
+  src
     .split("\n")
     .join(" ")
-    .match(/router\.(get|post|put|delete)\([\s\S]*?\);/g);
+    .match(/router\.(get|post|put|patch|delete)\([\s\S]*?\);/g) ?? [];
 
-  assert.ok(routeLines, "không parse được route nào từ post.route.ts");
+/** `(method, path)` của từng route, path đã resolve: đối số đầu tiên hoặc là string literal, hoặc
+ * là 1 constant destructure từ `POST_PATH` (task 011 nhét luôn `:id` vào giá trị constant). */
+const parseRoutePairs = (src: string) =>
+  parseRouteLines(src).map((line) => {
+    const m = line.match(/^router\.(\w+)\(\s*("([^"]*)"|[A-Z_]+)/);
+    assert.ok(m, `không parse được đối số path từ: ${line.slice(0, 80)}`);
+    const [, method, rawArg, literal] = m;
+    const path =
+      literal !== undefined ? literal : (POST_PATH as any)[rawArg];
+    assert.equal(
+      typeof path,
+      "string",
+      `path của route ${method} không resolve được (${rawArg}) — constant có còn trong POST_PATH?`
+    );
+    return [method, path];
+  });
+
+test("wiring: 10/11 route có validate(), CRAWL_POST cố ý không có", async () => {
+  const routeLines = parseRouteLines(await readRouteSource());
+
   assert.equal(routeLines.length, 11, "post.route.ts phải có đúng 11 route");
 
   const withValidate = routeLines.filter((line) => line.includes("validate("));
@@ -579,4 +611,225 @@ test("wiring: 10/11 route có validate(), CRAWL_POST cố ý không có", async 
     !crawl[0].includes("validate("),
     "CRAWL_POST là tool seed/dev, cố ý KHÔNG validate — nếu sau này thành route nhận payload thì phải thêm"
   );
+});
+
+/* --------------------------------------------- Task 011 (FR-3, D-1): bảng 11 endpoint mới */
+
+// AC FR-3: chốt CỨNG method + path của cả 11 endpoint theo đúng bảng trong `011.md`. Thứ tự trong
+// list cũng là thứ tự ĐĂNG KÝ — có ý nghĩa với express (route literal 1 segment như `/crawl` phải
+// đứng trước route dynamic 1 segment cùng method), nên assert nguyên list chứ không dùng Set.
+test("FR-3 (D-1): 11 endpoint posts đúng method + path RESTful mới, đúng thứ tự đăng ký", async () => {
+  const pairs = parseRoutePairs(await readRouteSource());
+
+  assert.deepEqual(pairs, [
+    ["get", "/"], // GET_ALL: /all -> /
+    ["get", "/:id/activities"], // giữ nguyên
+    ["get", "/:id"], // giữ nguyên
+    ["post", "/"], // CREATE: /create -> /
+    ["delete", "/:id"], // giữ nguyên
+    ["put", "/:id"], // UPDATE: /update -> /:id
+    ["post", "/:id/like"], // LIKE: /like/:id -> /:id/like
+    ["post", "/crawl"], // CRAWL_POST: /crawl-post -> /crawl
+    ["post", "/:id/survey-ticks"], // TICK_SURVEY: PUT /tick-post-survey -> POST /:id/survey-ticks
+    ["patch", "/:id/status"], // UPDATE_POST_STATUS: POST /update-post-status -> PATCH /:id/status
+    ["patch", "/:id/visibility"], // UPDATE_POST_VISIBILITY: POST -> PATCH /:id/visibility
+  ]);
+});
+
+// FR-3 (id-source): `PUT /posts/:id` chỉ có nghĩa nếu controller đọc id từ `req.params.id`. Nếu ai
+// đó revert về `payload._id`, `PUT /posts/<A>` với body `_id: <B>` sẽ âm thầm sửa NHẦM bài B.
+test("FR-3 (id-source): updatePost đọc req.params.id, KHÔNG đọc payload._id", async () => {
+  const src = await import("node:fs/promises").then((fs) =>
+    fs.readFile("src/api/controllers/post.controller.ts", "utf8")
+  );
+  const fn = src.slice(src.indexOf("export const updatePost"));
+  const body = fn.slice(0, fn.indexOf("\n};"));
+
+  assert.ok(
+    body.includes("const postId = req.params.id;"),
+    "updatePost phải lấy id từ path param của route PUT /posts/:id"
+  );
+  assert.ok(
+    !body.includes("const postId = payload._id;"),
+    "id KHÔNG được lấy từ body — client sửa được body thành id bài của người khác"
+  );
+});
+
+// FR-10: 0 raw `res.json({error...})` còn lại — envelope lỗi phải đi qua error-handler tập trung.
+test("FR-10: post.controller.ts không còn raw res.json({ error ... })", async () => {
+  const src = await import("node:fs/promises").then((fs) =>
+    fs.readFile("src/api/controllers/post.controller.ts", "utf8")
+  );
+  assert.equal(
+    (src.match(/\.json\(\{\s*error/g) ?? []).length,
+    0,
+    "mọi lỗi phải `throw new {XxxError}` để app.ts error-handler soạn envelope thống nhất"
+  );
+});
+
+/* -------------------------- R-6 (BẮT BUỘC): regression bypass repost task 090, end-to-end -------
+   Guard chặn repost sống trong `createPost` và đọc CẢ `?action=repost` (query) LẪN `type` (body)
+   LẪN `quote._id`. Task 011 đổi route `POST /posts/create` -> `POST /posts` và bọc `asyncHandler`
+   — nếu việc đổi đó làm hỏng đường đi của guard (hoặc làm request TREO thay vì trả 400), bypass
+   task 090 sống lại. Test dưới đây chạy controller THẬT sau `validate()` THẬT trên ĐÚNG route mới,
+   stub tầng model để không cần Mongo. */
+
+const AUTHOR_ID = "652f1b2c3d4e5f6071829306";
+const QUOTED_POST_ID = "652f1b2c3d4e5f6071829307";
+
+/** Dựng app mirror `post.route.ts`: 1 `Router` mount tại `Route.POST` (= `/posts`), route
+ * `POST POST_PATH.CREATE` (= `/`) gồm `validate(createPostSchema)` + `asyncHandler(createPost)`,
+ * cộng error-handler kiểu `app.ts` (đọc `err.statusCode`). Mount qua Router chứ không `app.post()`
+ * thẳng, để `POST_PATH.CREATE = "/"` được nối với prefix đúng như production. */
+const createPostApp = () => {
+  const app = express();
+  app.use(express.json());
+  const router = express.Router();
+  router.post(POST_PATH.CREATE, validate(createPostSchema), asyncHandler(createPost));
+  app.use(Route.POST, router);
+  app.use(errorHandler);
+  return app;
+};
+
+/** Stub `User.findById` (tác giả tồn tại) + `Post.findById` (bài bị quote, visibility tuỳ test) +
+ * `Post.prototype.save` (đánh dấu nếu bị gọi = guard đã LỌT). */
+const withStubbedModels = async (
+  quotedVisibility: number,
+  fn: (state: { saveCalled: boolean }) => Promise<void>
+) => {
+  const state = { saveCalled: false };
+  const originalUserFind = (User as any).findById;
+  const originalPostFind = (Post as any).findById;
+  const originalSave = (Post as any).prototype.save;
+  (User as any).findById = async () => ({ _id: AUTHOR_ID });
+  (Post as any).findById = async () => ({
+    _id: QUOTED_POST_ID,
+    visibility: quotedVisibility,
+  });
+  (Post as any).prototype.save = async function () {
+    state.saveCalled = true;
+    throw new Error("REACHED_SAVE");
+  };
+  try {
+    await fn(state);
+  } finally {
+    (User as any).findById = originalUserFind;
+    (Post as any).findById = originalPostFind;
+    (Post as any).prototype.save = originalSave;
+  }
+};
+
+/** Payload repost/quote: nội dung bài gốc bị copy nguyên văn vào `quote.content`. `action` KHÔNG
+ * nằm trong body — nó chỉ tồn tại ở query string, nên bỏ query = bỏ tín hiệu `action`. */
+const quotePayload = (type: string) => ({
+  _id: "652f1b2c3d4e5f6071829308",
+  authorId: AUTHOR_ID,
+  content: "",
+  media: [],
+  survey: [],
+  usersTag: [],
+  links: [],
+  files: [],
+  type,
+  quote: {
+    _id: QUOTED_POST_ID,
+    content: "Nội dung RIÊNG TƯ copy nguyên văn từ bài gốc",
+  },
+});
+
+// AC R-6 (test quan trọng nhất của task 011): `type=REPOST` trong body, KHÔNG có `?action=repost`
+// trong query, `quote._id` copy từ bài khác (bài đó ONLY_ME) -> PHẢI vẫn bị chặn 400.
+test("R-6 (BẮT BUỘC): POST /posts type=REPOST KHÔNG kèm ?action=repost -> vẫn bị chặn 400, không lưu", async () => {
+  await silenceWarn(() =>
+    withStubbedModels(Constants.POST_VISIBILITY.ONLY_ME, async (state) => {
+      await withServer(createPostApp(), async (base) => {
+        let timer: any;
+        const deadline = new Promise((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  "TREO: POST /posts không trả response — throw trong createPost không được asyncHandler bắt?"
+                )
+              ),
+            5000
+          );
+        });
+
+        try {
+          const res: any = await Promise.race([
+            // CỐ Ý không có `?action=repost` — đây chính là vector bypass của task 090.
+            fetch(`${base}/posts`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(quotePayload(PostConstants.ACTIONS.REPOST)),
+            }),
+            deadline,
+          ]);
+
+          assert.equal(res.status, 400, "repost bài non-PUBLIC phải bị chặn 400");
+          assert.deepEqual(await res.json(), {
+            message: "Cannot repost non-public content",
+          });
+          assert.equal(
+            state.saveCalled,
+            false,
+            "CRITICAL: guard phải chặn TRƯỚC khi lưu — save() được gọi nghĩa là bypass đã sống lại"
+          );
+        } finally {
+          clearTimeout(timer);
+        }
+      });
+    })
+  );
+});
+
+// AC R-6 (biến thể bypass gốc task 090): `type=CREATE` + `quote._id` tự dựng thủ công, không
+// `action`, không `parentPost` — đây là payload ĐÃ khai thác được live lần đầu.
+test("R-6 (bypass gốc 090): POST /posts type=CREATE + quote._id thủ công -> vẫn bị chặn 400", async () => {
+  await silenceWarn(() =>
+    withStubbedModels(Constants.POST_VISIBILITY.ONLY_FOLLOWERS, async (state) => {
+      await withServer(createPostApp(), async (base) => {
+        const res = await fetch(`${base}/posts`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(quotePayload(PostConstants.ACTIONS.CREATE)),
+        });
+
+        assert.equal(res.status, 400);
+        assert.deepEqual(await res.json(), {
+          message: "Cannot repost non-public content",
+        });
+        assert.equal(state.saveCalled, false, "không được lưu bài repost lách guard");
+      });
+    })
+  );
+});
+
+// Đối chứng (không phải chặn mù): bài được quote là PUBLIC -> guard CHO QUA, chạy tiếp tới bước lưu
+// (`save()` stub ném REACHED_SAVE = 500). Thiếu test này thì một guard "luôn 400" cũng pass 2 test
+// trên mà không ai biết.
+test("R-6 (đối chứng): quote bài PUBLIC -> guard cho qua, đi tiếp tới bước lưu", async () => {
+  await silenceWarn(() =>
+    withStubbedModels(Constants.POST_VISIBILITY.PUBLIC, async (state) => {
+      await withServer(createPostApp(), async (base) => {
+        const res = await fetch(`${base}/posts`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(quotePayload(PostConstants.ACTIONS.REPOST)),
+        });
+
+        assert.equal(res.status, 500, "REACHED_SAVE stub -> 500, chứng minh đã qua guard");
+        assert.equal(
+          state.saveCalled,
+          true,
+          "repost bài PUBLIC là hợp lệ — guard không được chặn nhầm"
+        );
+      });
+    })
+  );
+});
+
+after(async () => {
+  await closeFanoutQueues();
 });

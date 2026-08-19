@@ -3,8 +3,12 @@ import { Constants } from "../../Breads-Shared/Constants/index.js";
 import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
 import { IPost } from "../../Breads-Shared/Types/index.js";
 import { CREATED, OK } from "../../core/success.response.js";
+import {
+  AuthFailureError,
+  BadRequestError,
+  NotFoundError,
+} from "../../core/error.response.js";
 import logger from "../../core/logger.js";
-import HTTPStatus from "../../utils/httpStatus.js";
 import { ObjectId } from "../../utils/index.js";
 import Category from "../models/category.model.js";
 import Follow from "../models/follow.model.js";
@@ -159,7 +163,7 @@ export const createPost = async (req, res) => {
   } = payload;
   const user = await User.findById(authorId);
   if (!user) {
-    return res.status(HTTPStatus.NOT_FOUND).json({ error: "User not found" });
+    throw new NotFoundError("User not found");
   }
   if (
     !content.trim() &&
@@ -169,15 +173,13 @@ export const createPost = async (req, res) => {
     !quote?._id &&
     !files?.length
   ) {
-    return res
-      .status(HTTPStatus.BAD_REQUEST)
-      .json({ error: "Cannot create post without payload" });
+    throw new BadRequestError("Cannot create post without payload");
   }
   const maxLength = 500;
   if (content.length > maxLength) {
-    return res
-      .status(HTTPStatus.BAD_REQUEST)
-      .json({ error: `Text must be less than ${maxLength} characters` });
+    throw new BadRequestError(
+      `Text must be less than ${maxLength} characters`,
+    );
   }
   // [plan-review] `visibility` do client gửi lên phải nằm trong enum — chặn ở đây thay vì để
   // Mongoose enum ném ValidationError 500 lúc `.save()`.
@@ -188,9 +190,7 @@ export const createPost = async (req, res) => {
     payload.visibility !== undefined &&
     !validVisibilityValues.includes(payload.visibility)
   ) {
-    return res
-      .status(HTTPStatus.BAD_REQUEST)
-      .json({ error: "Invalid visibility value" });
+    throw new BadRequestError("Invalid visibility value");
   }
   // Task 011: media hoàn toàn mới ở `createPost` -> MỌI item đều qua 3-bước check
   // (`processNewPostMediaItem`), thay cho `uploadFileFromBase64` relay bytes trực tiếp cũ.
@@ -199,9 +199,7 @@ export const createPost = async (req, res) => {
     for (let fileInfo of media) {
       const processed = await processNewPostMediaItem(fileInfo, authorId);
       if (!processed) {
-        return res
-          .status(HTTPStatus.BAD_REQUEST)
-          .json({ error: `Invalid media URL: ${fileInfo.url}` });
+        throw new BadRequestError(`Invalid media URL: ${fileInfo.url}`);
       }
       newMedia.push(processed);
     }
@@ -289,7 +287,7 @@ export const createPost = async (req, res) => {
     });
     const guard = validateRepostGuard(parentPostDoc);
     if (guard.ok === false) {
-      return res.status(HTTPStatus.BAD_REQUEST).json({ error: guard.error });
+      throw new BadRequestError(guard.error);
     }
     if (action === PostConstants.ACTIONS.REPOST) {
       newPostPayload.parentPost = parentPost;
@@ -328,7 +326,7 @@ export const getPost = async (req, res) => {
     viewerId: req.viewerId,
   });
   if (!post) {
-    return res.status(HTTPStatus.NOT_FOUND).json({ error: "Post not found!" });
+    throw new NotFoundError("Post not found!");
   }
   new OK({
     message: "Get post successfully",
@@ -340,16 +338,14 @@ export const deletePost = async (req, res) => {
   const postId = req.params.id;
   const userId = req.query.userId;
   if (!postId || !userId) {
-    return res.status(HTTPStatus.BAD_REQUEST).json({ error: "Empty payload" });
+    throw new BadRequestError("Empty payload");
   }
   const post = await Post.findById(postId);
   if (!post) {
-    return res.status(HTTPStatus.NOT_FOUND).json({ error: "Post not found" });
+    throw new NotFoundError("Post not found");
   }
   if (post.authorId.toString() !== userId.toString()) {
-    return res
-      .status(HTTPStatus.UNAUTHORIZED)
-      .json({ error: "Unauthorized to delete post" });
+    throw new AuthFailureError("Unauthorized to delete post");
   }
   const repliesId = post.replies;
   if (repliesId?.length) {
@@ -393,20 +389,17 @@ export const deletePost = async (req, res) => {
 //updatePost
 export const updatePost = async (req, res) => {
   const payload = req.body;
-  const postId = payload._id;
+  // Task 011 (D-1/FR-3): route đổi `PUT /posts/update` -> `PUT /posts/:id`, nên id bài viết lấy từ
+  // path param thay vì `payload._id` do client gửi trong body.
+  const postId = req.params.id;
   const { media, content, survey, visibility, files } = payload;
-  // if(!req.user){
-  //   return res.status(HTTPStatus.UNAUTHORIZED).json({error: "Unauthorized"})
-  // }
   let post = await Post.findById(postId);
   if (!post) {
-    return res.status(HTTPStatus.NOT_FOUND).json({ error: "Post not found" });
+    throw new NotFoundError("Post not found");
   }
 
   if (post.authorId.toString() !== payload.userId.toString()) {
-    return res
-      .status(HTTPStatus.UNAUTHORIZED)
-      .json({ error: "Unauthorized to update this post" });
+    throw new AuthFailureError("Unauthorized to update this post");
   }
   let newSurvey = [];
   if (survey?.length) {
@@ -448,9 +441,7 @@ export const updatePost = async (req, res) => {
         post.authorId.toString(),
       );
       if (!processed) {
-        return res
-          .status(HTTPStatus.BAD_REQUEST)
-          .json({ error: `Invalid media URL: ${item.url}` });
+        throw new BadRequestError(`Invalid media URL: ${item.url}`);
       }
       processedMedia.push(processed);
     }
@@ -480,7 +471,7 @@ export const likeUnlikePost = async (req, res) => {
 
   const post = await Post.findById(postId);
   if (!post) {
-    return res.status(HTTPStatus.NOT_FOUND).json({ error: "Post not found" });
+    throw new NotFoundError("Post not found");
   }
   const existingLike = await Like.findOne({
     postId: ObjectId(postId),
@@ -541,7 +532,7 @@ export const getPosts = async (req, res) => {
 export const tickPostSurvey = async (req, res) => {
   const { optionId, userId, isAdd } = req.body;
   if (!optionId || !userId) {
-    return res.status(HTTPStatus.BAD_REQUEST).json({ error: "Empty payload" });
+    throw new BadRequestError("Empty payload");
   }
   if (isAdd) {
     await SurveyOption.updateOne(
@@ -567,16 +558,14 @@ export const tickPostSurvey = async (req, res) => {
 export const updatePostStatus = async (req, res) => {
   const { userId, postId, status } = req.body;
   if (!userId || !postId) {
-    return res.status(HTTPStatus.BAD_REQUEST).json({ error: "Empty payload" });
+    throw new BadRequestError("Empty payload");
   }
   const userInfo = await User.findOne({
     _id: ObjectId(userId),
   });
   const isAdmin = userInfo?.role === Constants.USER_ROLE.ADMIN;
   if (!isAdmin) {
-    return res
-      .status(HTTPStatus.UNAUTHORIZED)
-      .json({ error: "Only for admin" });
+    throw new AuthFailureError("Only for admin");
   }
   await Post.updateOne(
     {
@@ -597,24 +586,20 @@ export const updatePostStatus = async (req, res) => {
 export const updatePostVisibility = async (req, res) => {
   const { userId, postId, visibility } = req.body;
   if (!userId || !postId) {
-    return res.status(HTTPStatus.BAD_REQUEST).json({ error: "Empty payload" });
+    throw new BadRequestError("Empty payload");
   }
   const validVisibilityValues: number[] = Object.values(
     Constants.POST_VISIBILITY,
   );
   if (!validVisibilityValues.includes(visibility)) {
-    return res
-      .status(HTTPStatus.BAD_REQUEST)
-      .json({ error: "Invalid visibility value" });
+    throw new BadRequestError("Invalid visibility value");
   }
   const post = await Post.findById(postId, { authorId: 1 });
   if (!post) {
-    return res.status(HTTPStatus.NOT_FOUND).json({ error: "Post not found" });
+    throw new NotFoundError("Post not found");
   }
   if (post.authorId.toString() !== userId.toString()) {
-    return res
-      .status(HTTPStatus.UNAUTHORIZED)
-      .json({ error: "Unauthorized to update this post" });
+    throw new AuthFailureError("Unauthorized to update this post");
   }
   await Post.updateOne(
     {
@@ -639,7 +624,7 @@ export const getPostActivities = async (req, res) => {
 
   const post = await Post.findById(postId);
   if (!post) {
-    return res.status(HTTPStatus.NOT_FOUND).json({ error: "Post not found" });
+    throw new NotFoundError("Post not found");
   }
 
   let users: any[] = [];
