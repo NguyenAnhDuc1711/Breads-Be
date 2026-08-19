@@ -1,4 +1,3 @@
-import HTTPStatus from "../../utils/httpStatus.js";
 import { ObjectId, destructObjectId } from "../../utils/index.js";
 import { genConversations, genMsgsInConversations } from "../crawl.js";
 import Conversation from "../models/conversation.model.js";
@@ -67,7 +66,7 @@ export const getConversationById = async (req, res) => {
 };
 
 export const getConversationMedia = async (req, res) => {
-  const { conversationId } = req.body;
+  const { conversationId } = req.params;
   if (!conversationId) {
     throw new BadRequestError("Empty conversationId");
   }
@@ -90,11 +89,9 @@ export const getConversationMedia = async (req, res) => {
 };
 
 export const getConversationFiles = async (req, res) => {
-  const { conversationId } = req.body;
+  const { conversationId } = req.params;
   if (!conversationId) {
-    return res
-      .status(HTTPStatus.BAD_REQUEST)
-      .json({ error: "Empty conversationId" });
+    throw new BadRequestError("Empty conversationId");
   }
   const msgs = await Message.aggregate([
     {
@@ -130,7 +127,7 @@ export const getConversationFiles = async (req, res) => {
 };
 
 export const getConversationLinks = async (req, res) => {
-  const { conversationId } = req.body;
+  const { conversationId } = req.params;
   if (!conversationId) {
     throw new BadRequestError("Empty conversationId");
   }

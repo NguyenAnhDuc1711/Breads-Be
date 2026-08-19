@@ -21,19 +21,19 @@ export const getConversationByIdQuerySchema = {
 };
 
 export const getConversationMediaSchema = {
-  body: z.object({
+  params: z.object({
     conversationId: objectIdSchema,
   }),
 };
 
 export const getConversationFilesSchema = {
-  body: z.object({
+  params: z.object({
     conversationId: objectIdSchema,
   }),
 };
 
 export const getConversationLinksSchema = {
-  body: z.object({
+  params: z.object({
     conversationId: objectIdSchema,
   }),
 };
