@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  typecheck-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      # ~30 pre-existing type errors in the codebase (unrelated to new PRs) mean this
+      # can't be a required check yet. Keep it visible in logs without blocking merges.
+      - name: Type-check (non-blocking)
+        continue-on-error: true
+        run: npx tsc --noEmit
+
+      # Excludes test files that need a real Redis (feed/queue.ts connects eagerly at
+      # import time) or spawn their own `mongod` binary — neither is available on this
+      # runner. See CI setup discussion for the full list.
+      - name: Run tests (excluding tests requiring Redis/mongod)
+        run: |
+          EXCLUDE=(
+            "src/api/controllers/post.controller.dispatch.test.ts"
+            "src/api/controllers/post.controller.dispatch.enabled-false.test.ts"
+            "src/api/controllers/post.controller.dispatch.direct-mode.test.ts"
+            "src/api/controllers/post.controller.test.ts"
+            "src/socket/controllers/message.controller.sendnext.test.ts"
+          )
+          FIND_ARGS=()
+          for f in "${EXCLUDE[@]}"; do
+            FIND_ARGS+=(-not -path "$f")
+          done
+          FILES=$(find src/api/services src/api/services/feed src/api/services/metrics \
+            src/api/controllers src/api/middlewares src/api/validators src/api/routers \
+            src/socket/controllers src/socket/services src/socket/middlewares src/socket/validators \
+            -maxdepth 1 -name '*.test.ts' "${FIND_ARGS[@]}")
+          npx tsx --test $FILES

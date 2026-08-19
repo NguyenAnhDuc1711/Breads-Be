@@ -394,7 +394,7 @@ export const deletePost = async (req, res) => {
 export const updatePost = async (req, res) => {
   const payload = req.body;
   const postId = payload._id;
-  const { media, content, survey } = payload;
+  const { media, content, survey, visibility, files } = payload;
   // if(!req.user){
   //   return res.status(HTTPStatus.UNAUTHORIZED).json({error: "Unauthorized"})
   // }
@@ -409,7 +409,7 @@ export const updatePost = async (req, res) => {
       .json({ error: "Unauthorized to update this post" });
   }
   let newSurvey = [];
-  if (survey.length) {
+  if (survey?.length) {
     newSurvey = survey
       .filter((option) => !!option.value)
       .map((option) => {
@@ -456,8 +456,16 @@ export const updatePost = async (req, res) => {
     }
     post.media = processedMedia;
   }
+  if (visibility !== undefined) {
+    post.visibility = visibility;
+  }
+  if (files !== undefined) {
+    post.files = files;
+  }
   post.content = content;
-  post.survey = newSurvey;
+  if (survey !== undefined) {
+    post.survey = newSurvey;
+  }
   post = await post.save();
   new OK({
     message: "Post updated successfully!",
