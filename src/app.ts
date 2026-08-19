@@ -46,7 +46,7 @@ app.get("/metrics", metricsHandler);
 // FR-1 (security-hardening, task 012): global-tier rate-limit (100 req/phút/IP) cho toàn bộ /api.
 // Route auth-tier (SIGN_UP/LOGIN/CRAWL_POST/CRAWL_USER/forgot-password) có thêm authTierLimiter
 // riêng ngay trên route đó (5 req/phút) — 2 lớp độc lập, lớp nghiêm ngặt hơn trigger trước.
-app.use("/api", globalTierLimiter, router);
+app.use("/v1", globalTierLimiter, router);
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   const error = new Error("Not found");
