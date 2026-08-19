@@ -74,6 +74,24 @@ const makeQueryApp = (schema) => {
   return app;
 };
 
+// Task 014 (D-1): PATCH /:id/response|reject — id trong path, phần còn lại trong body.
+const makePatchIdApp = (schema, echo = false) => {
+  const app = express();
+  app.use(express.json());
+  app.patch("/t/:id", validate(schema), (req, res) => {
+    res.json(echo ? { params: req.params, body: req.body } : { ok: true });
+  });
+  app.use(errorHandler);
+  return app;
+};
+
+const patchWithId = (base: string, id: string, body: unknown) =>
+  fetch(`${base}/t/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
 /* ------------------------------------------------------- getReportsSchema (query) */
 
 // AD-5: route này đọc `req.query` -> `z.coerce.number()`. Nửa đối chứng (body KHÔNG coerce) nằm
@@ -126,32 +144,44 @@ test("FR-7: sendReportSchema: thiếu userId -> 400", async () => {
   );
 });
 
-/* ------------------------------------------------------ responseReportSchema (body) */
+/* ---------------------------------------------- responseReportSchema (params.id + body, task 014) */
 
-const validResponsePayload = {
+const validResponseBody = {
   from: "admin@breads.dev",
   to: "user@example.com",
   subject: "Về báo cáo của bạn",
   html: "<p>hi</p>",
   userId: VALID_ID_1,
-  reportId: VALID_ID_2,
 };
 
-test("responseReportSchema: payload đầy đủ hợp lệ -> 200", async () => {
-  await withServer(makeBodyApp(responseReportSchema, true), async (base) => {
-    const res = await postBody(base, validResponsePayload);
+test("Task 014: responseReportSchema: id (path) + body đầy đủ hợp lệ -> 200", async () => {
+  await withServer(makePatchIdApp(responseReportSchema, true), async (base) => {
+    const res = await patchWithId(base, VALID_ID_2, validResponseBody);
     assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { body: validResponsePayload });
+    assert.deepEqual(await res.json(), {
+      params: { id: VALID_ID_2 },
+      body: validResponseBody,
+    });
   });
+});
+
+test("Task 014: responseReportSchema: id (path) không phải ObjectId -> 400", async () => {
+  await silenceWarn(() =>
+    withServer(makePatchIdApp(responseReportSchema), async (base) => {
+      const res = await patchWithId(base, "not-an-objectid", validResponseBody);
+      assert.equal(res.status, 400);
+      assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
+    })
+  );
 });
 
 // `from` đi thẳng vào `sendMailService` — payload dị dạng phải bị chặn TRƯỚC khi tới lệnh gửi
 // mail thật (controller chỉ check truthy nên "not-an-email" vẫn lọt).
 test("FR-7: responseReportSchema: from không phải email -> 400 (chặn trước sendMailService)", async () => {
   await silenceWarn(() =>
-    withServer(makeBodyApp(responseReportSchema), async (base) => {
-      const res = await postBody(base, {
-        ...validResponsePayload,
+    withServer(makePatchIdApp(responseReportSchema), async (base) => {
+      const res = await patchWithId(base, VALID_ID_2, {
+        ...validResponseBody,
         from: "not-an-email",
       });
       assert.equal(res.status, 400);
@@ -162,8 +192,8 @@ test("FR-7: responseReportSchema: from không phải email -> 400 (chặn trư�
 
 test("responseReportSchema: to không phải email -> 400", async () => {
   await silenceWarn(() =>
-    withServer(makeBodyApp(responseReportSchema), async (base) => {
-      const res = await postBody(base, { ...validResponsePayload, to: "user@" });
+    withServer(makePatchIdApp(responseReportSchema), async (base) => {
+      const res = await patchWithId(base, VALID_ID_2, { ...validResponseBody, to: "user@" });
       assert.equal(res.status, 400);
       assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
     })
@@ -172,35 +202,33 @@ test("responseReportSchema: to không phải email -> 400", async () => {
 
 test("responseReportSchema: subject rỗng -> 400", async () => {
   await silenceWarn(() =>
-    withServer(makeBodyApp(responseReportSchema), async (base) => {
-      const res = await postBody(base, { ...validResponsePayload, subject: "" });
+    withServer(makePatchIdApp(responseReportSchema), async (base) => {
+      const res = await patchWithId(base, VALID_ID_2, { ...validResponseBody, subject: "" });
       assert.equal(res.status, 400);
       assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
     })
   );
 });
 
-/* -------------------------------------------------------- rejectReportSchema (body) */
+/* ------------------------------------------------ rejectReportSchema (params.id + body, task 014) */
 
-test("FR-7: rejectReportSchema: thiếu reportId -> 400", async () => {
+test("FR-7: rejectReportSchema: id (path) không phải ObjectId -> 400", async () => {
   await silenceWarn(() =>
-    withServer(makeBodyApp(rejectReportSchema), async (base) => {
-      const res = await postBody(base, { userId: VALID_ID_1 });
+    withServer(makePatchIdApp(rejectReportSchema), async (base) => {
+      const res = await patchWithId(base, "not-an-objectid", { userId: VALID_ID_1 });
       assert.equal(res.status, 400);
       assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
     })
   );
 });
 
-test("rejectReportSchema: body hợp lệ -> 200", async () => {
-  await withServer(makeBodyApp(rejectReportSchema, true), async (base) => {
-    const res = await postBody(base, {
-      userId: VALID_ID_1,
-      reportId: VALID_ID_2,
-    });
+test("Task 014: rejectReportSchema: id (path) + userId (body) hợp lệ -> 200", async () => {
+  await withServer(makePatchIdApp(rejectReportSchema, true), async (base) => {
+    const res = await patchWithId(base, VALID_ID_2, { userId: VALID_ID_1 });
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), {
-      body: { userId: VALID_ID_1, reportId: VALID_ID_2 },
+      params: { id: VALID_ID_2 },
+      body: { userId: VALID_ID_1 },
     });
   });
 });

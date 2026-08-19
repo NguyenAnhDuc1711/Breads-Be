@@ -1,8 +1,9 @@
-// Schema cho router `report` (FR-7, task 014).
+// Schema cho router `report` (FR-7, task 014; redesign RESTful task 014).
 //
-// 4 route, nhưng KHÔNG đồng nhất về nguồn payload: `getReports` đọc `req.query`
-// (`report.controller.ts:55`) nên phải `z.coerce.number()` cho `page`/`limit` (query string luôn
-// là string); 3 route còn lại đọc `req.body` nên dùng kiểu thẳng, không coerce (AD-5).
+// 4 route: `getReports` đọc `req.query` (`report.controller.ts`) nên phải `z.coerce.number()` cho
+// `page`/`limit` (query string luôn là string); `sendReport` đọc `req.body`; `responseReport`/
+// `rejectReport` (PATCH /:id/response|reject) đọc `reportId` từ `req.params.id`, phần còn lại từ
+// `req.body` (AD-5: body không coerce).
 import { z } from "zod";
 import { objectIdSchema } from "./common.ts";
 
@@ -31,20 +32,26 @@ export const sendReportSchema = {
 // `from`/`to` là ĐỊA CHỈ EMAIL THẬT, đi thẳng vào `sendMailService` (`report.controller.ts:144`),
 // không phải text hiển thị cho người dùng. Validate `.email()` ở đây chặn payload dị dạng TRƯỚC
 // khi chạm tới lệnh gửi mail thật — controller chỉ check truthy nên "abc" vẫn lọt qua được.
+// Task 014 (D-1): reportId chuyển từ body vào path (PATCH /:id/response).
 export const responseReportSchema = {
+  params: z.object({
+    id: objectIdSchema,
+  }),
   body: z.object({
     from: z.string().email(),
     to: z.string().email(),
     subject: z.string().min(1),
     html: z.string().optional(),
     userId: objectIdSchema,
-    reportId: objectIdSchema,
   }),
 };
 
+// Task 014 (D-1): reportId chuyển từ body vào path (PATCH /:id/reject).
 export const rejectReportSchema = {
+  params: z.object({
+    id: objectIdSchema,
+  }),
   body: z.object({
     userId: objectIdSchema,
-    reportId: objectIdSchema,
   }),
 };
