@@ -13,7 +13,7 @@ export const getConversationInfo = async ({ conversationId, userId }) => {
       })
       .populate({
         path: "lastMsgId",
-        select: "_id content media files sender createdAt",
+        select: "_id conversationId content media files sender createdAt",
       })
       .lean();
     if (!!data) {
