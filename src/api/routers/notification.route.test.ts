@@ -74,11 +74,12 @@ const withServer = async (app, fn: (base: string) => Promise<void>) => {
   }
 };
 
+// Task 013 (D-1): route đổi POST /get -> GET /, page/limit/action nay đọc từ req.query.
 const makeApp = (echo = false) => {
   const app = express();
   app.use(express.json());
-  app.post("/t", validate(getNotificationsSchema), (req, res) => {
-    res.json(echo ? { body: req.body } : { ok: true });
+  app.get("/t", validate(getNotificationsSchema), (req, res) => {
+    res.json(echo ? { query: req.query } : { ok: true });
   });
   app.use(errorHandler);
   return app;
@@ -210,22 +211,22 @@ const stageOf = (pipeline: any[], name: string) => {
 const tokenFor = (userId: string) =>
   jwt.sign({ userId }, process.env.JWT_SECRET as string);
 
-// Gửi 1 request POST /api/notifications/get qua router THẬT với stub sẵn.
+// Task 013 (D-1): route đổi POST /get -> GET /. Gửi 1 request GET /api/notifications qua router
+// THẬT với stub sẵn, params đi qua query string.
 const postGet = async (
-  { userId, cookie, body }: { userId?: string; cookie?: string; body: any },
+  { userId, cookie, query }: { userId?: string; cookie?: string; query: Record<string, string> },
   assertFn: (ctx: { res: any; agg: ReturnType<typeof stubAggregate> }) => void | Promise<void>
 ) => {
   const restoreUser = stubUser(userId ?? USER_X);
   const agg = stubAggregate();
   try {
     await withServer(makeRouterApp(), async (base) => {
-      const res = await fetch(`${base}/api/notifications/get`, {
-        method: "POST",
+      const qs = new URLSearchParams(query).toString();
+      const res = await fetch(`${base}/api/notifications?${qs}`, {
+        method: "GET",
         headers: {
-          "content-type": "application/json",
           ...(cookie ? { cookie } : {}),
         },
-        body: JSON.stringify(body),
       });
       await assertFn({ res: res as any, agg });
     });
@@ -235,79 +236,57 @@ const postGet = async (
   }
 };
 
-/* ------------------------------------------------ getNotificationsSchema (body) */
+/* ------------------------------------------------ getNotificationsSchema (query, task 013) */
 
-test("getNotificationsSchema: body hợp lệ -> 200", async () => {
+test("getNotificationsSchema: query hợp lệ -> 200", async () => {
   await withServer(makeApp(true), async (base) => {
-    const res = await fetch(`${base}/t`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ page: 1, limit: 10 }),
-    });
+    const res = await fetch(`${base}/t?page=1&limit=10`);
     assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { body: { page: 1, limit: 10 } });
+    assert.deepEqual(await res.json(), { query: { page: 1, limit: 10 } });
   });
 });
 
-// FR-1: `userId` đã bị XOÁ khỏi schema — body không có nó nay là hợp đồng ĐÚNG, không còn là 400.
-// (Test này trước đây mang tiền tố FR-7 của epic security-hardening — TRÙNG SỐ với FR-7 của epic
-// này; đã đổi tên để cách verify SC-11 bằng grep tiền tố `FR-<n>` của task 090 không đếm nhầm.)
+// FR-1: `userId` đã bị XOÁ khỏi schema — query không có nó nay là hợp đồng ĐÚNG, không còn là 400.
 test("getNotificationsSchema: không có userId -> 200 (userId đã rời schema)", async () => {
   await withServer(makeApp(true), async (base) => {
-    const res = await fetch(`${base}/t`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ page: 1, limit: 10 }),
-    });
+    const res = await fetch(`${base}/t?page=1&limit=10`);
     assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { body: { page: 1, limit: 10 } });
+    assert.deepEqual(await res.json(), { query: { page: 1, limit: 10 } });
   });
 });
 
 // NFR-1 (backward compat): FE cũ chưa deploy vẫn gửi `userId`. `z.object()` STRIP key không khai
-// báo -> 200, và key biến mất khỏi `req.body` trước khi tới controller. Đây là bằng chứng cho lựa
+// báo -> 200, và key biến mất khỏi `req.query` trước khi tới controller. Đây là bằng chứng cho lựa
 // chọn "xoá key khỏi schema" thay vì "đối chiếu với req.user._id" (AD-2/R-2).
-test("FR-1: body thừa userId -> 200 và userId bị strip khỏi req.body", async () => {
+test("FR-1: query thừa userId -> 200 và userId bị strip khỏi req.query", async () => {
   await withServer(makeApp(true), async (base) => {
-    const res = await fetch(`${base}/t`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ userId: VALID_ID, page: 1, limit: 10 }),
-    });
+    const res = await fetch(`${base}/t?userId=${VALID_ID}&page=1&limit=10`);
     assert.equal(res.status, 200);
     const payload: any = await res.json();
-    assert.deepEqual(payload, { body: { page: 1, limit: 10 } });
+    assert.deepEqual(payload, { query: { page: 1, limit: 10 } });
     assert.ok(
-      !("userId" in payload.body),
+      !("userId" in payload.query),
       "userId phải bị strip, không được đi tiếp vào controller"
     );
   });
 });
 
-// AD-5: field body KHÔNG được coerce. Đây là nửa còn lại của cặp kiểm chứng query-vs-body
-// (nửa kia ở `report.route.test.ts` với `getReportsSchema`).
-test("AD-5: getNotificationsSchema: page là string JSON \"2\" -> 400 (body không coerce)", async () => {
-  await silenceWarn(() =>
-    withServer(makeApp(), async (base) => {
-      const res = await fetch(`${base}/t`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ page: "2", limit: 10 }),
-      });
-      assert.equal(res.status, 400);
-      assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
-    })
-  );
+// Task 013: route đổi sang GET -> page/limit PHẢI coerce từ query string, khác hành vi body cũ
+// (AD-5 cho body vẫn áp dụng ở các route khác, VD sendReportSchema).
+test("Task 013: getNotificationsSchema: query string \"2\" coerce thành number 2", async () => {
+  await withServer(makeApp(true), async (base) => {
+    const res = await fetch(`${base}/t?page=2&limit=10`);
+    assert.equal(res.status, 200);
+    const payload: any = await res.json();
+    assert.deepEqual(payload, { query: { page: 2, limit: 10 } });
+    assert.equal(typeof payload.query.page, "number", "page phải là number sau coerce, không phải string");
+  });
 });
 
 test("FR-1: thiếu page -> 400 (page/limit vẫn bắt buộc sau khi bỏ userId)", async () => {
   await silenceWarn(() =>
     withServer(makeApp(), async (base) => {
-      const res = await fetch(`${base}/t`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ limit: 10 }),
-      });
+      const res = await fetch(`${base}/t?limit=10`);
       assert.equal(res.status, 400);
       assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
     })
@@ -317,25 +296,17 @@ test("FR-1: thiếu page -> 400 (page/limit vẫn bắt buộc sau khi bỏ user
 test("FR-6: action='khong-ton-tai' -> 400", async () => {
   await silenceWarn(() =>
     withServer(makeApp(), async (base) => {
-      const res = await fetch(`${base}/t`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ page: 1, limit: 10, action: "khong-ton-tai" }),
-      });
+      const res = await fetch(`${base}/t?page=1&limit=10&action=khong-ton-tai`);
       assert.equal(res.status, 400);
       assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
     })
   );
 });
 
-test("FR-6: action là số -> 400 (không phải z.string() tự do)", async () => {
+test("FR-6: action='123' (chuỗi số) -> 400 (không thuộc enum)", async () => {
   await silenceWarn(() =>
     withServer(makeApp(), async (base) => {
-      const res = await fetch(`${base}/t`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ page: 1, limit: 10, action: 123 }),
-      });
+      const res = await fetch(`${base}/t?page=1&limit=10&action=123`);
       assert.equal(res.status, 400);
       assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
     })
@@ -344,8 +315,8 @@ test("FR-6: action là số -> 400 (không phải z.string() tự do)", async ()
 
 /* ----------------------------------------------------- FR-1: auth guard (SC-1, SC-2) */
 
-test("FR-1: POST /notifications/get không token -> 401, aggregate 0 lần", async () => {
-  await postGet({ body: { page: 1, limit: 10 } }, async ({ res, agg }) => {
+test("FR-1: GET /notifications không token -> 401, aggregate 0 lần", async () => {
+  await postGet({ query: { page: "1", limit: "10" } }, async ({ res, agg }) => {
     assert.equal(res.status, 401);
     assert.equal(agg.calls, 0, "controller KHÔNG được chạy khi thiếu token");
   });
@@ -357,7 +328,7 @@ test("FR-1: token sai chữ ký -> non-2xx, aggregate 0 lần", async () => {
   const bad = jwt.sign({ userId: USER_X }, "sai-secret");
   await silenceError(() =>
     postGet(
-      { cookie: `jwt=${bad}`, body: { page: 1, limit: 10 } },
+      { cookie: `jwt=${bad}`, query: { page: "1", limit: "10" } },
       async ({ res, agg }) => {
         assert.ok(res.status >= 400, `phải non-2xx, nhận ${res.status}`);
         assert.equal(agg.calls, 0, "controller KHÔNG được chạy khi token hỏng");
@@ -366,12 +337,12 @@ test("FR-1: token sai chữ ký -> non-2xx, aggregate 0 lần", async () => {
   );
 });
 
-test("FR-1: body kèm userId của Y -> $match.toUsers là ObjectId(X), 0 lần xuất hiện Y", async () => {
+test("FR-1: query kèm userId của Y -> $match.toUsers là ObjectId(X), 0 lần xuất hiện Y", async () => {
   await postGet(
     {
       userId: USER_X,
       cookie: `jwt=${tokenFor(USER_X)}`,
-      body: { userId: USER_Y, page: 1, limit: 10 },
+      query: { userId: USER_Y, page: "1", limit: "10" },
     },
     async ({ res, agg }) => {
       assert.equal(res.status, 200);
@@ -380,7 +351,7 @@ test("FR-1: body kèm userId của Y -> $match.toUsers là ObjectId(X), 0 lần 
       assert.equal(
         String(match.toUsers),
         USER_X,
-        "phải lọc theo danh tính JWT, KHÔNG theo userId trong body (S5/IDOR)"
+        "phải lọc theo danh tính JWT, KHÔNG theo userId trong query (S5/IDOR)"
       );
       assert.ok(
         !JSON.stringify(agg.pipelines[0]).includes(USER_Y),
@@ -397,7 +368,7 @@ test("FR-6: action='like' -> $match có action và đứng trước $skip", asyn
     {
       userId: USER_X,
       cookie: `jwt=${tokenFor(USER_X)}`,
-      body: { page: 1, limit: 10, action: "like" },
+      query: { page: "1", limit: "10", action: "like" },
     },
     async ({ res, agg }) => {
       assert.equal(res.status, 200);
@@ -413,7 +384,7 @@ test("FR-6: action='like' -> $match có action và đứng trước $skip", asyn
 
 test("FR-6: không có action -> $match không có key action", async () => {
   await postGet(
-    { userId: USER_X, cookie: `jwt=${tokenFor(USER_X)}`, body: { page: 1, limit: 10 } },
+    { userId: USER_X, cookie: `jwt=${tokenFor(USER_X)}`, query: { page: "1", limit: "10" } },
     async ({ res, agg }) => {
       assert.equal(res.status, 200);
       assert.ok(
@@ -429,7 +400,7 @@ test("FR-6: action='all' -> $match không có key action (sentinel tab Tất c�
     {
       userId: USER_X,
       cookie: `jwt=${tokenFor(USER_X)}`,
-      body: { page: 1, limit: 10, action: "all" },
+      query: { page: "1", limit: "10", action: "all" },
     },
     async ({ res, agg }) => {
       assert.equal(res.status, 200);
@@ -445,7 +416,7 @@ test("FR-6: action='all' -> $match không có key action (sentinel tab Tất c�
 
 test("FR-3: $project chứa $ifNull cho isRead (không phải isRead: 1)", async () => {
   await postGet(
-    { userId: USER_X, cookie: `jwt=${tokenFor(USER_X)}`, body: { page: 1, limit: 10 } },
+    { userId: USER_X, cookie: `jwt=${tokenFor(USER_X)}`, query: { page: "1", limit: "10" } },
     async ({ res, agg }) => {
       assert.equal(res.status, 200);
       const project = stageOf(agg.pipelines[0], "$project");
@@ -709,11 +680,12 @@ test("FR-3/TEST-6: PATCH /notifications/read không token -> 401, updateOne/upda
   }
 });
 
-test("FR-3/TEST-6: router.use(protectRoute) đứng trước mọi router.post(/router.patch(", async () => {
+test("FR-3/TEST-6: router.use(protectRoute) đứng trước mọi router.get(/router.patch(", async () => {
   const src = await fs.readFile("src/api/routers/notification.route.ts", "utf8");
   const protectIdx = src.indexOf("router.use(protectRoute)");
   assert.notEqual(protectIdx, -1, "phải mount protectRoute ở router level");
-  const routeRegex = /router\.(post|patch)\(/g;
+  // Task 013 (D-1): GET /get -> GET / (đổi từ POST). Regex cập nhật theo method mới.
+  const routeRegex = /router\.(get|patch)\(/g;
   const routeIndices: number[] = [];
   let m: RegExpExecArray | null;
   while ((m = routeRegex.exec(src)) !== null) {
@@ -721,12 +693,12 @@ test("FR-3/TEST-6: router.use(protectRoute) đứng trước mọi router.post(/
   }
   assert.ok(
     routeIndices.length >= 2,
-    "phải có ít nhất 2 route (POST /get + PATCH /read)"
+    "phải có ít nhất 2 route (GET / + PATCH /read)"
   );
   for (const idx of routeIndices) {
     assert.ok(
       protectIdx < idx,
-      "protectRoute phải đứng trước mọi router.post(/router.patch("
+      "protectRoute phải đứng trước mọi router.get(/router.patch("
     );
   }
 });

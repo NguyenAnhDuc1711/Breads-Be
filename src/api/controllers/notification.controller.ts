@@ -12,7 +12,9 @@ export const getNotifications = async (req, res) => {
   if (!req.user) {
     throw new AuthFailureError("Unauthorized");
   }
-  const { page, limit, action } = req.body;
+  // Task 013 (D-1): route đổi POST -> GET, page/limit/action đọc từ query (đã coerce số ở
+  // getNotificationsSchema), không còn từ body.
+  const { page, limit, action } = req.query;
   const skip = (page - 1) * limit;
   const notifications = await Notification.aggregate([
     // FR-6: `"all"` là sentinel tab "Tất cả" = KHÔNG lọc (không document nào có `action: "all"`).

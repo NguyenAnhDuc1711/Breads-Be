@@ -1,13 +1,11 @@
-// Schema cho router `notification` (FR-7, task 014).
+// Schema cho router `notification` (FR-7, task 014; redesign RESTful task 013).
 //
-// Router có 2 route (`getNotificationsSchema` cho `POST /get`, `readNotificationsSchema` cho
-// `PATCH /read` — task 010 epic notification-fixes). Lưu ý: route `/get` là `POST`, nên `page`/`limit`
-// tới từ JSON body — dùng
-// `z.number()`, KHÔNG `z.coerce.number()` (AD-5): body đã là số thật, coerce ở đây sẽ âm thầm
-// chấp nhận cả string `"2"` mà client hiện tại không bao giờ gửi.
+// Router có 2 route (`getNotificationsSchema` cho `GET /`, `readNotificationsSchema` cho
+// `PATCH /read`). Route `/` là `GET` (đổi từ `POST /get` ở task 013) nên `page`/`limit`/`action`
+// tới từ `req.query`, dùng `z.coerce.number()` (query string luôn là string, khác body).
 //
 // `page`/`limit` bắt buộc (không optional): controller tính `skip = (page - 1) * limit` không có
-// default (`notification.controller.ts:7-11`) — thiếu field sẽ thành `NaN` và `$skip: NaN` làm
+// default (`notification.controller.ts`) — thiếu field sẽ thành `NaN` và `$skip: NaN` làm
 // Mongo ném lỗi 500. Schema đẩy lỗi đó về 400 sớm hơn 1 tầng.
 //
 // FR-1 (epic notification-fixes): key định danh người nhận đã bị XOÁ khỏi body — danh tính lấy từ
@@ -20,10 +18,14 @@ import { z } from "zod";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import { objectIdSchema } from "./common.ts";
 
+// Task 013 (D-1): route đổi POST /get -> GET /, page/limit/action chuyển từ body sang query.
+// z.coerce.number() BẮT BUỘC ở đây (khác body ở trên) vì query string luôn là string (theo đúng
+// pattern AD-5 đã dùng ở getReportsSchema). page/limit vẫn bắt buộc (không optional) — controller
+// (`notification.controller.ts`) không có default cho `skip = (page - 1) * limit`.
 export const getNotificationsSchema = {
-  body: z.object({
-    page: z.number().int().min(1),
-    limit: z.number().int().min(1),
+  query: z.object({
+    page: z.coerce.number().int().min(1),
+    limit: z.coerce.number().int().min(1),
     action: z.enum(Constants.NOTIFICATION_ACTION).optional(),
   }),
 };

@@ -147,18 +147,24 @@ export const tickPostSurveySchema = {
   }),
 };
 
+// Task 011 correction: postId chuyển từ body vào params.id (route PATCH /:id/status).
 export const updatePostStatusSchema = {
+  params: z.object({
+    id: objectIdSchema,
+  }),
   body: z.object({
     userId: objectIdSchema,
-    postId: objectIdSchema,
     status: z.number(),
   }),
 };
 
+// Task 011 correction: postId chuyển từ body vào params.id (route PATCH /:id/visibility).
 export const updatePostVisibilitySchema = {
+  params: z.object({
+    id: objectIdSchema,
+  }),
   body: z.object({
     userId: objectIdSchema,
-    postId: objectIdSchema,
     visibility: visibilitySchema,
   }),
 };

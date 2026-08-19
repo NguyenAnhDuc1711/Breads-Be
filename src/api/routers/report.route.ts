@@ -36,12 +36,13 @@ router.post(
   validate(sendReportSchema),
   asyncHandler(sendReport),
 );
-router.post(
+// Task 014 (D-1): partial update theo id -> PATCH, id trong path.
+router.patch(
   REPORT_PATH.RESPONSE,
   validate(responseReportSchema),
   asyncHandler(responseReport),
 );
-router.post(
+router.patch(
   REPORT_PATH.REJECT,
   validate(rejectReportSchema),
   asyncHandler(rejectReport),

@@ -129,7 +129,8 @@ export const getReports = async (req, res) => {
 };
 
 export const responseReport = async (req, res) => {
-  const { from, to, subject, html, userId, reportId } = req.body;
+  const { from, to, subject, html, userId } = req.body;
+  const { id: reportId } = req.params;
   if (!userId || !from || !to || !subject) {
     throw new BadRequestError("Invalid input");
   }
@@ -161,7 +162,8 @@ export const responseReport = async (req, res) => {
 };
 
 export const rejectReport = async (req, res) => {
-  const { userId, reportId } = req.body;
+  const { userId } = req.body;
+  const { id: reportId } = req.params;
   if (!userId || !reportId) {
     throw new BadRequestError("Invalid input");
   }

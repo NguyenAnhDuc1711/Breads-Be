@@ -80,17 +80,16 @@ const {
   REFRESH_TOKEN,
 } = USER_PATH;
 
+// FR-2 (Task 010, D-1): GET literal 1-segment paths (/me, /admin, /follow-list, /with-status)
+// PHẢI đăng ký TRƯỚC PROFILE ("/:userId") — nếu không, "/:userId" sẽ nuốt các path literal đó
+// (Express match theo thứ tự đăng ký, cùng số segment). PROFILE đứng cuối nhóm GET một cách
+// CỐ Ý, không phải ngẫu nhiên.
 router.get(ME, protectRoute, asyncHandler(getMe));
+router.get(ADMIN, asyncHandler(getAdminAccount));
 router.get(
   USERS_FOLLOW,
   validate(getUsersFollowQuerySchema),
   asyncHandler(getUsersFollow),
-);
-router.get(ADMIN, asyncHandler(getAdminAccount));
-router.get(
-  PROFILE + ":userId",
-  validate(getUserProfileSchema),
-  asyncHandler(getUserProfile),
 );
 router.get(
   USERS_TO_FOLLOW,
@@ -107,6 +106,11 @@ router.get(
   GET_USERS_WITH_STATUS,
   validate(getUsersWithStatusQuerySchema),
   asyncHandler(getUsersWithStatus),
+);
+router.get(
+  PROFILE,
+  validate(getUserProfileSchema),
+  asyncHandler(getUserProfile),
 );
 router.post(
   GET_USERS_PENDING_POST,
@@ -147,8 +151,10 @@ router.put(
 );
 // Route DUY NHẤT của router này cần limit lớn: `updateUser` nhận avatar base64 và đẩy sang
 // `uploadFileFromBase64` (user.controller.ts:226). KHÔNG được gộp chung limit 100kb của nhóm auth.
+// FR-2 (Task 010, D-1): UPDATE ("/:id") đăng ký SAU FOLLOW ("/follow") để không nuốt path literal
+// đó — cùng lý do PROFILE đứng cuối nhóm GET ở trên.
 router.put(
-  UPDATE + ":id",
+  UPDATE,
   express.json({ limit: "50mb" }),
   mongoSanitize(),
   hpp(),
@@ -157,7 +163,7 @@ router.put(
   asyncHandler(updateUser),
 );
 router.put(
-  CHANGE_PW + ":id",
+  CHANGE_PW,
   express.json({ limit: "100kb" }),
   mongoSanitize(),
   hpp(),
