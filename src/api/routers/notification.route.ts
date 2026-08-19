@@ -24,7 +24,8 @@ router.use(hpp());
 // route hiện tại và tương lai của router này fail-closed. Router này không có route public nào.
 router.use(protectRoute);
 
-router.post(
+// Task 013 (D-1): list -> GET (đổi từ POST /get). page/limit/action đọc từ query.
+router.get(
   NOTIFICATION_PATH.GET,
   validate(getNotificationsSchema),
   asyncHandler(getNotifications)

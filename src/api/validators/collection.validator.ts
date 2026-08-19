@@ -1,7 +1,7 @@
-// Schema cho router `collection` (FR-7, task 014).
+// Schema cho router `collection` (FR-7, task 014; redesign RESTful task 013).
 //
-// 3 route: 1 đọc `req.params` (`GET /:userId`), 2 đọc `req.body`. Không route nào có query nên
-// không cần `z.coerce.*`.
+// 3 route: GET /:userId (params), PATCH /:userId/items (params + body), DELETE /:userId/items/:postId
+// (params only). Không route nào có query nên không cần `z.coerce.*`.
 import { z } from "zod";
 import { objectIdSchema } from "./common.ts";
 
@@ -13,16 +13,20 @@ export const getUserCollectionSchema = {
   }),
 };
 
+// Task 013 (D-1): userId chuyển vào path (PATCH /:userId/items), postId vẫn ở body.
 export const addPostToCollectionSchema = {
-  body: z.object({
+  params: z.object({
     userId: objectIdSchema,
+  }),
+  body: z.object({
     postId: objectIdSchema,
   }),
 };
 
+// Task 013 (D-1): DELETE /:userId/items/:postId — cả 2 id vào path, không còn body.
 export const removePostFromCollectionSchema = {
-  body: z.object({
-    postId: objectIdSchema,
+  params: z.object({
     userId: objectIdSchema,
+    postId: objectIdSchema,
   }),
 };

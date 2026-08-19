@@ -34,7 +34,8 @@ router.patch(
   validate(addPostToCollectionSchema),
   asyncHandler(addPostToCollection)
 );
-router.patch(
+// Task 013 (D-1): remove là xoá 1 relationship (item khỏi collection) -> DELETE, không phải PATCH.
+router.delete(
   REMOVE,
   validate(removePostFromCollectionSchema),
   asyncHandler(removePostFromCollection)

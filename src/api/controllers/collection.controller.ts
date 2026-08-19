@@ -1,6 +1,6 @@
 import PageConstant from "../../Breads-Shared/Constants/PageConstants.js";
 import { CREATED, OK } from "../../core/success.response.js";
-import { BadRequestError } from "../../core/error.response.js";
+import { BadRequestError, NotFoundError } from "../../core/error.response.js";
 import { ObjectId } from "../../utils/index.js";
 import SavedPost from "../models/savedPost.model.js";
 import { getPostDetail, getPostsIdByFilter } from "../services/post.js";
@@ -20,7 +20,8 @@ export const getUserCollection = async (req, res) => {
 };
 
 export const addPostToCollection = async (req, res) => {
-  const { userId, postId } = req.body;
+  const { userId } = req.params;
+  const { postId } = req.body;
   if (!userId || !postId) {
     throw new BadRequestError("Empty payload");
   }
@@ -46,14 +47,19 @@ export const addPostToCollection = async (req, res) => {
 };
 
 export const removePostFromCollection = async (req, res) => {
-  const { postId, userId } = req.body;
+  const { userId, postId } = req.params;
   if (!userId || !postId) {
     throw new BadRequestError("Empty payload");
   }
-  await SavedPost.deleteOne({
+  const deleteResult = await SavedPost.deleteOne({
     userId: ObjectId(userId),
     postId: ObjectId(postId),
   });
+  // Task 013 (D-1 / plan-review edge case): postId không tồn tại trong collection -> 404, nhất
+  // quán với hành vi DELETE resource không tồn tại ở /posts/:id.
+  if (deleteResult.deletedCount === 0) {
+    throw new NotFoundError("Post not found in collection");
+  }
   const result = [];
   const postsId = await getPostsIdByFilter({
     filter: { page: PageConstant.SAVED },

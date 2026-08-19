@@ -17,6 +17,8 @@ router.use(hpp());
 const { CREATE, GET } = ANALYTICS_PATH;
 
 router.post(CREATE, validate(createEventSchema), asyncHandler(createEvent));
-router.post(GET, asyncHandler(getEvents));
+// Task 013 (D-1): list -> GET. getEvents không đọc field nào từ body (xem controller) nên không
+// cần schema/coerce gì thêm khi đổi method.
+router.get(GET, asyncHandler(getEvents));
 
 export default router;
