@@ -556,7 +556,12 @@ export const tickPostSurvey = async (req, res) => {
 };
 
 export const updatePostStatus = async (req, res) => {
-  const { userId, postId, status } = req.body;
+  // Task 011 correction (đúng D-1 điểm 4): postId chuyển từ body vào req.params.id — route đã là
+  // PATCH /:id/status từ đầu task 011 nhưng controller quên đổi nguồn đọc, khiến :id trong URL
+  // vô nghĩa (client có thể gửi bất kỳ chuỗi nào ở đó, danh tính thật vẫn qua body). Phát hiện khi
+  // viết lại FE call site (T020).
+  const { userId, status } = req.body;
+  const { id: postId } = req.params;
   if (!userId || !postId) {
     throw new BadRequestError("Empty payload");
   }
@@ -584,7 +589,9 @@ export const updatePostStatus = async (req, res) => {
 // FR-3: đổi visibility sau khi đăng. Mirror `updatePostStatus` (cùng verb/shape) nhưng KHÔNG
 // đụng tới field `status` — hai field độc lập (SC-8). Quyền: tác giả bài viết, không phải admin.
 export const updatePostVisibility = async (req, res) => {
-  const { userId, postId, visibility } = req.body;
+  // Task 011 correction — cùng lý do với updatePostStatus ở trên: postId từ req.params.id.
+  const { userId, visibility } = req.body;
+  const { id: postId } = req.params;
   if (!userId || !postId) {
     throw new BadRequestError("Empty payload");
   }

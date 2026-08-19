@@ -96,6 +96,11 @@ const routeApp = () => {
     validate(updatePostVisibilitySchema),
     reachedController
   );
+  app.patch(
+    "/posts/:id/status",
+    validate(updatePostStatusSchema),
+    reachedController
+  );
   app.use(errorHandler);
   return app;
 };
@@ -408,8 +413,9 @@ test("FR-3: updatePostSchema.content chứa <script> bị strip sau transform", 
   assert.equal(parsed.content, "Bye");
 });
 
+// Task 011 correction: postId chuyển từ body vào params.id — schema.body không còn field postId.
 test("updatePostVisibilitySchema / updatePostStatusSchema: giá trị sai bị từ chối", () => {
-  const ids = { userId: VALID_ID, postId: OTHER_ID };
+  const ids = { userId: VALID_ID };
   assert.equal(
     updatePostVisibilitySchema.body.parse({
       ...ids,
@@ -427,7 +433,7 @@ test("updatePostVisibilitySchema / updatePostStatusSchema: giá trị sai bị t
     z.ZodError
   );
   assert.throws(
-    () => updatePostStatusSchema.body.parse({ ...ids, postId: "not-an-id", status: 0 }),
+    () => updatePostStatusSchema.params.parse({ id: "not-an-id" }),
     z.ZodError
   );
 });
@@ -514,7 +520,7 @@ test("FR-5 (HTTP): PATCH /posts/:id/visibility visibility ngoài enum -> 400", a
       const res = await fetch(`${base}/posts/${OTHER_ID}/visibility`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ userId: VALID_ID, postId: OTHER_ID, visibility: 99 }),
+        body: JSON.stringify({ userId: VALID_ID, visibility: 99 }),
       });
       assert.equal(res.status, 400);
       assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
@@ -556,7 +562,6 @@ test("NFR-4 (HTTP positive): payload hợp lệ chạm được controller trên
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         userId: VALID_ID,
-        postId: OTHER_ID,
         visibility: Constants.POST_VISIBILITY.ONLY_ME,
       }),
     });
@@ -653,6 +658,27 @@ test("FR-3 (id-source): updatePost đọc req.params.id, KHÔNG đọc payload._
     !body.includes("const postId = payload._id;"),
     "id KHÔNG được lấy từ body — client sửa được body thành id bài của người khác"
   );
+});
+
+// Task 011 correction (phát hiện lúc viết FE call site, T020): route đã là PATCH /:id/status và
+// /:id/visibility từ đầu task 011, nhưng 2 controller quên đổi nguồn đọc postId — :id trong URL
+// từng vô nghĩa (danh tính thật vẫn qua body `postId`). Cùng lớp lỗi với plan-review FAIL-1 (T012).
+test("FR-3 (id-source correction): updatePostStatus/updatePostVisibility đọc req.params.id, KHÔNG đọc body.postId", async () => {
+  const src = await import("node:fs/promises").then((fs) =>
+    fs.readFile("src/api/controllers/post.controller.ts", "utf8")
+  );
+  for (const fnName of ["updatePostStatus", "updatePostVisibility"]) {
+    const fn = src.slice(src.indexOf(`export const ${fnName}`));
+    const body = fn.slice(0, fn.indexOf("\n};"));
+    assert.ok(
+      body.includes("const { id: postId } = req.params;"),
+      `${fnName} phải lấy id từ path param`
+    );
+    assert.ok(
+      !/const \{[^}]*postId[^}]*\} = req\.body;/.test(body),
+      `${fnName} KHÔNG được còn đọc postId từ body`
+    );
+  }
 });
 
 // FR-10: 0 raw `res.json({error...})` còn lại — envelope lỗi phải đi qua error-handler tập trung.
