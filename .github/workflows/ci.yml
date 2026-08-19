@@ -21,6 +21,13 @@ jobs:
 
       - run: npm ci
 
+      # 819 pre-existing errors (mostly @typescript-eslint/no-explicit-any) surfaced the
+      # first time eslint+typescript-eslint recommended rules ran on this codebase — same
+      # situation as type-check below, not a required check yet.
+      - name: Lint (non-blocking)
+        continue-on-error: true
+        run: npx eslint src
+
       # ~30 pre-existing type errors in the codebase (unrelated to new PRs) mean this
       # can't be a required check yet. Keep it visible in logs without blocking merges.
       - name: Type-check (non-blocking)
@@ -28,8 +35,9 @@ jobs:
         run: npx tsc --noEmit
 
       # Excludes test files that need a real Redis (feed/queue.ts connects eagerly at
-      # import time) or spawn their own `mongod` binary — neither is available on this
-      # runner. See CI setup discussion for the full list.
+      # import time, or dbs/redis.ts's initRedis() in a before() hook) or spawn their own
+      # `mongod` binary — neither is available on this runner. See CI setup discussion for
+      # the full list.
       - name: Run tests (excluding tests requiring Redis/mongod)
         run: |
           EXCLUDE=(
@@ -38,6 +46,10 @@ jobs:
             "src/api/controllers/post.controller.dispatch.direct-mode.test.ts"
             "src/api/controllers/post.controller.test.ts"
             "src/socket/controllers/message.controller.sendnext.test.ts"
+            "src/api/services/feed/queue.test.ts"
+            "src/api/services/feed/zset.batch.test.ts"
+            "src/api/services/metrics/metrics.test.ts"
+            "src/api/routers/post.route.test.ts"
           )
           FIND_ARGS=()
           for f in "${EXCLUDE[@]}"; do
