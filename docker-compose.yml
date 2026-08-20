@@ -1,4 +1,26 @@
 services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   app:
     build: .
     restart: unless-stopped
@@ -7,16 +29,19 @@ services:
     environment:
       NODE_ENV: production
       PORT: 8080
-      MONGO_URI: mongodb://host.docker.internal:27017/Breads
-      ANALYTICS_DB_URI: mongodb://host.docker.internal:27017/Breads-analytics
-      REDIS_HOST: host.docker.internal
+      MONGO_URI: mongodb://mongo:27017/Breads
+      ANALYTICS_DB_URI: mongodb://mongo:27017/Breads-analytics
+      REDIS_HOST: redis
       REDIS_PORT: 6379
     ports:
       - "8080:8080"
     volumes:
       - ./uploads:/app/uploads
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   # [A3] BullMQ Worker (dispatch/batch) chạy container riêng, không share process với `app`
   # (HTTP server) — scale độc lập theo queue depth bằng `docker compose up --scale worker=N`.
@@ -28,29 +53,32 @@ services:
       - .env
     environment:
       NODE_ENV: production
-      MONGO_URI: mongodb://host.docker.internal:27017/Breads
-      ANALYTICS_DB_URI: mongodb://host.docker.internal:27017/Breads-analytics
-      REDIS_HOST: host.docker.internal
+      MONGO_URI: mongodb://mongo:27017/Breads
+      ANALYTICS_DB_URI: mongodb://mongo:27017/Breads-analytics
+      REDIS_HOST: redis
       REDIS_PORT: 6379
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   redis-exporter:
     image: oliver006/redis_exporter:latest
     restart: unless-stopped
     environment:
-      REDIS_ADDR: redis://host.docker.internal:6379
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      REDIS_ADDR: redis://redis:6379
+    depends_on:
+      - redis
 
   mongo-exporter:
     image: percona/mongodb_exporter:0.44
     restart: unless-stopped
     command:
-      - --mongodb.uri=mongodb://host.docker.internal:27017
+      - --mongodb.uri=mongodb://mongo:27017
       - --collect-all
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      - mongo
 
   prometheus:
     image: prom/prometheus:latest
@@ -84,5 +112,7 @@ services:
       - prometheus
 
 volumes:
+  mongo_data:
+  redis_data:
   prometheus_data:
   grafana_data:
