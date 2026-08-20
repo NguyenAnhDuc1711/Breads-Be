@@ -14,6 +14,7 @@ import instanceMongoDB from "./dbs/mongodb.ts";
 import initRedis from "./dbs/redis.ts";
 import { metricsHandler, metricsMiddleware } from "./api/middlewares/metrics.ts";
 import { globalTierLimiter } from "./api/middlewares/rateLimiter.ts";
+import { API_PREFIX } from "./Breads-Shared/APIConfig.js";
 import ALLOWED_ORIGINS from "./utils/allowedOrigins.ts";
 import { ErrorResponse } from "./core/error.response.ts";
 import logger from "./core/logger.ts";
@@ -46,7 +47,7 @@ app.get("/metrics", metricsHandler);
 // FR-1 (security-hardening, task 012): global-tier rate-limit (100 req/phút/IP) cho toàn bộ /api.
 // Route auth-tier (SIGN_UP/LOGIN/CRAWL_POST/CRAWL_USER/forgot-password) có thêm authTierLimiter
 // riêng ngay trên route đó (5 req/phút) — 2 lớp độc lập, lớp nghiêm ngặt hơn trigger trước.
-app.use("/v1", globalTierLimiter, router);
+app.use(API_PREFIX, globalTierLimiter, router);
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   const error = new Error("Not found");

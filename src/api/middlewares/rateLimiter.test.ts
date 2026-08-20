@@ -126,11 +126,11 @@ test("FR-1: rateLimiter.ts KHÔNG import rate-limit-redis (AD-2 — in-memory on
   );
 });
 
-test("FR-1: app.ts mount globalTierLimiter cho /v1", async () => {
+test("FR-1: app.ts mount globalTierLimiter cho API_PREFIX", async () => {
   const src = await readSrc("src/app.ts");
   assert.ok(
-    /app\.use\(\s*"\/v1"\s*,\s*globalTierLimiter\s*,\s*router\s*\)/.test(src),
-    "globalTierLimiter phải mount trước router trên đường dẫn /v1"
+    /app\.use\(\s*API_PREFIX\s*,\s*globalTierLimiter\s*,\s*router\s*\)/.test(src),
+    "globalTierLimiter phải mount trước router trên đường dẫn API_PREFIX"
   );
 });
 
