@@ -1,9 +1,5 @@
 import mongoose from "mongoose";
 
-const now = new Date();
-const dateString = now.toLocaleDateString("en-GB"); // Format: DD/MM/YYYY
-const collectionName = dateString.replace(/\//g, "-"); // Replace "/" with "-"
-
 const analyticsSchema = new mongoose.Schema(
   {
     event: { type: String, required: true },
@@ -15,10 +11,12 @@ const analyticsSchema = new mongoose.Schema(
     webInfo: { type: Object },
   },
   {
-    timestamps: true, // Optional: Automatically adds createdAt and updatedAt fields
-    collection: collectionName, // Specify the dynamic collection name
+    timestamps: true, // Automatically adds createdAt and updatedAt fields
+    collection: "events", // Fixed collection (was: 1 new collection per day)
   }
 );
+
+analyticsSchema.index({ userId: 1, event: 1, createdAt: 1 });
 
 const analyticsDB = mongoose.createConnection(process.env.ANALYTICS_DB_URI);
 const AnalyticsModel = analyticsDB.model("Analytics", analyticsSchema);

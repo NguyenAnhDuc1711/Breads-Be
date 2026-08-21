@@ -256,16 +256,15 @@ test("NFR-2 (wiring): CRAWL_POST/CRAWL_USER thật sự có authTierLimiter tron
    không thể bị rate-limit ảnh hưởng — đúng ý NFR-2's scenario).
    ============================================================================================ */
 
-test("NFR-2: cron job (createDailyCollectionCron/updateUsersCatesCron) không đụng rate-limit, chỉ đăng ký cron.schedule", async () => {
+test("NFR-2: cron job (updateUsersCatesCron) không đụng rate-limit, chỉ đăng ký cron.schedule", async () => {
   const src = await fsp.readFile("src/cronjob/index.ts", "utf8");
-  assert.ok(src.includes("export const createDailyCollectionCron"));
   assert.ok(src.includes("export const updateUsersCatesCron"));
   assert.ok(
     !/rateLimiter|RateLimiter|authTierLimiter|globalTierLimiter/.test(src),
     "cron job không đi qua HTTP -> không được/không cần đụng rate-limit middleware"
   );
   const scheduleCount = (src.match(/cron\.schedule\(/g) || []).length;
-  assert.equal(scheduleCount, 2, "cả 2 hàm đều phải dùng cron.schedule (đăng ký job, không side-effect đồng bộ lúc gọi)");
+  assert.equal(scheduleCount, 1, "updateUsersCatesCron phải dùng cron.schedule (đăng ký job, không side-effect đồng bộ lúc gọi)");
 });
 
 /* ============================================================================================

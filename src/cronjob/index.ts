@@ -1,17 +1,10 @@
 import cron from "node-cron";
-import mongoose from "mongoose";
 import { MongoClient } from "mongodb";
 import { destructObjectId } from "../utils";
 import { getPostsCatesByIds } from "../api/services/post";
 import User from "../api/models/user.model";
 import { ObjectId } from "../utils";
 import logger from "../core/logger";
-
-export const createDailyCollectionCron = () => {
-  cron.schedule("0 0 * * *", () => {
-    createDailyCollection();
-  });
-};
 
 export const updateUsersCatesCron = async () => {
   const updateAfterDays = 7;
@@ -80,54 +73,28 @@ const getUsersEventsFromRange = async (
   query,
   project
 ) => {
-  const uri = "mongodb://localhost:27017";
-  const dbName = "Breads-analytics";
-  const client = new MongoClient(uri);
+  const client = new MongoClient(process.env.ANALYTICS_DB_URI);
 
   try {
     await client.connect();
-    const db = client.db(dbName);
+    const db = client.db();
+    const collection = db.collection("events");
 
-    // Get collections
-    const collections = await db.listCollections().toArray();
-    const collectionNames = collections.map((col) => col.name);
+    const rangeQuery = {
+      ...query,
+      createdAt: {
+        $gte: new Date(startDateTime),
+        $lte: new Date(endDateTime),
+      },
+    };
 
-    // Filter collections based on date range
-    const filteredCollections = collectionNames.filter((name) => {
-      const splitCollectionName = name.split("-");
-      const date = splitCollectionName[0];
-      const month = splitCollectionName[1];
-      const year = splitCollectionName[2];
-      const dateTime = new Date(`${year}-${month}-${date}`).getTime();
-      return dateTime >= startDateTime && dateTime <= endDateTime;
-    });
-
-    let userActions = [];
-
-    for (const collectionName of filteredCollections) {
-      const collection = db.collection(collectionName);
-      const actions = await collection.find(query, project).toArray();
-      userActions.push(...actions);
-    }
-
-    return userActions;
+    return await collection
+      .find(rangeQuery, { projection: project })
+      .toArray();
   } catch (error) {
+    logger.error({ err: error }, "getUsersEventsFromRange failed");
     return [];
   } finally {
     client.close();
-  }
-};
-
-const createDailyCollection = async () => {
-  try {
-    const analyticsDB = mongoose.createConnection(process.env.ANALYTICS_DB_URI);
-    const now = new Date();
-    const dateString = now.toLocaleDateString("en-GB");
-    const collectionName = dateString.replace(/\//g, "-");
-    await analyticsDB.createCollection(collectionName);
-  } catch (err) {
-    if (err.codeName !== "NamespaceExists") {
-      logger.error({ err }, "createDailyCollection failed");
-    }
   }
 };
