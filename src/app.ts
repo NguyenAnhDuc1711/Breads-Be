@@ -6,10 +6,7 @@ import helmet from "helmet";
 import multer from "multer";
 import pinoHttp from "pino-http";
 import router from "./api/routers/index.js";
-import {
-  createDailyCollectionCron,
-  updateUsersCatesCron,
-} from "./cronjob/index.js";
+import { updateUsersCatesCron } from "./cronjob/index.js";
 import instanceMongoDB from "./dbs/mongodb.ts";
 import initRedis from "./dbs/redis.ts";
 import { metricsHandler, metricsMiddleware } from "./api/middlewares/metrics.ts";
@@ -94,6 +91,5 @@ app.use((err, req, res, next) => {
   return res.status(statusCode).json(response);
 });
 
-createDailyCollectionCron();
 updateUsersCatesCron();
 export default app;

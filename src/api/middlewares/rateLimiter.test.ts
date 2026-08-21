@@ -181,7 +181,7 @@ test("FR-1: sendForgotPWMail trong util.route.ts có authTierLimiter", async () 
   );
 });
 
-test("FR-1: cron job (createDailyCollectionCron/updateUsersCatesCron) không đụng rate-limit", async () => {
+test("FR-1: cron job (updateUsersCatesCron) không đụng rate-limit", async () => {
   const src = await readSrc("src/cronjob/index.ts").catch(() =>
     readSrc("src/cronjob/index.js")
   );
