@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
 import { OK } from "../../core/success.response.js";
-import logger from "../../core/logger.js";
 import { ObjectId } from "../../utils/index.js";
 import AnalyticsModel from "../models/analytics.model.js";
 
@@ -42,10 +41,12 @@ export const createEvent = async (req: CreateEventRequest, res: Response) => {
   }).send(res);
 };
 
-export const getEvents = async (req: any, res: any) => {
-  try {
-    // const { userId, agg } = req.body;
-  } catch (err) {
-    logger.error({ err }, "getEvents failed");
-  }
+export const getEvents = async (_req: any, res: any) => {
+  // No read/aggregate logic yet — no confirmed consumer (see
+  // .ccpm/prds/.rethink-analytics-tracking-strategy.md open question #2). This just stops the
+  // request from hanging forever.
+  new OK({
+    message: "No events to return yet",
+    metadata: { events: [] },
+  }).send(res);
 };

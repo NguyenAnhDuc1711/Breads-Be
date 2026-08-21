@@ -4,8 +4,13 @@
 //
 // Pattern (task 001, AD-7): mount schema + `validate()` THẬT trên 1 `express()` mới, không import
 // `analytics.route.ts` thật (route thật cần Mongo cho `AnalyticsModel`). `GET` (route `getEvents`)
-// cố ý không có schema — handler không đọc field nào từ `req.body` (comment out ở
-// `analytics.controller.ts:47`) nên không có gì để validate.
+// cố ý không có schema — handler không đọc field nào từ `req.body` nên không có gì để validate.
+//
+// Issue #1: `getEvents` từng có try/catch rỗng, không gọi `res.send`/`res.json` -> request treo vô
+// thời hạn. Đã fix bằng cách luôn trả response ngay (chưa implement đọc/aggregate, xem
+// `.ccpm/prds/.rethink-analytics-tracking-strategy.md` open question #2). Test wiring bên dưới xác
+// nhận bằng source-check (không import controller thật, cùng lý do AD-7 ở trên: import kéo theo
+// `AnalyticsModel` -> `mongoose.createConnection` lúc import).
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
@@ -112,5 +117,22 @@ test("wiring: analytics.route.ts có đúng 1 validate(), chỉ trên route CREA
   assert.ok(
     !getLine.includes("validate("),
     "GET (getEvents) cố ý không có validate() — handler không đọc field nào từ body"
+  );
+});
+
+test("Issue #1: getEvents luôn gửi response, không còn treo request", async () => {
+  const src = await fsp.readFile(
+    "src/api/controllers/analytics.controller.ts",
+    "utf8"
+  );
+
+  const fnBody = src.match(
+    /export const getEvents[\s\S]*?=>\s*{([\s\S]*?)\n};/
+  )?.[1];
+
+  assert.ok(fnBody, "không tìm thấy thân hàm getEvents");
+  assert.ok(
+    /\.send\(res\)/.test(fnBody),
+    "getEvents phải gọi .send(res) — nếu không, request treo vô thời hạn"
   );
 });
