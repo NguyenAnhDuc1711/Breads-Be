@@ -5,11 +5,12 @@
 // migration has backfilled it from the legacy `replies` array.
 import dotenv from "dotenv";
 import mongoose from "mongoose";
+import { pathToFileURL } from "url";
 import Post from "../models/post.model.js";
 
 dotenv.config();
 
-const backfillEngagementScore = async () => {
+export const backfillEngagementScore = async () => {
   const scores = await Post.aggregate([
     {
       $project: {
@@ -54,7 +55,16 @@ const main = async () => {
   process.exit(0);
 };
 
-main().catch((err) => {
-  console.error("Migration failed:", err);
-  process.exit(1);
-});
+// Chỉ tự chạy main() khi file này được gọi trực tiếp (`npm run migrate:backfill-engagement-score`),
+// không chạy khi bị import làm module (vd. `verifyEngagementScoreBackfillProd.ts` tái sử dụng hàm
+// `backfillEngagementScore` ở trên mà không cần tự connect/disconnect/exit trùng lặp).
+const isMainModule =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isMainModule) {
+  main().catch((err) => {
+    console.error("Migration failed:", err);
+    process.exit(1);
+  });
+}

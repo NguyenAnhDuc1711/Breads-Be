@@ -568,6 +568,46 @@ export const getPosts = async (req, res) => {
   }).send(res);
 };
 
+// Task 002 (epic seo-sitemap-schema, FR-1/AD-2): danh sách post PUBLIC/PUBLIC đủ điều kiện
+// sitemap, độc lập với `getPosts` (feed cá nhân hoá theo viewerId/followeeIds) — KHÔNG tái dùng
+// `getPostsIdByFilter`/`getPostDetail`, đúng quyết định AD-2 (tránh coupling semantics feed vs
+// SEO). Cursor phân trang bằng `_id` (ổn định, không unique-issue như `engagementScore`).
+//
+// `totalCount` CHỈ tính ở trang đầu (không có `cursor`) để tránh `countDocuments` lặp lại mỗi
+// trang trên tập ~961K record; trang sau trả `totalCount: null` — Task 010 (sitemap) phải cộng dồn
+// `totalCount` từ trang đầu, không đọc lại ở trang sau.
+export const getSitemapEligiblePosts = async (req, res) => {
+  const { cursor, limit } = req.query as { cursor?: string; limit: number };
+
+  const baseFilter = {
+    status: Constants.POST_STATUS.PUBLIC,
+    visibility: Constants.POST_VISIBILITY.PUBLIC,
+    engagementScore: { $gte: 5 },
+  };
+  const findFilter = cursor ? { ...baseFilter, _id: { $gt: cursor } } : baseFilter;
+
+  const posts = await Post.find(findFilter)
+    .sort({ _id: 1 })
+    .limit(limit)
+    .select("_id updatedAt engagementScore")
+    .lean();
+
+  const totalCount = cursor ? null : await Post.countDocuments(baseFilter);
+
+  const data = posts.map((post: any) => ({
+    postId: post._id.toString(),
+    updatedAt: post.updatedAt,
+    engagementScore: post.engagementScore,
+  }));
+  const nextCursor =
+    posts.length === limit ? data[data.length - 1].postId : null;
+
+  new OK({
+    message: "Get sitemap-eligible posts successfully",
+    metadata: { data, nextCursor, totalCount },
+  }).send(res);
+};
+
 export const tickPostSurvey = async (req, res) => {
   const { optionId, userId, isAdd } = req.body;
   if (!optionId || !userId) {
