@@ -19,6 +19,7 @@ import {
   updateUser,
   getUsersPendingPost,
   getUsersWithStatus,
+  getSitemapEligibleUsers,
   validateEmailByCode,
   refreshTokenHandler,
 } from "../controllers/user.controller.js";
@@ -26,7 +27,8 @@ import { USER_PATH } from "../../Breads-Shared/APIConfig.js";
 import protectRoute from "../middlewares/protectRoute.js";
 import asyncHandler from "../../helpers/asyncHandler.js";
 import { validate } from "../middlewares/validate.js";
-import { authTierLimiter } from "../middlewares/rateLimiter.js";
+import { authTierLimiter, sitemapListLimiter } from "../middlewares/rateLimiter.js";
+import sitemapAuthGate from "../middlewares/sitemapAuthGate.js";
 import {
   getUserProfileSchema,
   signupUserSchema,
@@ -42,6 +44,7 @@ import {
   getUsersPendingPostSchema,
   checkValidUserSchema,
   getUserIdFromEmailSchema,
+  getSitemapEligibleUsersQuerySchema,
 } from "../validators/user.validator.js";
 
 // FR-2 (Task 011): router DUY NHẤT lẫn 2 nhóm payload trong cùng 1 file — nhóm auth/text nhỏ
@@ -78,6 +81,7 @@ const {
   GET_USERS_WITH_STATUS,
   VALIDATE_USER_EMAIL,
   REFRESH_TOKEN,
+  SITEMAP_ELIGIBLE,
 } = USER_PATH;
 
 // FR-2 (Task 010, D-1): GET literal 1-segment paths (/me, /admin, /follow-list, /with-status)
@@ -106,6 +110,18 @@ router.get(
   GET_USERS_WITH_STATUS,
   validate(getUsersWithStatusQuerySchema),
   asyncHandler(getUsersWithStatus),
+);
+// Task 003 (epic seo-sitemap-schema, FR-2): route literal 1-segment -> đăng ký TRƯỚC `PROFILE`
+// (đăng ký ở dưới) để không bị nuốt, đúng convention đã ghi ở comment trên. Gate 2 lớp:
+// `sitemapAuthGate` (shared-secret) trước, `sitemapListLimiter` (300/phút, sibling của
+// `/posts/sitemap-eligible` task 002 — KHÔNG dùng `authTierLimiter` 5/phút, xem comment
+// `sitemapListLimiter` trong rateLimiter.ts) sau.
+router.get(
+  SITEMAP_ELIGIBLE,
+  sitemapAuthGate,
+  sitemapListLimiter,
+  validate(getSitemapEligibleUsersQuerySchema),
+  asyncHandler(getSitemapEligibleUsers),
 );
 router.get(
   PROFILE,

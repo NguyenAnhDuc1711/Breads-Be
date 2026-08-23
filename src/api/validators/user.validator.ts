@@ -144,3 +144,15 @@ export const getUserIdFromEmailSchema = {
     userEmail: z.string().email(),
   }),
 };
+
+// Task 003 (epic seo-sitemap-schema, FR-2): query cho `GET /users/sitemap-eligible`. Mirror ĐÚNG
+// `getSitemapEligiblePostsQuerySchema` (post.validator.ts, task 002) — cursor là `_id` (ổn định qua
+// nhiều trang), `limit` default 1000, cap cứng 1000 (khác `paginationQuerySchema` dùng chung không
+// cap — endpoint này gọi server-to-server bởi sitemap generator, không phải client app, nên cap tại
+// đây không ảnh hưởng NFR-4 vốn nói về router client-facing).
+export const getSitemapEligibleUsersQuerySchema = {
+  query: z.object({
+    cursor: objectIdSchema.optional(),
+    limit: z.coerce.number().int().min(1).max(1000).optional().default(1000),
+  }),
+};

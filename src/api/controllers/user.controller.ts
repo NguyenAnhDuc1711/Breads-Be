@@ -686,3 +686,37 @@ export const getUsersWithStatus = async (req, res) => {
     },
   }).send(res);
 };
+
+// Task 003 (epic seo-sitemap-schema, FR-2): danh sách user ACTIVE đủ điều kiện sitemap, sibling
+// của `getSitemapEligiblePosts` (post.controller.ts, task 002) — cùng cursor-phân-trang theo `_id`,
+// cùng chốt `totalCount` CHỈ tính ở trang đầu (tránh `countDocuments` lặp lại mỗi trang trên tập
+// ~874K record; trang sau trả `totalCount: null`).
+export const getSitemapEligibleUsers = async (req, res) => {
+  const { cursor, limit } = req.query as { cursor?: string; limit: number };
+
+  const baseFilter = {
+    status: Constants.USER_STATUS.ACTIVE,
+    followersCount: { $gte: 10 },
+  };
+  const findFilter = cursor ? { ...baseFilter, _id: { $gt: cursor } } : baseFilter;
+
+  const users = await User.find(findFilter)
+    .sort({ _id: 1 })
+    .limit(limit)
+    .select("_id updatedAt followersCount")
+    .lean();
+
+  const totalCount = cursor ? null : await User.countDocuments(baseFilter);
+
+  const data = users.map((user: any) => ({
+    userId: user._id.toString(),
+    updatedAt: user.updatedAt,
+  }));
+  const nextCursor =
+    users.length === limit ? data[data.length - 1].userId : null;
+
+  new OK({
+    message: "Get sitemap-eligible users successfully",
+    metadata: { data, nextCursor, totalCount },
+  }).send(res);
+};
