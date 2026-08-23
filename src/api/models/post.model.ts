@@ -138,6 +138,11 @@ postSchema.index(
   { partialFilterExpression: { type: { $in: [CREATE, EDIT, REPOST] } } },
 );
 postSchema.index({ engagementScore: -1, _id: -1 });
+// ESR (Equality-Sort-Range): phục vụ query lọc `status`/`visibility` (equality) trước range trên
+// `engagementScore` (vd. sitemap FR-3 `{status:PUBLIC, visibility:PUBLIC, engagementScore:$gte}`).
+// Index đơn `engagementScore_-1__id_-1` ở trên KHÔNG dùng được cho shape này (không có prefix
+// equality) nên vẫn giữ nguyên, không thay thế.
+postSchema.index({ status: 1, visibility: 1, engagementScore: 1 });
 // USER/FRIEND page (post.ts getPostsIdByFilter): lọc authorId + sort createdAt, với `type`
 // $nin (mặc định) hoặc = "reply" — cả hai đều không khớp partialFilterExpression của
 // `type_1_authorId_1_createdAt_-1` (chỉ CREATE/EDIT/REPOST) nên trước đây Mongo fallback về

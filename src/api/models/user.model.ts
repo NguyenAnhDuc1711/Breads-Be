@@ -86,6 +86,9 @@ const userSchema = new mongoose.Schema(
 );
 
 userSchema.index({ lastActiveAt: -1 });
+// ESR: phục vụ query lọc `status` (equality) trước range trên `followersCount` (vd. sitemap FR-3
+// `{status:ACTIVE, followersCount:$gte}`).
+userSchema.index({ status: 1, followersCount: 1 });
 
 const User = mongoose.model("User", userSchema);
 
