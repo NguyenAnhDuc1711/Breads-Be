@@ -1,3 +1,4 @@
+import type { Request } from "express";
 import rateLimit from "express-rate-limit";
 
 // FR-1 (security-hardening, task 012). AD-2 (epic.md): DATN-Be hiện chỉ chạy 1 instance -> dùng
@@ -17,7 +18,7 @@ export const createRateLimiter = ({
   windowMs: number;
   max: number;
   message?: string;
-  skip?: (req: any) => boolean;
+  skip?: (req: Request) => boolean;
 }) =>
   rateLimit({
     windowMs,
