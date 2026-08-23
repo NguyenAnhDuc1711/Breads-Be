@@ -20,7 +20,7 @@ import {
 import { crawlPosts } from "../crawl.js";
 import optionalAuth from "../middlewares/optionalAuth.js";
 import protectRoute from "../middlewares/protectRoute.js";
-import { authTierLimiter, sitemapListLimiter } from "../middlewares/rateLimiter.js";
+import { authTierLimiter } from "../middlewares/rateLimiter.js";
 import sitemapAuthGate from "../middlewares/sitemapAuthGate.js";
 import { validate } from "../middlewares/validate.js";
 import {
@@ -71,16 +71,20 @@ router.get(
   asyncHandler(getPosts),
 );
 // Task 002 (epic seo-sitemap-schema, AD-2): route literal 1-segment -> đăng ký TRƯỚC `/:id`
-// (đăng ký ở dưới) để không bị nuốt, đúng convention đã ghi ở comment trên. Gate 2 lớp:
-// `sitemapAuthGate` (shared-secret) trước, `sitemapListLimiter` (rate-limit) sau. Dùng
-// `sitemapListLimiter` (300/phút) thay vì `authTierLimiter` (5/phút, dùng cho CRAWL_POST) vì
-// endpoint này bị gọi phân trang liên tục để sinh sitemap (~961 trang) — 5/phút sẽ mất ~192 phút
-// để phân trang hết, vượt xa timeout thực tế; endpoint đã có `sitemapAuthGate` chặn abuse nên rate
-// limit ở đây chỉ là defense-in-depth (xem `rateLimiter.ts` comment).
+// (đăng ký ở dưới) để không bị nuốt, đúng convention đã ghi ở comment trên.
+//
+// KHÔNG có rate limiter trên route này (đã thử `authTierLimiter` 5/phút rồi `sitemapListLimiter`
+// 300/phút, cả 2 đều gây lỗi thật khi verify sống — xem lịch sử trong `rateLimiter.ts`). Root
+// cause: Next.js's static export chạy `getChunk(id)` cho NHIỀU chunk ĐỒNG THỜI lúc build, mỗi
+// chunk xa (id lớn) phải đi qua nhiều trang trước đó — tổng tải cộng dồn vượt BẤT KỲ ngưỡng
+// theo-phút nào bất kể đặt cao thế nào, vì toàn bộ traversal hoàn thành nhanh hơn nhiều so với cửa
+// sổ 60s của limiter. Route đã được bảo vệ bằng `sitemapAuthGate` (AD-3, shared-secret,
+// server-to-server only) — đây MỚI là biên bảo mật thật; rate-limit ở đây chưa từng thêm giá trị
+// bảo mật thật (không ai không có secret gọi được route này), chỉ toàn gây false-positive cho
+// chính client hợp lệ duy nhất của nó.
 router.get(
   SITEMAP_ELIGIBLE,
   sitemapAuthGate,
-  sitemapListLimiter,
   validate(getSitemapEligiblePostsQuerySchema),
   asyncHandler(getSitemapEligiblePosts),
 );

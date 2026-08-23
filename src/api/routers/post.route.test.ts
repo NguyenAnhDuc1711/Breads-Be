@@ -1014,17 +1014,19 @@ test("FR-1 (phân trang, end-to-end): 3 trang liên tiếp qua nextCursor -> kh�
   });
 });
 
-test("FR-1 (wiring, source): SITEMAP_ELIGIBLE có sitemapAuthGate + sitemapListLimiter + validate(getSitemapEligiblePostsQuerySchema), đăng ký TRƯỚC /:id", async () => {
+test("FR-1 (wiring, source): SITEMAP_ELIGIBLE có sitemapAuthGate + validate(getSitemapEligiblePostsQuerySchema), đăng ký TRƯỚC /:id", async () => {
   const src = await readRouteSource();
   const noComments = src.replace(/^\s*\/\/.*$/gm, "");
 
-  // sitemapListLimiter (300/phút) thay authTierLimiter (5/phút): endpoint bị phân trang liên tục
-  // (~961 trang) để sinh sitemap, 5/phút sẽ mất ~192 phút/lần regenerate — xem rateLimiter.ts.
+  // KHÔNG rate limiter (đã thử authTierLimiter 5/phút, rồi sitemapListLimiter 300/phút — cả 2 đều
+  // fail khi verify sống vì Next.js's static export gọi getChunk() đồng thời cho nhiều chunk lúc
+  // build, cộng dồn vượt bất kỳ ngưỡng theo-phút nào. sitemapAuthGate là biên bảo mật thật —
+  // xem rateLimiter.ts.
   assert.ok(
     noComments.includes(
-      "router.get(\n  SITEMAP_ELIGIBLE,\n  sitemapAuthGate,\n  sitemapListLimiter,\n  validate(getSitemapEligiblePostsQuerySchema),\n  asyncHandler(getSitemapEligiblePosts),\n);",
+      "router.get(\n  SITEMAP_ELIGIBLE,\n  sitemapAuthGate,\n  validate(getSitemapEligiblePostsQuerySchema),\n  asyncHandler(getSitemapEligiblePosts),\n);",
     ),
-    "route SITEMAP_ELIGIBLE phải wire đúng 4 middleware theo đúng thứ tự này",
+    "route SITEMAP_ELIGIBLE phải wire đúng 3 middleware theo đúng thứ tự này",
   );
 
   const idxSitemap = noComments.indexOf('router.get(\n  "/:id",');

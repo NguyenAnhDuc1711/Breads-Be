@@ -803,15 +803,18 @@ test("FR-2 (route-shadowing regression): GET /users/sitemap-eligible qua router 
   });
 });
 
-test("FR-2 (wiring, source): SITEMAP_ELIGIBLE có sitemapAuthGate + sitemapListLimiter + validate(getSitemapEligibleUsersQuerySchema), đăng ký TRƯỚC PROFILE", async () => {
+test("FR-2 (wiring, source): SITEMAP_ELIGIBLE có sitemapAuthGate + validate(getSitemapEligibleUsersQuerySchema), đăng ký TRƯỚC PROFILE", async () => {
   const src = await readFile("src/api/routers/user.route.ts", "utf8");
   const noComments = src.replace(/^\s*\/\/.*$/gm, "");
 
+  // KHÔNG rate limiter — xem lý do đầy đủ ở post.route.test.ts (sibling route task 002) /
+  // rateLimiter.ts: mọi ngưỡng theo-phút đều fail khi Next.js's static export gọi getChunk() đồng
+  // thời cho nhiều chunk lúc build.
   assert.ok(
     noComments.includes(
-      "router.get(\n  SITEMAP_ELIGIBLE,\n  sitemapAuthGate,\n  sitemapListLimiter,\n  validate(getSitemapEligibleUsersQuerySchema),\n  asyncHandler(getSitemapEligibleUsers),\n);",
+      "router.get(\n  SITEMAP_ELIGIBLE,\n  sitemapAuthGate,\n  validate(getSitemapEligibleUsersQuerySchema),\n  asyncHandler(getSitemapEligibleUsers),\n);",
     ),
-    "route SITEMAP_ELIGIBLE phải wire đúng 4 middleware theo đúng thứ tự này",
+    "route SITEMAP_ELIGIBLE phải wire đúng 3 middleware theo đúng thứ tự này",
   );
 
   const idxProfile = noComments.indexOf("router.get(\n  PROFILE,");

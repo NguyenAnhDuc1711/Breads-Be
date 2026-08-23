@@ -27,7 +27,7 @@ import { USER_PATH } from "../../Breads-Shared/APIConfig.js";
 import protectRoute from "../middlewares/protectRoute.js";
 import asyncHandler from "../../helpers/asyncHandler.js";
 import { validate } from "../middlewares/validate.js";
-import { authTierLimiter, sitemapListLimiter } from "../middlewares/rateLimiter.js";
+import { authTierLimiter } from "../middlewares/rateLimiter.js";
 import sitemapAuthGate from "../middlewares/sitemapAuthGate.js";
 import {
   getUserProfileSchema,
@@ -112,14 +112,15 @@ router.get(
   asyncHandler(getUsersWithStatus),
 );
 // Task 003 (epic seo-sitemap-schema, FR-2): route literal 1-segment -> đăng ký TRƯỚC `PROFILE`
-// (đăng ký ở dưới) để không bị nuốt, đúng convention đã ghi ở comment trên. Gate 2 lớp:
-// `sitemapAuthGate` (shared-secret) trước, `sitemapListLimiter` (300/phút, sibling của
-// `/posts/sitemap-eligible` task 002 — KHÔNG dùng `authTierLimiter` 5/phút, xem comment
-// `sitemapListLimiter` trong rateLimiter.ts) sau.
+// (đăng ký ở dưới) để không bị nuốt, đúng convention đã ghi ở comment trên.
+//
+// KHÔNG có rate limiter (sibling của `/posts/sitemap-eligible` task 002 — xem lý do đầy đủ ở
+// comment route đó trong `post.route.ts`: mọi ngưỡng theo-phút đều gây lỗi thật khi Next.js's
+// static export gọi `getChunk()` đồng thời cho nhiều chunk lúc build; `sitemapAuthGate` là biên
+// bảo mật thật duy nhất cần thiết ở đây).
 router.get(
   SITEMAP_ELIGIBLE,
   sitemapAuthGate,
-  sitemapListLimiter,
   validate(getSitemapEligibleUsersQuerySchema),
   asyncHandler(getSitemapEligibleUsers),
 );

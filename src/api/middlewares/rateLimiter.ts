@@ -12,10 +12,12 @@ export const createRateLimiter = ({
   windowMs,
   max,
   message,
+  skip,
 }: {
   windowMs: number;
   max: number;
   message?: string;
+  skip?: (req: any) => boolean;
 }) =>
   rateLimit({
     windowMs,
@@ -23,6 +25,7 @@ export const createRateLimiter = ({
     message: message ?? "Too many requests, please try again later",
     standardHeaders: true, // trả RateLimit-* header + Retry-After (IETF draft)
     legacyHeaders: false, // tắt X-RateLimit-* cũ, tránh trùng lặp
+    ...(skip ? { skip } : {}),
   });
 
 // Auth-tier: SIGN_UP/LOGIN/forgot-password (util.route.ts) + CRAWL_POST/CRAWL_USER (AD-3 — 2 route
@@ -31,7 +34,27 @@ export const authTierLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 
 // Global-tier: toàn bộ /api còn lại. Route đã có authTierLimiter riêng vẫn nhận thêm global-tier
 // (2 lớp rate-limit độc lập, lớp nghiêm ngặt hơn trigger trước — không xung đột).
-export const globalTierLimiter = createRateLimiter({ windowMs: 60_000, max: 100 });
+//
+// (epic seo-sitemap-schema, phát hiện + xác nhận qua live test — 3 lần thử `authTierLimiter`
+// 5/phút, rồi `sitemapListLimiter` 300/phút, đều fail): `/posts/sitemap-eligible` và
+// `/users/sitemap-eligible` bị TRỪ khỏi global-tier qua `skip`, và KHÔNG có limiter riêng nào áp
+// cho 2 route này nữa (xem `post.route.ts`/`user.route.ts`). Root cause thật: Next.js's static
+// export gọi đồng thời nhiều lần `getChunk()` phía Fe lúc build, mỗi chunk xa phải đi qua nhiều
+// trang trước đó — tổng tải cộng dồn vượt BẤT KỲ ngưỡng theo-phút nào bất kể đặt cao bao nhiêu, vì
+// hoàn thành nhanh hơn nhiều so với cửa sổ 60s. 2 route này đã gate bằng `sitemapAuthGate` (AD-3,
+// shared-secret, server-to-server only) — đây là biên bảo mật thật; rate-limit theo phút không hợp
+// với pattern gọi của loại client này (không phải user thật gõ bàn phím, mà là 1 job phân trang hết
+// dataset) nên không thêm giá trị bảo mật, chỉ toàn gây false-positive.
+const SITEMAP_ELIGIBLE_PATHS = new Set([
+  "/posts/sitemap-eligible",
+  "/users/sitemap-eligible",
+]);
+
+export const globalTierLimiter = createRateLimiter({
+  windowMs: 60_000,
+  max: 100,
+  skip: (req) => SITEMAP_ELIGIBLE_PATHS.has(req.path),
+});
 
 // Media-sign tier (epic presigned-media-upload, AD-3 + FR-6): endpoint ký batch upload Cloudinary.
 // Cùng cơ chế `createRateLimiter` với 2 limiter trên — KHÔNG phải `messageSendLimiter`/
@@ -41,14 +64,3 @@ export const globalTierLimiter = createRateLimiter({ windowMs: 60_000, max: 100 
 // 20/phút thay vì 5 như authTierLimiter: FR-1/FR-2 gộp theo BATCH (1 lần gọi cho cả hành động
 // compose, không phải 1 lần/file), nên 5/phút sẽ chặn nhầm user soạn nhiều tin/post liên tiếp.
 export const mediaSignLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
-
-// Sitemap-list tier (epic seo-sitemap-schema, phát hiện khi triển khai Task 002): endpoint
-// `/posts/sitemap-eligible` và `/users/sitemap-eligible` được gọi server-to-server, phân trang
-// tuần tự để sinh sitemap (~961 trang cho post, ~875 cho user, 1000 record/trang). Với
-// `authTierLimiter` (5/phút), 1 lần regenerate đầy đủ mất ~192 phút/route — vượt xa timeout của
-// bất kỳ serverless function nào (mỗi sub-sitemap chunk 50.000 URL cần ~50 lần gọi liên tiếp =
-// ~10 phút chỉ để sinh 1 file). Endpoint đã được bảo vệ bằng `sitemapAuthGate` (shared-secret) nên
-// rate-limit ở đây chỉ là defense-in-depth, không phải cơ chế chống abuse chính — có thể nới cao
-// hơn nhiều so với authTierLimiter. 300/phút đủ để hoàn tất phân trang toàn bộ dataset hiện tại
-// (~961 trang) trong ~3.2 phút.
-export const sitemapListLimiter = createRateLimiter({ windowMs: 60_000, max: 300 });
