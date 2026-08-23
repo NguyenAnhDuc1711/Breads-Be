@@ -20,7 +20,7 @@ import {
 import { crawlPosts } from "../crawl.js";
 import optionalAuth from "../middlewares/optionalAuth.js";
 import protectRoute from "../middlewares/protectRoute.js";
-import { authTierLimiter } from "../middlewares/rateLimiter.js";
+import { authTierLimiter, sitemapListLimiter } from "../middlewares/rateLimiter.js";
 import sitemapAuthGate from "../middlewares/sitemapAuthGate.js";
 import { validate } from "../middlewares/validate.js";
 import {
@@ -72,12 +72,15 @@ router.get(
 );
 // Task 002 (epic seo-sitemap-schema, AD-2): route literal 1-segment -> đăng ký TRƯỚC `/:id`
 // (đăng ký ở dưới) để không bị nuốt, đúng convention đã ghi ở comment trên. Gate 2 lớp:
-// `sitemapAuthGate` (shared-secret) trước, `authTierLimiter` (rate-limit) sau — giống hệt cách
-// `CRAWL_POST` áp `authTierLimiter` một mình, chỉ thêm 1 lớp auth vì endpoint này không có JWT.
+// `sitemapAuthGate` (shared-secret) trước, `sitemapListLimiter` (rate-limit) sau. Dùng
+// `sitemapListLimiter` (300/phút) thay vì `authTierLimiter` (5/phút, dùng cho CRAWL_POST) vì
+// endpoint này bị gọi phân trang liên tục để sinh sitemap (~961 trang) — 5/phút sẽ mất ~192 phút
+// để phân trang hết, vượt xa timeout thực tế; endpoint đã có `sitemapAuthGate` chặn abuse nên rate
+// limit ở đây chỉ là defense-in-depth (xem `rateLimiter.ts` comment).
 router.get(
   SITEMAP_ELIGIBLE,
   sitemapAuthGate,
-  authTierLimiter,
+  sitemapListLimiter,
   validate(getSitemapEligiblePostsQuerySchema),
   asyncHandler(getSitemapEligiblePosts),
 );

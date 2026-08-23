@@ -41,3 +41,14 @@ export const globalTierLimiter = createRateLimiter({ windowMs: 60_000, max: 100 
 // 20/phút thay vì 5 như authTierLimiter: FR-1/FR-2 gộp theo BATCH (1 lần gọi cho cả hành động
 // compose, không phải 1 lần/file), nên 5/phút sẽ chặn nhầm user soạn nhiều tin/post liên tiếp.
 export const mediaSignLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
+
+// Sitemap-list tier (epic seo-sitemap-schema, phát hiện khi triển khai Task 002): endpoint
+// `/posts/sitemap-eligible` và `/users/sitemap-eligible` được gọi server-to-server, phân trang
+// tuần tự để sinh sitemap (~961 trang cho post, ~875 cho user, 1000 record/trang). Với
+// `authTierLimiter` (5/phút), 1 lần regenerate đầy đủ mất ~192 phút/route — vượt xa timeout của
+// bất kỳ serverless function nào (mỗi sub-sitemap chunk 50.000 URL cần ~50 lần gọi liên tiếp =
+// ~10 phút chỉ để sinh 1 file). Endpoint đã được bảo vệ bằng `sitemapAuthGate` (shared-secret) nên
+// rate-limit ở đây chỉ là defense-in-depth, không phải cơ chế chống abuse chính — có thể nới cao
+// hơn nhiều so với authTierLimiter. 300/phút đủ để hoàn tất phân trang toàn bộ dataset hiện tại
+// (~961 trang) trong ~3.2 phút.
+export const sitemapListLimiter = createRateLimiter({ windowMs: 60_000, max: 300 });

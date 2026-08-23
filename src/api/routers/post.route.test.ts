@@ -865,12 +865,12 @@ test("R-6 (đối chứng): quote bài PUBLIC -> guard cho qua, đi tiếp tới
 });
 
 /* -------------------------- Task 002 (epic seo-sitemap-schema, FR-1): GET /posts/sitemap-eligible
-   end-to-end. CỐ Ý KHÔNG mount `authTierLimiter` thật trong app test dưới đây: đó là 1 singleton
+   end-to-end. CỐ Ý KHÔNG mount `sitemapListLimiter` thật trong app test dưới đây: đó là 1 singleton
    module-level (`rateLimiter.ts`) dùng chung state trong CẢ process test — mount nó vào 1 route bị
-   gọi >5 lần (nhiều test trong file này) sẽ tự trip 429 giữa chừng, che mất assertion thật đang
-   test (đúng lý do `security-hardening.smoke.test.ts:165` đã né tương tự). Sự có mặt của
-   `authTierLimiter` trên route này đã được xác nhận riêng bằng test đọc SOURCE bên dưới — cùng
-   pattern `rateLimiter.test.ts:166` áp dụng cho `CRAWL_POST`. */
+   gọi nhiều lần (nhiều test trong file này) có thể tự trip giữa chừng, che mất assertion thật đang
+   test (đúng lý do `security-hardening.smoke.test.ts:165` đã né tương tự với authTierLimiter). Sự
+   có mặt của `sitemapListLimiter` trên route này đã được xác nhận riêng bằng test đọc SOURCE bên
+   dưới — cùng pattern `rateLimiter.test.ts:166` áp dụng cho `CRAWL_POST`. */
 
 const SITEMAP_SECRET = "test-sitemap-secret";
 
@@ -1014,13 +1014,15 @@ test("FR-1 (phân trang, end-to-end): 3 trang liên tiếp qua nextCursor -> kh�
   });
 });
 
-test("FR-1 (wiring, source): SITEMAP_ELIGIBLE có sitemapAuthGate + authTierLimiter + validate(getSitemapEligiblePostsQuerySchema), đăng ký TRƯỚC /:id", async () => {
+test("FR-1 (wiring, source): SITEMAP_ELIGIBLE có sitemapAuthGate + sitemapListLimiter + validate(getSitemapEligiblePostsQuerySchema), đăng ký TRƯỚC /:id", async () => {
   const src = await readRouteSource();
   const noComments = src.replace(/^\s*\/\/.*$/gm, "");
 
+  // sitemapListLimiter (300/phút) thay authTierLimiter (5/phút): endpoint bị phân trang liên tục
+  // (~961 trang) để sinh sitemap, 5/phút sẽ mất ~192 phút/lần regenerate — xem rateLimiter.ts.
   assert.ok(
     noComments.includes(
-      "router.get(\n  SITEMAP_ELIGIBLE,\n  sitemapAuthGate,\n  authTierLimiter,\n  validate(getSitemapEligiblePostsQuerySchema),\n  asyncHandler(getSitemapEligiblePosts),\n);",
+      "router.get(\n  SITEMAP_ELIGIBLE,\n  sitemapAuthGate,\n  sitemapListLimiter,\n  validate(getSitemapEligiblePostsQuerySchema),\n  asyncHandler(getSitemapEligiblePosts),\n);",
     ),
     "route SITEMAP_ELIGIBLE phải wire đúng 4 middleware theo đúng thứ tự này",
   );
