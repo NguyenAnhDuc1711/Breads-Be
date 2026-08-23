@@ -9,7 +9,7 @@
 import { z } from "zod";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import { sanitizeText } from "../middlewares/sanitize.js";
-import { objectIdSchema, paginationQuerySchema } from "./common.js";
+import { objectIdSchema, paginationQuerySchema, rankedCursorSchema } from "./common.js";
 
 const VISIBILITY_VALUES: number[] = Object.values(Constants.POST_VISIBILITY);
 
@@ -192,8 +192,10 @@ export const getPostRepliesSchema = {
 // cap, xem comment ở `common.ts`); endpoint này gọi bởi sitemap generator server-to-server, không
 // phải client app, nên siết cap tại đây không ảnh hưởng NFR-4 (vốn nói về router client-facing).
 export const getSitemapEligiblePostsQuerySchema = {
+  // Cursor đổi từ `objectIdSchema` (chỉ `_id`) sang `rankedCursorSchema` ("score:id") sau fix
+  // "top-N ưu tiên" — sort giờ là (engagementScore giảm dần, _id giảm dần), không còn thuần `_id`.
   query: z.object({
-    cursor: objectIdSchema.optional(),
+    cursor: rankedCursorSchema.optional(),
     limit: z.coerce.number().int().min(1).max(1000).optional().default(1000),
   }),
 };

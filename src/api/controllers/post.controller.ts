@@ -1,4 +1,5 @@
 import axios from "axios";
+import { SITEMAP_MAX_RECORDS } from "../../Breads-Shared/APIConfig.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
 import { IPost } from "../../Breads-Shared/Types/index.js";
@@ -577,22 +578,43 @@ export const getPosts = async (req, res) => {
 // trang trên tập ~961K record; trang sau trả `totalCount: null` — Task 010 (sitemap) phải cộng dồn
 // `totalCount` từ trang đầu, không đọc lại ở trang sau.
 export const getSitemapEligiblePosts = async (req, res) => {
+  // Cursor mã hoá "score:id" (top-N ưu tiên, fix sau epic seo-sitemap-schema). Sort đổi từ
+  // `{_id:1}` (cũ, không có ý nghĩa ưu tiên) sang `{engagementScore:-1, _id:-1}` (điểm cao trước,
+  // hoà điểm thì mới nhất trước — _id Mongo tự mang timestamp nên không cần field riêng). Dùng
+  // ĐÚNG index có sẵn từ hệ feed ranking (`post.model.ts`, `{engagementScore:-1,_id:-1}`) — không
+  // cần index mới cho post (khác user, xem user.model.ts).
   const { cursor, limit } = req.query as { cursor?: string; limit: number };
+  const [cursorScore, cursorId] = cursor ? cursor.split(":") : [undefined, undefined];
 
   const baseFilter = {
     status: Constants.POST_STATUS.PUBLIC,
     visibility: Constants.POST_VISIBILITY.PUBLIC,
     engagementScore: { $gte: 5 },
   };
-  const findFilter = cursor ? { ...baseFilter, _id: { $gt: cursor } } : baseFilter;
+  const findFilter = cursor
+    ? {
+        ...baseFilter,
+        $or: [
+          { engagementScore: { $lt: Number(cursorScore) } },
+          { engagementScore: Number(cursorScore), _id: { $lt: cursorId } },
+        ],
+      }
+    : baseFilter;
 
   const posts = await Post.find(findFilter)
-    .sort({ _id: 1 })
+    .sort({ engagementScore: -1, _id: -1 })
     .limit(limit)
     .select("_id updatedAt engagementScore")
     .lean();
 
-  const totalCount = cursor ? null : await Post.countDocuments(baseFilter);
+  // Trần cứng (SITEMAP_MAX_RECORDS): dữ liệu thật cho thấy engagementScore dồn cục quá nặng
+  // (~99.99% post đủ điều kiện hoà cùng 1 điểm) nên KHÔNG thể giảm quy mô bằng cách nâng ngưỡng lọc
+  // — chặn bằng số lượng tuyệt đối thay vì ngưỡng chất lượng. `totalCount` phản ánh đúng những gì
+  // sitemap SẼ chứa (bị trần chặn), không phải tổng số thật trong DB — nếu không, guard đối chiếu
+  // `sum(fetched) === totalCount` phía Fe (FAIL-1) sẽ luôn báo lệch sai (vì Fe cũng dừng ở N).
+  const totalCount = cursor
+    ? null
+    : Math.min(await Post.countDocuments(baseFilter), SITEMAP_MAX_RECORDS);
 
   const data = posts.map((post: any) => ({
     postId: post._id.toString(),
@@ -600,7 +622,9 @@ export const getSitemapEligiblePosts = async (req, res) => {
     engagementScore: post.engagementScore,
   }));
   const nextCursor =
-    posts.length === limit ? data[data.length - 1].postId : null;
+    posts.length === limit
+      ? `${data[data.length - 1].engagementScore}:${data[data.length - 1].postId}`
+      : null;
 
   new OK({
     message: "Get sitemap-eligible posts successfully",

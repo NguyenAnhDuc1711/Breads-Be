@@ -16,6 +16,20 @@ export const objectIdSchema = z
   .string()
   .refine(mongoose.isValidObjectId, "invalid id");
 
+// Cursor phức hợp "score:id" cho phân trang theo (field xếp hạng giảm dần, _id giảm dần) — dùng
+// chung cho `/posts/sitemap-eligible` (engagementScore) và `/users/sitemap-eligible`
+// (followersCount) sau fix "top-N ưu tiên" (epic seo-sitemap-schema). `score` là số nguyên KHÔNG
+// âm (engagementScore/followersCount đều không âm theo model) ở dạng chuỗi trong query string;
+// `id` phải là ObjectId hợp lệ.
+export const rankedCursorSchema = z
+  .string()
+  .refine((v) => {
+    const parts = v.split(":");
+    if (parts.length !== 2) return false;
+    const [score, id] = parts;
+    return /^\d+$/.test(score) && mongoose.isValidObjectId(id);
+  }, "invalid cursor — expected format \"score:id\"");
+
 export const paginationQuerySchema = z.object({
   page: z.coerce.number().int().min(1).optional(),
   limit: z.coerce.number().int().min(1).optional(),
