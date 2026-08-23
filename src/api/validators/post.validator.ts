@@ -186,3 +186,15 @@ export const getPostRepliesSchema = {
   }),
 };
 
+// Task 002 (epic seo-sitemap-schema, FR-1): query cho `GET /posts/sitemap-eligible`. Cursor
+// là `_id` (ổn định qua nhiều trang, khác `engagementScore` không unique — xem task 002). `limit`
+// default 1000, cap cứng 1000 — CỐ Ý khác `paginationQuerySchema` dùng chung (primitive đó không
+// cap, xem comment ở `common.ts`); endpoint này gọi bởi sitemap generator server-to-server, không
+// phải client app, nên siết cap tại đây không ảnh hưởng NFR-4 (vốn nói về router client-facing).
+export const getSitemapEligiblePostsQuerySchema = {
+  query: z.object({
+    cursor: objectIdSchema.optional(),
+    limit: z.coerce.number().int().min(1).max(1000).optional().default(1000),
+  }),
+};
+

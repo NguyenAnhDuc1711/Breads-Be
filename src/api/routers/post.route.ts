@@ -10,6 +10,7 @@ import {
   getPostActivities,
   getPostReplies,
   getPosts,
+  getSitemapEligiblePosts,
   likeUnlikePost,
   tickPostSurvey,
   updatePost,
@@ -20,6 +21,7 @@ import { crawlPosts } from "../crawl.js";
 import optionalAuth from "../middlewares/optionalAuth.js";
 import protectRoute from "../middlewares/protectRoute.js";
 import { authTierLimiter } from "../middlewares/rateLimiter.js";
+import sitemapAuthGate from "../middlewares/sitemapAuthGate.js";
 import { validate } from "../middlewares/validate.js";
 import {
   createPostSchema,
@@ -28,6 +30,7 @@ import {
   getPostRepliesSchema,
   getPostSchema,
   getPostsQuerySchema,
+  getSitemapEligiblePostsQuerySchema,
   likeUnlikePostSchema,
   tickPostSurveySchema,
   updatePostSchema,
@@ -51,6 +54,7 @@ const {
   CRAWL_POST,
   UPDATE_POST_STATUS,
   UPDATE_POST_VISIBILITY,
+  SITEMAP_ELIGIBLE,
 } = POST_PATH;
 
 // Middleware `validate` luôn đứng SAU optionalAuth/protectRoute (auth gắn `req.viewerId`/`req.user`,
@@ -65,6 +69,17 @@ router.get(
   optionalAuth,
   validate(getPostsQuerySchema),
   asyncHandler(getPosts),
+);
+// Task 002 (epic seo-sitemap-schema, AD-2): route literal 1-segment -> đăng ký TRƯỚC `/:id`
+// (đăng ký ở dưới) để không bị nuốt, đúng convention đã ghi ở comment trên. Gate 2 lớp:
+// `sitemapAuthGate` (shared-secret) trước, `authTierLimiter` (rate-limit) sau — giống hệt cách
+// `CRAWL_POST` áp `authTierLimiter` một mình, chỉ thêm 1 lớp auth vì endpoint này không có JWT.
+router.get(
+  SITEMAP_ELIGIBLE,
+  sitemapAuthGate,
+  authTierLimiter,
+  validate(getSitemapEligiblePostsQuerySchema),
+  asyncHandler(getSitemapEligiblePosts),
 );
 router.get(
   "/:id/activities",

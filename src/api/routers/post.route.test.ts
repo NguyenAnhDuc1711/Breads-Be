@@ -28,9 +28,12 @@ import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import logger from "../../core/logger.ts";
 import asyncHandler from "../../helpers/asyncHandler.ts";
-import { createPost } from "../controllers/post.controller.ts";
+import { createPost, getSitemapEligiblePosts } from "../controllers/post.controller.ts";
 import { VALIDATION_ERROR_MESSAGE, validate } from "../middlewares/validate.ts";
 import { sanitizeText } from "../middlewares/sanitize.ts";
+import sitemapAuthGate, {
+  SITEMAP_SECRET_HEADER,
+} from "../middlewares/sitemapAuthGate.ts";
 import Post from "../models/post.model.ts";
 import SavedPost from "../models/savedPost.model.ts";
 import User from "../models/user.model.ts";
@@ -41,6 +44,7 @@ import {
   deletePostSchema,
   getPostActivitiesSchema,
   getPostsQuerySchema,
+  getSitemapEligiblePostsQuerySchema,
   likeUnlikePostSchema,
   tickPostSurveySchema,
   updatePostStatusSchema,
@@ -602,13 +606,13 @@ const parseRoutePairs = (src: string) =>
     return [method, path];
   });
 
-test("wiring: 11/12 route có validate(), CRAWL_POST cố ý không có", async () => {
+test("wiring: 12/13 route có validate(), CRAWL_POST cố ý không có", async () => {
   const routeLines = parseRouteLines(await readRouteSource());
 
-  assert.equal(routeLines.length, 12, "post.route.ts phải có đúng 12 route");
+  assert.equal(routeLines.length, 13, "post.route.ts phải có đúng 13 route");
 
   const withValidate = routeLines.filter((line) => line.includes("validate("));
-  assert.equal(withValidate.length, 11, "đúng 11 route phải có validate()");
+  assert.equal(withValidate.length, 12, "đúng 12 route phải có validate()");
 
   const crawl = routeLines.filter((line) => line.includes("CRAWL_POST"));
   assert.equal(crawl.length, 1);
@@ -620,15 +624,17 @@ test("wiring: 11/12 route có validate(), CRAWL_POST cố ý không có", async 
 
 /* --------------------------------------------- Task 011 (FR-3, D-1): bảng 11 endpoint mới */
 
-// AC FR-3: chốt CỨNG method + path của cả 12 endpoint (11 gốc + `/:id/replies` thêm sau, xem
-// "tối ưu Post.replies") theo đúng bảng trong `011.md`. Thứ tự trong list cũng là thứ tự ĐĂNG KÝ —
-// có ý nghĩa với express (route literal 1 segment như `/crawl` phải đứng trước route dynamic 1
-// segment cùng method), nên assert nguyên list chứ không dùng Set.
-test("FR-3 (D-1): 12 endpoint posts đúng method + path RESTful mới, đúng thứ tự đăng ký", async () => {
+// AC FR-3: chốt CỨNG method + path của cả 13 endpoint (11 gốc + `/:id/replies` thêm sau (xem
+// "tối ưu Post.replies") + `SITEMAP_ELIGIBLE` task 002) theo đúng bảng trong `011.md`/`002.md`.
+// Thứ tự trong list cũng là thứ tự ĐĂNG KÝ — có ý nghĩa với express (route literal 1 segment như
+// `/crawl`/`/sitemap-eligible` phải đứng trước route dynamic 1 segment cùng method), nên assert
+// nguyên list chứ không dùng Set.
+test("FR-3 (D-1): 13 endpoint posts đúng method + path RESTful mới, đúng thứ tự đăng ký", async () => {
   const pairs = parseRoutePairs(await readRouteSource());
 
   assert.deepEqual(pairs, [
     ["get", "/"], // GET_ALL: /all -> /
+    ["get", "/sitemap-eligible"], // MỚI (task 002): post đủ điều kiện sitemap, literal -> trước /:id
     ["get", "/:id/activities"], // giữ nguyên
     ["get", "/:id/replies"], // MỚI: danh sách reply phân trang, thay cho nhúng không giới hạn
     ["get", "/:id"], // giữ nguyên
@@ -855,6 +861,176 @@ test("R-6 (đối chứng): quote bài PUBLIC -> guard cho qua, đi tiếp tới
         );
       });
     })
+  );
+});
+
+/* -------------------------- Task 002 (epic seo-sitemap-schema, FR-1): GET /posts/sitemap-eligible
+   end-to-end. CỐ Ý KHÔNG mount `authTierLimiter` thật trong app test dưới đây: đó là 1 singleton
+   module-level (`rateLimiter.ts`) dùng chung state trong CẢ process test — mount nó vào 1 route bị
+   gọi >5 lần (nhiều test trong file này) sẽ tự trip 429 giữa chừng, che mất assertion thật đang
+   test (đúng lý do `security-hardening.smoke.test.ts:165` đã né tương tự). Sự có mặt của
+   `authTierLimiter` trên route này đã được xác nhận riêng bằng test đọc SOURCE bên dưới — cùng
+   pattern `rateLimiter.test.ts:166` áp dụng cho `CRAWL_POST`. */
+
+const SITEMAP_SECRET = "test-sitemap-secret";
+
+const withSitemapSecret = async (fn: () => Promise<void> | void) => {
+  process.env.SITEMAP_SHARED_SECRET = SITEMAP_SECRET;
+  try {
+    await fn();
+  } finally {
+    delete process.env.SITEMAP_SHARED_SECRET;
+  }
+};
+
+/** Mirror ĐÚNG wiring thật của `SITEMAP_ELIGIBLE` trong `post.route.ts` (trừ `authTierLimiter`,
+ * lý do xem comment ngay trên): `sitemapAuthGate` -> `validate(...)` -> controller thật. */
+const sitemapEligibleApp = () => {
+  const app = express();
+  const router = express.Router();
+  router.get(
+    "/sitemap-eligible",
+    sitemapAuthGate,
+    validate(getSitemapEligiblePostsQuerySchema),
+    asyncHandler(getSitemapEligiblePosts),
+  );
+  app.use("/posts", router);
+  app.use(errorHandler);
+  return app;
+};
+
+test("FR-1 (auth gate): thiếu header secret -> 401, không chạm controller", async () => {
+  await withSitemapSecret(async () => {
+    await withServer(sitemapEligibleApp(), async (base) => {
+      const res = await fetch(`${base}/posts/sitemap-eligible`);
+      assert.equal(res.status, 401);
+    });
+  });
+});
+
+test("FR-1 (auth gate): sai header secret -> 401", async () => {
+  await withSitemapSecret(async () => {
+    await withServer(sitemapEligibleApp(), async (base) => {
+      const res = await fetch(`${base}/posts/sitemap-eligible`, {
+        headers: { [SITEMAP_SECRET_HEADER]: "wrong-secret" },
+      });
+      assert.equal(res.status, 401);
+    });
+  });
+});
+
+// 25 doc giả lập kết quả ĐÃ QUA filter status/visibility/engagementScore (đúng field controller
+// select), _id hex 24 ký tự tăng dần để so sánh chuỗi `>` tương đương thứ tự ObjectId thật.
+const FAKE_ELIGIBLE_DOCS = Array.from({ length: 25 }, (_, i) => ({
+  _id: String(i + 1).padStart(24, "0"),
+  updatedAt: new Date(2024, 0, i + 1),
+  engagementScore: 5 + i,
+}));
+
+const withStubbedSitemapQuery = async (
+  docs: typeof FAKE_ELIGIBLE_DOCS,
+  fn: () => Promise<void> | void,
+) => {
+  const originalFind = (Post as any).find;
+  const originalCountDocuments = (Post as any).countDocuments;
+
+  (Post as any).find = (filter: any) => {
+    const cursor = filter?._id?.$gt;
+    const matched = cursor ? docs.filter((d) => d._id > cursor) : docs;
+    let limitN = matched.length;
+    const chain = {
+      sort() {
+        return this;
+      },
+      limit(n: number) {
+        limitN = n;
+        return this;
+      },
+      select() {
+        return this;
+      },
+      lean: async () => matched.slice(0, limitN),
+    };
+    return chain;
+  };
+  (Post as any).countDocuments = async () => docs.length;
+
+  try {
+    await fn();
+  } finally {
+    (Post as any).find = originalFind;
+    (Post as any).countDocuments = originalCountDocuments;
+  }
+};
+
+test("FR-1 (phân trang, end-to-end): 3 trang liên tiếp qua nextCursor -> không trùng/thiếu record, trang cuối nextCursor=null", async () => {
+  await withSitemapSecret(async () => {
+    await withStubbedSitemapQuery(FAKE_ELIGIBLE_DOCS, async () => {
+      await withServer(sitemapEligibleApp(), async (base) => {
+        const authHeaders = { [SITEMAP_SECRET_HEADER]: SITEMAP_SECRET };
+        const seenIds: string[] = [];
+        let cursor: string | null = null;
+        let totalCountFromFirstPage: number | null = null;
+        let pageCount = 0;
+
+        do {
+          const url = new URL(`${base}/posts/sitemap-eligible`);
+          url.searchParams.set("limit", "10");
+          if (cursor) url.searchParams.set("cursor", cursor);
+
+          const res = await fetch(url, { headers: authHeaders });
+          assert.equal(res.status, 200);
+          const body: any = await res.json();
+          const { data, nextCursor, totalCount } = body.metadata;
+
+          if (pageCount === 0) {
+            totalCountFromFirstPage = totalCount;
+            assert.equal(totalCount, 25, "totalCount trang đầu phải khớp tổng số record");
+          } else {
+            assert.equal(totalCount, null, "totalCount CHỈ trả ở trang đầu, các trang sau phải null");
+          }
+
+          for (const item of data) {
+            assert.ok(
+              !seenIds.includes(item.postId),
+              `record trùng lặp qua các trang: ${item.postId}`,
+            );
+            seenIds.push(item.postId);
+          }
+
+          cursor = nextCursor;
+          pageCount += 1;
+        } while (cursor);
+
+        assert.equal(pageCount, 3, "25 record / limit 10 -> đúng 3 trang");
+        assert.equal(seenIds.length, totalCountFromFirstPage, "không được thiếu record nào so với totalCount");
+        assert.deepEqual(
+          seenIds,
+          FAKE_ELIGIBLE_DOCS.map((d) => d._id),
+          "thứ tự + tập hợp record phải khớp chính xác, không trùng không thiếu",
+        );
+      });
+    });
+  });
+});
+
+test("FR-1 (wiring, source): SITEMAP_ELIGIBLE có sitemapAuthGate + authTierLimiter + validate(getSitemapEligiblePostsQuerySchema), đăng ký TRƯỚC /:id", async () => {
+  const src = await readRouteSource();
+  const noComments = src.replace(/^\s*\/\/.*$/gm, "");
+
+  assert.ok(
+    noComments.includes(
+      "router.get(\n  SITEMAP_ELIGIBLE,\n  sitemapAuthGate,\n  authTierLimiter,\n  validate(getSitemapEligiblePostsQuerySchema),\n  asyncHandler(getSitemapEligiblePosts),\n);",
+    ),
+    "route SITEMAP_ELIGIBLE phải wire đúng 4 middleware theo đúng thứ tự này",
+  );
+
+  const idxSitemap = noComments.indexOf('router.get(\n  "/:id",');
+  const idxSitemapEligible = noComments.indexOf("router.get(\n  SITEMAP_ELIGIBLE,");
+  assert.ok(idxSitemapEligible >= 0 && idxSitemap >= 0);
+  assert.ok(
+    idxSitemapEligible < idxSitemap,
+    "SITEMAP_ELIGIBLE (literal 1-segment) phải đăng ký TRƯỚC /:id, nếu không sẽ bị nuốt",
   );
 });
 

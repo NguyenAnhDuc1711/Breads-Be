@@ -16,6 +16,7 @@ import { Constants } from "../../Breads-Shared/Constants/index.js";
 import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
 import {
   createPost,
+  getSitemapEligiblePosts,
   isRepostLikePayload,
   processNewPostMediaItem,
   updatePost,
@@ -492,6 +493,111 @@ test("Task 011 Tests to Write #3: updatePost với item media mới type=gif (UR
       restore();
     }
   });
+});
+
+/* -------------------------- Task 002 (epic seo-sitemap-schema, FR-1): getSitemapEligiblePosts --
+   KHÔNG dùng `getPostsIdByFilter`/`getPostDetail` (AD-2) -> test trực tiếp controller, stub
+   `Post.find`/`Post.countDocuments`, cùng pattern `Post.findById` đã dùng ở test FAIL-1 phía trên. */
+
+test("FR-1: filter đúng CẢ 3 điều kiện (status=PUBLIC, visibility=PUBLIC, engagementScore>=5); totalCount khớp countDocuments độc lập", async () => {
+  const capturedFindFilter: any[] = [];
+  const capturedCountFilter: any[] = [];
+  const fakeDocs = [
+    { _id: "000000000000000000000001", updatedAt: new Date("2024-01-01"), engagementScore: 5 },
+    { _id: "000000000000000000000002", updatedAt: new Date("2024-01-02"), engagementScore: 9 },
+  ];
+
+  const originalFind = (Post as any).find;
+  const originalCountDocuments = (Post as any).countDocuments;
+  (Post as any).find = (filter: any) => {
+    capturedFindFilter.push(filter);
+    return {
+      sort() {
+        return this;
+      },
+      limit() {
+        return this;
+      },
+      select() {
+        return this;
+      },
+      lean: async () => fakeDocs,
+    };
+  };
+  (Post as any).countDocuments = async (filter: any) => {
+    capturedCountFilter.push(filter);
+    return fakeDocs.length;
+  };
+
+  const res = buildRes();
+  try {
+    await getSitemapEligiblePosts({ query: { limit: 1000 } } as any, res);
+
+    const expectedFilter = {
+      status: Constants.POST_STATUS.PUBLIC,
+      visibility: Constants.POST_VISIBILITY.PUBLIC,
+      engagementScore: { $gte: 5 },
+    };
+    assert.deepEqual(
+      capturedFindFilter[0],
+      expectedFilter,
+      "Post.find phải nhận đúng 3 điều kiện — không lẫn PRE_ACCEPT hay visibility khác PUBLIC",
+    );
+    assert.deepEqual(
+      capturedCountFilter[0],
+      expectedFilter,
+      "Post.countDocuments phải dùng CÙNG filter với Post.find (totalCount phải khớp nghĩa với data)",
+    );
+    assert.equal(res._status, 200);
+    assert.equal(
+      res._body.metadata.totalCount,
+      fakeDocs.length,
+      "totalCount phải khớp với countDocuments độc lập, không phải số cứng trong controller",
+    );
+    assert.deepEqual(
+      res._body.metadata.data.map((d: any) => d.postId),
+      fakeDocs.map((d) => d._id),
+    );
+  } finally {
+    (Post as any).find = originalFind;
+    (Post as any).countDocuments = originalCountDocuments;
+  }
+});
+
+test("FR-1: có cursor -> totalCount=null và KHÔNG gọi countDocuments (tránh tính lại mỗi trang)", async () => {
+  const originalFind = (Post as any).find;
+  const originalCountDocuments = (Post as any).countDocuments;
+  let countCalled = false;
+
+  (Post as any).find = () => ({
+    sort() {
+      return this;
+    },
+    limit() {
+      return this;
+    },
+    select() {
+      return this;
+    },
+    lean: async () => [],
+  });
+  (Post as any).countDocuments = async () => {
+    countCalled = true;
+    return 999;
+  };
+
+  const res = buildRes();
+  try {
+    await getSitemapEligiblePosts(
+      { query: { cursor: "000000000000000000000005", limit: 1000 } } as any,
+      res,
+    );
+    assert.equal(res._body.metadata.totalCount, null);
+    assert.equal(countCalled, false);
+  } finally {
+    (Post as any).find = originalFind;
+    (Post as any).countDocuments = originalCountDocuments;
+  }
 });
 
 after(async () => {
