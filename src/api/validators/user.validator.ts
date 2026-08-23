@@ -6,7 +6,7 @@
 // Field lấy trực tiếp từ `user.controller.ts` (không đoán/"dọn" tên field) — xem bảng trong
 // `010.md` §Description.
 import { z } from "zod";
-import { objectIdSchema, paginationQuerySchema } from "./common.ts";
+import { objectIdSchema, paginationQuerySchema, rankedCursorSchema } from "./common.ts";
 
 export const getUserProfileSchema = {
   params: z.object({ userId: objectIdSchema }),
@@ -151,8 +151,10 @@ export const getUserIdFromEmailSchema = {
 // cap — endpoint này gọi server-to-server bởi sitemap generator, không phải client app, nên cap tại
 // đây không ảnh hưởng NFR-4 vốn nói về router client-facing).
 export const getSitemapEligibleUsersQuerySchema = {
+  // Cursor đổi từ `objectIdSchema` sang `rankedCursorSchema` ("followersCount:id") — sort giờ là
+  // (followersCount giảm dần, _id giảm dần), không còn thuần `_id` (top-N ưu tiên).
   query: z.object({
-    cursor: objectIdSchema.optional(),
+    cursor: rankedCursorSchema.optional(),
     limit: z.coerce.number().int().min(1).max(1000).optional().default(1000),
   }),
 };

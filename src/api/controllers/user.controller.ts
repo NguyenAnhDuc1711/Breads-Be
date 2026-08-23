@@ -1,3 +1,4 @@
+import { SITEMAP_MAX_RECORDS } from "../../Breads-Shared/APIConfig.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import { IUser } from "../../Breads-Shared/Types/index.js";
 import { genRandomCode } from "../../Breads-Shared/util/index.js";
@@ -692,28 +693,51 @@ export const getUsersWithStatus = async (req, res) => {
 // cùng chốt `totalCount` CHỈ tính ở trang đầu (tránh `countDocuments` lặp lại mỗi trang trên tập
 // ~874K record; trang sau trả `totalCount: null`).
 export const getSitemapEligibleUsers = async (req, res) => {
+  // Cursor mã hoá "followersCount:id" (top-N ưu tiên, fix sau epic seo-sitemap-schema) — cùng
+  // pattern với `getSitemapEligiblePosts`. Sort đổi sang `{followersCount:-1, _id:-1}`. Dùng index
+  // MỚI `{status:1,followersCount:-1,_id:-1}` (`user.model.ts`) — bắt buộc phải có, khác post: đo
+  // thật cho thấy index cũ KHÔNG đủ, Mongo phải sort trong RAM toàn bộ ~874K kết quả nếu thiếu.
   const { cursor, limit } = req.query as { cursor?: string; limit: number };
+  const [cursorScore, cursorId] = cursor ? cursor.split(":") : [undefined, undefined];
 
   const baseFilter = {
     status: Constants.USER_STATUS.ACTIVE,
     followersCount: { $gte: 10 },
   };
-  const findFilter = cursor ? { ...baseFilter, _id: { $gt: cursor } } : baseFilter;
+  const findFilter = cursor
+    ? {
+        ...baseFilter,
+        $or: [
+          { followersCount: { $lt: Number(cursorScore) } },
+          { followersCount: Number(cursorScore), _id: { $lt: cursorId } },
+        ],
+      }
+    : baseFilter;
 
   const users = await User.find(findFilter)
-    .sort({ _id: 1 })
+    .sort({ followersCount: -1, _id: -1 })
     .limit(limit)
     .select("_id updatedAt followersCount")
     .lean();
 
-  const totalCount = cursor ? null : await User.countDocuments(baseFilter);
+  // Trần cứng SITEMAP_MAX_RECORDS — xem giải thích đầy đủ ở `getSitemapEligiblePosts`
+  // (post.controller.ts), cùng lý do áp dụng cho user.
+  const totalCount = cursor
+    ? null
+    : Math.min(await User.countDocuments(baseFilter), SITEMAP_MAX_RECORDS);
 
-  const data = users.map((user: any) => ({
+  // `followersCount` giữ tạm trong `data` để tính `nextCursor` bên dưới không cần cast lại `users`
+  // thô — response cuối vẫn CHỈ trả `{userId, updatedAt}` (xem `.map` cuối trước khi gửi response).
+  const dataWithScore = users.map((user: any) => ({
     userId: user._id.toString(),
     updatedAt: user.updatedAt,
+    followersCount: user.followersCount,
   }));
+  const data = dataWithScore.map(({ userId, updatedAt }) => ({ userId, updatedAt }));
   const nextCursor =
-    users.length === limit ? data[data.length - 1].userId : null;
+    users.length === limit
+      ? `${dataWithScore[dataWithScore.length - 1].followersCount}:${data[data.length - 1].userId}`
+      : null;
 
   new OK({
     message: "Get sitemap-eligible users successfully",

@@ -89,6 +89,14 @@ userSchema.index({ lastActiveAt: -1 });
 // ESR: phục vụ query lọc `status` (equality) trước range trên `followersCount` (vd. sitemap FR-3
 // `{status:ACTIVE, followersCount:$gte}`).
 userSchema.index({ status: 1, followersCount: 1 });
+// SITEMAP_MAX_RECORDS (top-N ưu tiên, fix sau epic seo-sitemap-schema): sitemap-eligible giờ sort
+// `{followersCount:-1, _id:-1}` (top-N ưu tiên + tie-break theo mới nhất) thay vì `{_id:1}` — index
+// TRÊN đây (`{status,followersCount:1}`, không có `_id`) KHÔNG đủ để tránh in-memory sort: đo thật
+// trên dataset dev (~874K user matching) cho thấy Mongo phải quét + sort trong RAM toàn bộ tập kết
+// quả, ~5.6 giây/trang. Index dưới đây khớp CHÍNH XÁC chiều sort của query mới -> IXSCAN thuần,
+// không sort-in-memory (đối chứng: post KHÔNG cần index mới vì hệ feed ranking đã có sẵn
+// `{engagementScore:-1,_id:-1}` đúng hình dạng cần, xem `post.model.ts`).
+userSchema.index({ status: 1, followersCount: -1, _id: -1 });
 
 const User = mongoose.model("User", userSchema);
 

@@ -683,6 +683,8 @@ const FAKE_ELIGIBLE_USER_DOCS = Array.from({ length: 25 }, (_, i) => ({
   followersCount: 10 + i,
 }));
 
+// Mock giả lập ĐÚNG hành vi query thật (top-N ưu tiên, fix sau epic seo-sitemap-schema): sort
+// (followersCount giảm dần, _id giảm dần) + cursor $or "followersCount:id" — KHÔNG còn thuần `_id`.
 const withStubbedUserFind = async (
   docs: typeof FAKE_ELIGIBLE_USER_DOCS,
   fn: () => Promise<void> | void,
@@ -690,9 +692,26 @@ const withStubbedUserFind = async (
   const originalFind = (User as any).find;
   const originalCountDocuments = (User as any).countDocuments;
 
+  // "Backend thật" luôn trả theo (followersCount giảm dần, _id giảm dần).
+  const ranked = [...docs].sort((a, b) =>
+    a.followersCount !== b.followersCount
+      ? b.followersCount - a.followersCount
+      : b._id.localeCompare(a._id),
+  );
+
   (User as any).find = (filter: any) => {
-    const cursor = filter?._id?.$gt;
-    const matched = cursor ? docs.filter((d) => d._id > cursor) : docs;
+    const orClause = filter?.$or as
+      | [{ followersCount: { $lt: number } }, { followersCount: number; _id: { $lt: string } }]
+      | undefined;
+    const matched = orClause
+      ? ranked.filter((d) => {
+          const [ltScore, eqScoreLtId] = orClause;
+          return (
+            d.followersCount < ltScore.followersCount.$lt ||
+            (d.followersCount === eqScoreLtId.followersCount && d._id < eqScoreLtId._id.$lt)
+          );
+        })
+      : ranked;
     let limitN = matched.length;
     const chain = {
       sort() {
@@ -767,7 +786,8 @@ test("FR-2 (phân trang, end-to-end): 3 trang liên tiếp qua nextCursor -> kh�
         assert.equal(seenIds.length, totalCountFromFirstPage, "không được thiếu record nào so với totalCount");
         assert.deepEqual(
           seenIds,
-          FAKE_ELIGIBLE_USER_DOCS.map((d) => d._id),
+          // followersCount giảm dần -> thứ tự NGƯỢC LẠI với mảng tạo sẵn (vốn tăng dần theo index).
+          [...FAKE_ELIGIBLE_USER_DOCS].reverse().map((d) => d._id),
           "thứ tự + tập hợp record phải khớp chính xác, không trùng không thiếu",
         );
       });
