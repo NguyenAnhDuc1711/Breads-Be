@@ -66,7 +66,11 @@ export const removePostFromCollection = async (req, res) => {
     userId,
   });
   for (const id of postsId) {
-    const postDetail = await getPostDetail(id);
+    // Task 010 / ARCH-1: `getPostDetail` nhận 1 OBJECT tham số. Bản cũ truyền thẳng `id` nên
+    // `postId` destructure ra `undefined` -> `ObjectId("")` sinh id NGẪU NHIÊN -> luôn trả `null`,
+    // endpoint này trả về mảng toàn `null`. Sửa để response thật sự đi qua điểm serialize dùng
+    // chung (và do đó phản ánh đúng bước lọc field rỗng), đúng như FR-6 yêu cầu.
+    const postDetail = await getPostDetail({ postId: id });
     result.push(postDetail);
   }
   new OK({

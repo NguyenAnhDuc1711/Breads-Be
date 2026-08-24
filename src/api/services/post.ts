@@ -10,6 +10,7 @@ import Post from "../models/post.model.js";
 import SavedPost from "../models/savedPost.model.js";
 import SurveyOption from "../models/surveyOption.model.js";
 import User from "../models/user.model.js";
+import { POST_CONFIG } from "./config.ts";
 import { getForYouFeed } from "./feed/index.ts";
 
 /** Danh sách followeeId của `viewerId`. Tách riêng để caller có thể fetch 1 lần rồi tái dùng
@@ -126,6 +127,51 @@ const isAdminViewer = async (viewerId: any): Promise<boolean> => {
     logger.error({ err }, "isAdminViewer failed");
     return false;
   }
+};
+
+/**
+ * FR-1/FR-4 (task 010) — field required, KHÔNG bao giờ bị lược dù giá trị rỗng và dù flag bật.
+ * Chốt ở PRD (`.ccpm/prds/lean-api-response.md` — Constraints, quyết định T1/001): chỉ `content`
+ * và `media`. `survey`/`files` là optional (Mongoose `required: false`, không ràng buộc nghiệp vụ).
+ */
+export const REQUIRED_POST_FIELDS: ReadonlySet<string> = new Set([
+  "content",
+  "media",
+]);
+
+const isEmptyValue = (value: any): boolean =>
+  (Array.isArray(value) && value.length === 0) ||
+  value === "" ||
+  (!!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 0);
+
+/**
+ * Lược field rỗng khỏi 1 post đã serialize xong (FR-1, FR-4).
+ *
+ * - `__v` luôn bị xoá, KHÔNG qua flag (rủi ro bằng 0: field nội bộ của Mongoose, không consumer nào
+ *   dùng).
+ * - Field optional có giá trị rỗng (`[]`, `""`, `{}`) chỉ bị xoá khi flag ON.
+ * - Field trong `REQUIRED_POST_FIELDS` giữ nguyên vô điều kiện.
+ * - Chỉ lọc ở TẦNG TRÊN CÙNG (không đệ quy vào `parentPostInfo`/`authorInfo`) — giữ đúng phạm vi
+ *   anchor của task 010, tránh đổi shape của object lồng mà consumer chưa được audit.
+ *
+ * `filterEnabled` mặc định lấy từ flag (T3/003) nhưng nhận được tham số để test được cả 2 nhánh
+ * mà không phải cache-bust module ESM.
+ */
+export const stripEmptyOptionalFields = (
+  post: Record<string, any>,
+  filterEnabled: boolean = POST_CONFIG.responseFieldFilterEnabled,
+): Record<string, any> => {
+  const result = { ...post };
+  delete result.__v;
+  if (!filterEnabled) return result;
+  for (const key of Object.keys(result)) {
+    if (REQUIRED_POST_FIELDS.has(key)) continue;
+    if (isEmptyValue(result[key])) delete result[key];
+  }
+  return result;
 };
 
 export const getPostDetail = async ({
@@ -326,7 +372,10 @@ export const getPostDetail = async ({
 
       result.repostNum = repostMap.get(result._id.toString()) || 0;
       result.likedByMe = likedPostSet.has(result._id.toString());
-      return result;
+      // FR-1/FR-4: bước lọc chạy SAU khi mọi $lookup + enrich in-memory đã xong, ngay trước khi
+      // object rời khỏi `getPostDetail` — điểm serialize dùng chung của post detail / feed /
+      // collection (ARCH-1), nên cả 3 endpoint nhận cùng một shape.
+      return stripEmptyOptionalFields(result);
     });
 
     // 4. Giữ đúng thứ tự sắp xếp ban đầu của targetIds
