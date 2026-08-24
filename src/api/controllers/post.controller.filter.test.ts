@@ -3,7 +3,7 @@
 // Phạm vi (task 020, NFR-3): contract test Ở TẦNG CONTROLLER cho `GET post detail`
 // (`getPost` trong `post.controller.ts`) — nơi client THẬT SỰ nhận response (PRD Risk #4:
 // `IPost` có thể lệch schema Mongoose thực tế, rủi ro nằm ở tầng shape response chứ không chỉ
-// ở hàm service nội bộ). Bổ sung cho `post.responseFilter*.test.ts` (010) — 2 file đó gọi thẳng
+// ở hàm service nội bộ). Bổ sung cho `post.responseFilter.test.ts` (010) — file đó gọi thẳng
 // `stripEmptyOptionalFields`/`getPostDetail` (tầng service); file này gọi `getPost(req, res)`,
 // đúng hàm mà router `GET /posts/:id` dispatch tới, và kiểm tra `res._body.metadata` — object
 // envelope thật (`OK` trong `core/success.response.ts`) mà client nhận qua HTTP.
@@ -11,28 +11,19 @@
 // Dùng ĐÚNG `REQUIRED_POST_FIELDS` export từ `services/post.ts` làm nguồn duy nhất — không
 // hard-code lại danh sách field required (cảnh báo ở handoff #010), nếu không contract test sẽ
 // không bắt được lỗi khi danh sách đó bị đổi.
-//
-// Env phải set TRƯỚC mọi import chạm `services/config.ts` (qua `post.controller.ts` ->
-// `services/post.ts`) — cùng pattern `collection.controller.filter.test.ts` /
-// `post.controller.dispatch.enabled-false.test.ts`. Import TĨNH bị hoist lên trước dòng
-// `process.env...` bất kể thứ tự viết trong file, nên mọi import chạm `post.controller.ts`/
-// `services/post.ts`/`services/config.ts` phải là `await import(...)` động bên trong test —
-// KỂ CẢ `services/feed/queue.ts` (`closeFanoutQueues`), vì nó import `fanout.ts` ->
-// `services/post.ts` -> `services/config.ts` bắc cầu, nên import tĩnh sẽ load `config.ts` (đọc
-// `POST_CONFIG` cố định) SỚM hơn dòng set env bên dưới nếu không cẩn thận.
-process.env.POST_RESPONSE_FIELD_FILTER_ENABLED = "true";
-
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import Post from "../models/post.model.ts";
+import { REQUIRED_POST_FIELDS } from "../services/post.ts";
+import { closeFanoutQueues } from "../services/feed/queue.ts";
+import { getPost } from "./post.controller.ts";
 
 const POST_ID = "652f1b2c3d4e5f6071829304";
 const AUTHOR_ID = "652f1b2c3d4e5f6071829305";
 
 /** Post "rỗng tối đa": mọi field optional rỗng, và cả field required cũng ở giá trị rỗng-hợp-lệ
- * — đúng kịch bản NFR-3 (required không được biến mất dù rỗng). Cùng shape với
- * `post.responseFilter.flag-on.test.ts` để 2 tầng test (service/controller) khảo cùng 1 input. */
+ * — đúng kịch bản NFR-3 (required không được biến mất dù rỗng). */
 const emptyishPost = () => ({
   _id: POST_ID,
   __v: 0,
@@ -74,12 +65,7 @@ const fakeRes = () => ({
   },
 });
 
-test("NFR-3 (controller layer, GET post detail): field required (từ T1/001, REQUIRED_POST_FIELDS) luôn có mặt trong metadata response dù giá trị rỗng, flag ON", async () => {
-  const { POST_CONFIG } = await import("../services/config.ts");
-  assert.equal(POST_CONFIG.responseFieldFilterEnabled, true, "precondition: flag ON");
-  const { REQUIRED_POST_FIELDS } = await import("../services/post.ts");
-  const { getPost } = await import("./post.controller.ts");
-
+test("NFR-3 (controller layer, GET post detail): field required (từ T1/001, REQUIRED_POST_FIELDS) luôn có mặt trong metadata response dù giá trị rỗng", async () => {
   const restore = stubAggregate([emptyishPost()]);
   const res: any = fakeRes();
   try {
@@ -102,9 +88,7 @@ test("NFR-3 (controller layer, GET post detail): field required (từ T1/001, RE
   assert.deepEqual(metadata.media, []);
 });
 
-test("FR-1 (controller layer, GET post detail): field optional rỗng bị lược khỏi metadata response, flag ON", async () => {
-  const { getPost } = await import("./post.controller.ts");
-
+test("FR-1 (controller layer, GET post detail): field optional rỗng bị lược khỏi metadata response", async () => {
   const restore = stubAggregate([emptyishPost()]);
   const res: any = fakeRes();
   try {
@@ -124,6 +108,5 @@ test("FR-1 (controller layer, GET post detail): field optional rỗng bị lư�
 });
 
 after(async () => {
-  const { closeFanoutQueues } = await import("../services/feed/queue.ts");
   await closeFanoutQueues();
 });

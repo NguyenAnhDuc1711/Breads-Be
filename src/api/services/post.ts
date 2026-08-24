@@ -10,7 +10,6 @@ import Post from "../models/post.model.js";
 import SavedPost from "../models/savedPost.model.js";
 import SurveyOption from "../models/surveyOption.model.js";
 import User from "../models/user.model.js";
-import { POST_CONFIG } from "./config.ts";
 import { getForYouFeed } from "./feed/index.ts";
 
 /** Danh sách followeeId của `viewerId`. Tách riêng để caller có thể fetch 1 lần rồi tái dùng
@@ -130,7 +129,7 @@ const isAdminViewer = async (viewerId: any): Promise<boolean> => {
 };
 
 /**
- * FR-1/FR-4 (task 010) — field required, KHÔNG bao giờ bị lược dù giá trị rỗng và dù flag bật.
+ * FR-1/FR-4 — field required, KHÔNG bao giờ bị lược dù giá trị rỗng.
  * Chốt ở PRD (`.ccpm/prds/lean-api-response.md` — Constraints, quyết định T1/001): chỉ `content`
  * và `media`. `survey`/`files` là optional (Mongoose `required: false`, không ràng buộc nghiệp vụ).
  */
@@ -148,25 +147,21 @@ const isEmptyValue = (value: any): boolean =>
     Object.keys(value).length === 0);
 
 /**
- * Lược field rỗng khỏi 1 post đã serialize xong (FR-1, FR-4).
+ * Lược field rỗng khỏi 1 post đã serialize xong (FR-1, FR-4). Luôn chạy vô điều kiện — không còn
+ * gate bằng feature flag (rollout flag `POST_RESPONSE_FIELD_FILTER_ENABLED`/T3-003 đã bị bỏ, xem
+ * PRD Constraints).
  *
- * - `__v` luôn bị xoá, KHÔNG qua flag (rủi ro bằng 0: field nội bộ của Mongoose, không consumer nào
- *   dùng).
- * - Field optional có giá trị rỗng (`[]`, `""`, `{}`) chỉ bị xoá khi flag ON.
+ * - `__v` luôn bị xoá (field nội bộ của Mongoose, không consumer nào dùng).
+ * - Field optional có giá trị rỗng (`[]`, `""`, `{}`) luôn bị xoá.
  * - Field trong `REQUIRED_POST_FIELDS` giữ nguyên vô điều kiện.
  * - Chỉ lọc ở TẦNG TRÊN CÙNG (không đệ quy vào `parentPostInfo`/`authorInfo`) — giữ đúng phạm vi
  *   anchor của task 010, tránh đổi shape của object lồng mà consumer chưa được audit.
- *
- * `filterEnabled` mặc định lấy từ flag (T3/003) nhưng nhận được tham số để test được cả 2 nhánh
- * mà không phải cache-bust module ESM.
  */
 export const stripEmptyOptionalFields = (
   post: Record<string, any>,
-  filterEnabled: boolean = POST_CONFIG.responseFieldFilterEnabled,
 ): Record<string, any> => {
   const result = { ...post };
   delete result.__v;
-  if (!filterEnabled) return result;
   for (const key of Object.keys(result)) {
     if (REQUIRED_POST_FIELDS.has(key)) continue;
     if (isEmptyValue(result[key])) delete result[key];

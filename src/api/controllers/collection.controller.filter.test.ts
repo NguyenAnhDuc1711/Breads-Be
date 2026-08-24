@@ -10,15 +10,12 @@
 // sinh id NGẪU NHIÊN -> endpoint LUÔN trả mảng toàn `null`, bug tiền hữu. Đã sửa call site thành
 // `getPostDetail({ postId: id })`; test dưới đây vừa là bằng chứng FR-6 vừa là regression cho bug đó.
 //
-// Env phải set TRƯỚC mọi import chạm `services/config.ts` (qua controller -> `post.ts`) — xem
-// comment dài ở `post.controller.dispatch.enabled-false.test.ts`, cùng pattern.
-process.env.POST_RESPONSE_FIELD_FILTER_ENABLED = "true";
-
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import Post from "../models/post.model.ts";
 import SavedPost from "../models/savedPost.model.ts";
+import { removePostFromCollection } from "./collection.controller.ts";
 
 const POST_ID = "652f1b2c3d4e5f6071829304";
 const AUTHOR_ID = "652f1b2c3d4e5f6071829305";
@@ -82,11 +79,7 @@ const fakeRes = () => ({
   },
 });
 
-test("FR-6 (ARCH-1): response endpoint collection cũng đi qua bước lọc field rỗng khi flag ON", async () => {
-  const { POST_CONFIG } = await import("../services/config.ts");
-  assert.equal(POST_CONFIG.responseFieldFilterEnabled, true, "precondition: flag ON");
-  const { removePostFromCollection } = await import("./collection.controller.ts");
-
+test("FR-6 (ARCH-1): response endpoint collection cũng đi qua bước lọc field rỗng", async () => {
   const restore = stubModels();
   const res: any = fakeRes();
   try {
