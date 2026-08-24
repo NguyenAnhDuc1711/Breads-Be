@@ -2,6 +2,7 @@ import { Constants } from "../../Breads-Shared/Constants/index.js";
 import PageConstant from "../../Breads-Shared/Constants/PageConstants.js";
 import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
 import { destructObjectId, ObjectId } from "../../utils/index.js";
+import { stripEmptyOptionalFields as stripEmptyOptionalFieldsGeneric } from "../../utils/emptyFieldFilter.ts";
 import logger from "../../core/logger.js";
 import Category from "../models/category.model.js";
 import Follow from "../models/follow.model.js";
@@ -138,36 +139,18 @@ export const REQUIRED_POST_FIELDS: ReadonlySet<string> = new Set([
   "media",
 ]);
 
-const isEmptyValue = (value: any): boolean =>
-  (Array.isArray(value) && value.length === 0) ||
-  value === "" ||
-  (!!value &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === 0);
-
 /**
  * Lược field rỗng khỏi 1 post đã serialize xong (FR-1, FR-4). Luôn chạy vô điều kiện — không còn
  * gate bằng feature flag (rollout flag `POST_RESPONSE_FIELD_FILTER_ENABLED`/T3-003 đã bị bỏ, xem
- * PRD Constraints).
- *
- * - `__v` luôn bị xoá (field nội bộ của Mongoose, không consumer nào dùng).
- * - Field optional có giá trị rỗng (`[]`, `""`, `{}`) luôn bị xoá.
- * - Field trong `REQUIRED_POST_FIELDS` giữ nguyên vô điều kiện.
- * - Chỉ lọc ở TẦNG TRÊN CÙNG (không đệ quy vào `parentPostInfo`/`authorInfo`) — giữ đúng phạm vi
- *   anchor của task 010, tránh đổi shape của object lồng mà consumer chưa được audit.
+ * PRD Constraints). Logic chung (`isEmptyValue`, đệ quy 1 tầng) sống ở
+ * `../../utils/emptyFieldFilter.ts` — dùng chung với `user.ts` (mở rộng lean-api-response sang
+ * User) — hàm ở đây chỉ curry `REQUIRED_POST_FIELDS` vào, giữ nguyên chữ ký cũ (1 tham số) để
+ * không phá call site/test hiện có.
  */
 export const stripEmptyOptionalFields = (
   post: Record<string, any>,
-): Record<string, any> => {
-  const result = { ...post };
-  delete result.__v;
-  for (const key of Object.keys(result)) {
-    if (REQUIRED_POST_FIELDS.has(key)) continue;
-    if (isEmptyValue(result[key])) delete result[key];
-  }
-  return result;
-};
+): Record<string, any> =>
+  stripEmptyOptionalFieldsGeneric(post, REQUIRED_POST_FIELDS);
 
 export const getPostDetail = async ({
   postId = "",
