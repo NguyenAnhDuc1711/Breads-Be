@@ -1,11 +1,32 @@
 import { ObjectId, destructObjectId } from "../../utils/index.js";
+import { stripEmptyOptionalFields } from "../../utils/emptyFieldFilter.ts";
 import { genConversations, genMsgsInConversations } from "../crawl.js";
 import Conversation from "../models/conversation.model.js";
 import Link from "../models/link.model.js";
 import Message from "../models/message.model.js";
-import { getConversationInfo } from "../services/message.js";
+import {
+  getConversationInfo,
+  REQUIRED_MESSAGE_FIELDS,
+  REQUIRED_CONVERSATION_FIELDS,
+} from "../services/message.js";
 import { BadRequestError, NotFoundError } from "../../core/error.response.js";
 import { CREATED, OK } from "../../core/success.response.js";
+
+// getConversationFiles/getConversationLinks trả về document File/Link (không phải Message) —
+// required field theo đúng schema (`file.model.ts`, `link.model.ts`): mọi field khác optional
+// (description/image default "", targetId optional) hoặc chỉ có `__v` (File không field optional
+// nào khác) là "rỗng" theo nghĩa lean-api-response.
+const REQUIRED_FILE_FIELDS: ReadonlySet<string> = new Set([
+  "_id",
+  "name",
+  "url",
+  "contentType",
+]);
+const REQUIRED_LINK_FIELDS: ReadonlySet<string> = new Set([
+  "_id",
+  "url",
+  "title",
+]);
 
 export const getConversationByUsersId = async (req, res) => {
   const { userId, anotherId } = req.body;
@@ -30,12 +51,18 @@ export const getConversationByUsersId = async (req, res) => {
       ({ _id }) => destructObjectId(_id) !== userId
     );
     result.participant = participant[0];
-    result.lastMsg = result.lastMsgId;
+    result.lastMsg = result.lastMsgId
+      ? stripEmptyOptionalFields(result.lastMsgId, REQUIRED_MESSAGE_FIELDS)
+      : undefined;
     delete result.participants;
     delete result.lastMsgId;
+    const strippedResult = stripEmptyOptionalFields(
+      result,
+      REQUIRED_CONVERSATION_FIELDS
+    );
     new OK({
       message: "Conversation fetched successfully",
-      metadata: result,
+      metadata: strippedResult,
     }).send(res);
   } else {
     const newConversation = new Conversation({
@@ -143,7 +170,9 @@ export const getConversationFiles = async (req, res) => {
       },
     },
   ]);
-  const files = result?.data || [];
+  const files = (result?.data || []).map((file: any) =>
+    stripEmptyOptionalFields(file, REQUIRED_FILE_FIELDS)
+  );
   const total = result?.totalCount?.[0]?.count || 0;
   new OK({
     message: "Conversation files fetched successfully",
@@ -182,14 +211,19 @@ export const getConversationLinks = async (req, res) => {
   ]);
   const linkIds = (result?.linkIds || []).map((item) => item._id);
   const total = result?.totalCount?.[0]?.count || 0;
+  // .lean() -> plain object, cần thiết để stripEmptyOptionalFields spread đúng field (Mongoose
+  // Document không spread tin cậy qua {...doc}).
   const linksInfo = await Link.find({
     _id: {
       $in: linkIds,
     },
-  });
+  }).lean();
   // `Link.find` với `$in` không đảm bảo giữ đúng thứ tự đã phân trang -> sắp lại theo `linkIds`.
   const linksById = new Map(
-    linksInfo.map((link) => [String(link._id), link])
+    linksInfo.map((link: any) => [
+      String(link._id),
+      stripEmptyOptionalFields(link, REQUIRED_LINK_FIELDS),
+    ])
   );
   const orderedLinks = linkIds
     .map((id) => linksById.get(String(id)))
@@ -309,9 +343,13 @@ export const searchMsg = async (req, res) => {
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   });
 
+  const strippedResults = results.map((msg) =>
+    stripEmptyOptionalFields(msg, REQUIRED_MESSAGE_FIELDS)
+  );
+
   new OK({
     message: "Search messages fetched successfully",
-    metadata: results,
+    metadata: strippedResults,
   }).send(res);
 };
 

@@ -147,10 +147,9 @@ export const REQUIRED_POST_FIELDS: ReadonlySet<string> = new Set([
  * User) — hàm ở đây chỉ curry `REQUIRED_POST_FIELDS` vào, giữ nguyên chữ ký cũ (1 tham số) để
  * không phá call site/test hiện có.
  */
-export const stripEmptyOptionalFields = (
-  post: Record<string, any>,
-): Record<string, any> =>
-  stripEmptyOptionalFieldsGeneric(post, REQUIRED_POST_FIELDS);
+export const stripEmptyOptionalFields = <T extends Record<string, any>>(
+  post: T,
+): T => stripEmptyOptionalFieldsGeneric(post, REQUIRED_POST_FIELDS);
 
 export const getPostDetail = async ({
   postId = "",

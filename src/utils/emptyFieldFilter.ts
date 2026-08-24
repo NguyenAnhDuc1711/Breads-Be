@@ -19,16 +19,24 @@ export const isEmptyValue = (value: any): boolean =>
  * - Field khác có giá trị rỗng (`[]`, `""`, `{}`) bị xoá.
  * - Chỉ lọc TẦNG TRÊN CÙNG (không đệ quy vào object lồng) — giữ đúng phạm vi đã audit,
  *   tránh đổi shape object lồng mà consumer chưa được rà (bài học FAIL-1/plan-review, epic Post).
+ *
+ * Trả về `T` (không phải `Record<string, any>`): field bị xoá luôn là field OPTIONAL trong `T`
+ * (giá trị `undefined` vẫn hợp lệ với chính type đó), nên ép kiểu về `T` là đúng và giữ được
+ * type-check ở call site (vd. `const post: IPost | null = await getPostDetail(...)`) — trả
+ * `Record<string, any>` như bản gốc làm TS coi mọi field required cũng "có thể thiếu", xoá mất
+ * type-safety ở nơi gọi (phát hiện khi mở rộng sang User: `user.controller.ts` có annotation
+ * `IUser | null` bị lỗi type — hoá ra lỗi này ĐÃ CÓ SẴN từ `post.controller.ts:332` với `IPost`,
+ * chỉ là chưa ai để ý vì chưa có annotation tường minh nào khác dùng `getPostDetail` bị soi).
  */
 export const stripEmptyOptionalFields = <T extends Record<string, any>>(
   doc: T,
   requiredFields: ReadonlySet<string>,
-): Record<string, any> => {
-  const result = { ...doc };
-  delete (result as any).__v;
+): T => {
+  const result: Record<string, any> = { ...doc };
+  delete result.__v;
   for (const key of Object.keys(result)) {
     if (requiredFields.has(key)) continue;
     if (isEmptyValue(result[key])) delete result[key];
   }
-  return result;
+  return result as T;
 };

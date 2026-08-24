@@ -154,7 +154,7 @@ export default class PostController {
             },
             {
               hasNewNotify: true,
-            }
+            },
           );
         }
       }

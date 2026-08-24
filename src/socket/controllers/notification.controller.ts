@@ -12,7 +12,7 @@ export default class NotificationController {
       if (!authUserId || authUserId !== fromUser) {
         logger.warn(
           { socketId: socket.id, fromUser },
-          "notifications/create rejected: identity mismatch"
+          "notifications/create rejected: identity mismatch",
         );
         return;
       }
@@ -33,7 +33,7 @@ export default class NotificationController {
       });
       if (existingNotifications.length > 0) {
         const notificationIds = existingNotifications.map((notification) =>
-          ObjectId(notification._id)
+          ObjectId(notification._id),
         );
         await Notification.deleteMany({
           _id: { $in: notificationIds },
@@ -59,7 +59,7 @@ export default class NotificationController {
           // cùng khoảnh khắc — request đó đã emit rồi, request này rút lui, không phải lỗi thật.
           logger.warn(
             { fromUser, toUsers: sendTo, action, target },
-            "notifications/create duplicate skipped (race)"
+            "notifications/create duplicate skipped (race)",
           );
           return;
         }
@@ -132,18 +132,18 @@ export default class NotificationController {
       for (const id of socketIds) {
         io.to(id).emit(
           Route.NOTIFICATION + NOTIFICATION_PATH.GET_NEW,
-          notification?.[0]
+          notification?.[0],
         );
       }
 
       await User.updateMany(
         { _id: { $in: sendTo.map((u) => ObjectId(u)) } },
-        { hasNewNotify: true }
+        { hasNewNotify: true },
       );
     } catch (err) {
       logger.error(
         { err, socketId: socket?.id },
-        "NotificationController.create failed"
+        "NotificationController.create failed",
       );
     }
   };

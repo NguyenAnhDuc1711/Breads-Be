@@ -8,7 +8,6 @@ import {
   backfillFeedOnFollow,
   removeFeedOnUnfollow,
 } from "./feed/fanout.ts";
-import { USER_CONFIG } from "./userConfig.ts";
 
 // Field required — KHÔNG bao giờ bị lược dù giá trị rỗng (mở rộng lean-api-response sang User,
 // tương ứng REQUIRED_POST_FIELDS ở post.ts). `email`/`role` giữ nguyên vì mọi consumer hiện tại
@@ -100,9 +99,6 @@ export const getUserInfo = async (userId, { includeRelations = true } = {}) => {
       { postId: 1 }
     ).sort({ createdAt: -1 });
     user.collection = savedPosts.map(({ postId }) => postId);
-    if (!USER_CONFIG.responseFieldFilterEnabled) {
-      return user;
-    }
     return stripEmptyOptionalFields(user, REQUIRED_USER_FIELDS);
   } catch (err) {
     logger.error({ err }, "getUserInfo failed");
@@ -170,9 +166,12 @@ export const getUsersByPage = async ({ page, limit, agg }) => {
         $limit: Number(limit),
       },
     ]);
-    return data;
+    return data.map((item) =>
+      stripEmptyOptionalFields(item, REQUIRED_USER_FIELDS)
+    );
   } catch (err) {
     logger.error({ err }, "getUsersByPage failed");
     return [];
   }
 };
+

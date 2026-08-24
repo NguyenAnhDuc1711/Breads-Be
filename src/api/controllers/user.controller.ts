@@ -13,9 +13,14 @@ import { ObjectId } from "../../utils/index.js";
 import { crawlUser } from "../crawl.js";
 import Follow from "../models/follow.model.js";
 import Post from "../models/post.model.js";
-import SavedPost from "../models/savedPost.model.js";
 import User from "../models/user.model.js";
-import { getUserInfo, getUsersByPage, toggleFollow } from "../services/user.js";
+import {
+  getUserInfo,
+  getUsersByPage,
+  toggleFollow,
+  REQUIRED_USER_FIELDS,
+} from "../services/user.js";
+import { stripEmptyOptionalFields } from "../../utils/emptyFieldFilter.ts";
 import { sendMailService } from "../services/util.js";
 import generateTokens, {
   clearRefreshTokenCookie,
@@ -46,19 +51,15 @@ export const getAdminAccount = async (req, res) => {
       metadata: result,
     }).send(res);
   }
-  const savedPosts = await SavedPost.find(
-    { userId: adminAccount._id },
-    { postId: 1 },
-  ).sort({ createdAt: -1 });
-  adminAccount.collection = {
-    userId: adminAccount._id,
-    postsId: savedPosts.map(({ postId }) => postId),
-  };
+  // Dùng getUserInfo() để response đi qua cùng serialize pipeline (stripEmptyOptionalFields)
+  // như login/getMe/getUserProfile — tránh bypass lean-api-response.
+  const result = await getUserInfo(adminAccount._id);
   new OK({
     message: "Admin account fetched successfully",
-    metadata: adminAccount,
+    metadata: result,
   }).send(res);
 };
+
 
 //sign up
 export const signupUser = async (req, res) => {
@@ -524,8 +525,13 @@ export const getUsersFollow = async (req, res) => {
       name: 1,
       bio: 1,
     },
+  ).lean();
+  const usersById = new Map(
+    users.map((u: any) => [
+      String(u._id),
+      stripEmptyOptionalFields(u, REQUIRED_USER_FIELDS),
+    ]),
   );
-  const usersById = new Map(users.map((u) => [String(u._id), u]));
   const orderedUsers = ids
     .map((id) => usersById.get(String(id)))
     .filter(Boolean);
@@ -645,10 +651,14 @@ export const getUsersPendingPost = async (req, res) => {
     },
   )
     .skip(skip)
-    .limit(limit);
+    .limit(limit)
+    .lean();
+  const strippedUsers = users.map((u: any) =>
+    stripEmptyOptionalFields(u, REQUIRED_USER_FIELDS),
+  );
   new OK({
     message: "Get users pending post successfully",
-    metadata: users,
+    metadata: strippedUsers,
   }).send(res);
 };
 

@@ -1,6 +1,21 @@
 import Conversation from "../models/conversation.model.js";
 import { ObjectId, destructObjectId } from "../../utils/index.js";
+import { stripEmptyOptionalFields } from "../../utils/emptyFieldFilter.ts";
 import logger from "../../core/logger.js";
+
+export const REQUIRED_MESSAGE_FIELDS: ReadonlySet<string> = new Set([
+  "_id",
+  "conversationId",
+  "sender",
+  "createdAt",
+]);
+
+export const REQUIRED_CONVERSATION_FIELDS: ReadonlySet<string> = new Set([
+  "_id",
+  "participant",
+  "createdAt",
+  "updatedAt",
+]);
 
 export const getConversationInfo = async ({ conversationId, userId }) => {
   try {
@@ -22,10 +37,12 @@ export const getConversationInfo = async ({ conversationId, userId }) => {
         ({ _id }) => destructObjectId(_id) !== userId
       );
       result.participant = participant[0];
-      result.lastMsg = result.lastMsgId;
+      result.lastMsg = result.lastMsgId
+        ? stripEmptyOptionalFields(result.lastMsgId, REQUIRED_MESSAGE_FIELDS)
+        : undefined;
       delete result.participants;
       delete result.lastMsgId;
-      return result;
+      return stripEmptyOptionalFields(result, REQUIRED_CONVERSATION_FIELDS);
     }
     return null;
   } catch (err) {
@@ -33,3 +50,4 @@ export const getConversationInfo = async ({ conversationId, userId }) => {
     throw new Error(err);
   }
 };
+

@@ -5,7 +5,11 @@ import Conversation from "../../api/models/conversation.model.js";
 import Link from "../../api/models/link.model.js";
 import Message from "../../api/models/message.model.js";
 import User from "../../api/models/user.model.js";
-import { getConversationInfo } from "../../api/services/message.js";
+import {
+  getConversationInfo,
+  REQUIRED_MESSAGE_FIELDS,
+} from "../../api/services/message.js";
+import { stripEmptyOptionalFields } from "../../utils/emptyFieldFilter.ts";
 import { uploadFileFromBase64 } from "../../api/utils/index.js";
 import { MESSAGE_PATH, Route } from "../../Breads-Shared/APIConfig.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
@@ -308,18 +312,30 @@ export default class MessageController {
 
       await Message.insertMany(listMsg, { ordered: false });
 
-      const newMessages = await Message.find({
-        _id: { $in: listMsgId },
-      })
-        .populate({
-          path: "file",
+      // lean-api-response: điểm real-time gửi tin nhắn tần suất cao nhất trong Message — mỗi lần
+      // gửi tin đều emit qua đây (cả sang recipient lẫn ack lại sender, dòng ~360/393 bên dưới).
+      // Không thêm `.lean()` vào chain (phá stub 3-tầng `.populate()` trong test hiện có) — dùng
+      // `.toObject()` sau khi fetch xong thay thế, an toàn với cả Document thật lẫn plain object
+      // (mock trong test không có `.toObject`, fallback giữ nguyên).
+      const newMessages = (
+        await Message.find({
+          _id: { $in: listMsgId },
         })
-        .populate({
-          path: "links",
-        })
-        .populate({
-          path: "respondTo",
-        });
+          .populate({
+            path: "file",
+          })
+          .populate({
+            path: "links",
+          })
+          .populate({
+            path: "respondTo",
+          })
+      ).map((msg: any) =>
+        stripEmptyOptionalFields(
+          typeof msg?.toObject === "function" ? msg.toObject() : msg,
+          REQUIRED_MESSAGE_FIELDS,
+        ),
+      );
 
       const conversationInfo = await getConversationInfo({
         conversationId: conversation._id,
@@ -492,7 +508,13 @@ export default class MessageController {
         delete conversation.otherParticipant;
         delete conversation.lastMsgId;
         if (conversation?.lastMsg) {
-          conversation.lastMsg = conversation.lastMsg[0];
+          // lean-api-response: lastMsg là full Message document (media/files/links/reacts/
+          // usersSeen thường rỗng ở tin nhắn text) — đây là điểm build response tần suất cao
+          // nhất của Message (mỗi lần mở app), nên lọc field rỗng ở đây.
+          conversation.lastMsg = stripEmptyOptionalFields(
+            conversation.lastMsg[0],
+            REQUIRED_MESSAGE_FIELDS,
+          );
         }
         return conversation;
       });

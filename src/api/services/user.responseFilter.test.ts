@@ -51,3 +51,32 @@ test("stripEmptyOptionalFields(user): giữ nguyên field không rỗng", () => 
   assert.deepEqual(result.followed, ["u2"]);
   assert.deepEqual(result.collection, ["p1"]);
 });
+
+test("stripEmptyOptionalFields(user): mảng rỗng trong getUsersByPage kết quả được lược đúng", () => {
+  const users = [
+    {
+      _id: "u1",
+      avatar: "a1",
+      username: "user1",
+      name: "User One",
+      bio: "",
+      followed: [],
+      status: 1,
+    },
+    {
+      _id: "u2",
+      avatar: "a2",
+      username: "user2",
+      name: "User Two",
+      bio: "hello",
+      followed: ["u1"],
+      status: 1,
+    },
+  ];
+  const result = users.map((u) => stripEmptyOptionalFields(u, REQUIRED_USER_FIELDS));
+  assert.equal(result[0].followed, undefined);
+  assert.equal(result[0].bio, ""); // required field
+  assert.deepEqual(result[1].followed, ["u1"]);
+  assert.equal(result[1].bio, "hello");
+});
+

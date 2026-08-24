@@ -69,9 +69,13 @@ export const getNotifications = async (req, res) => {
       },
     },
     {
+      // lean-api-response: `toUsers` KHÔNG được project — viewer đã tự biết mình nằm trong danh
+      // sách này (đó là lý do họ nhận được notification), gửi lại toàn bộ mảng người nhận là thừa
+      // với MỌI notification (khác field optional "thỉnh thoảng rỗng" của Post/User — đây là field
+      // luôn có mặt nhưng luôn vô nghĩa với viewer, notification broadcast có thể khiến mảng này
+      // lớn). FE không có consumer nào đọc `.toUsers` từ response GET (đã audit).
       $project: {
         fromUser: 1,
-        toUsers: 1,
         action: 1,
         target: 1,
         // ARCH-1: aggregate đọc thẳng từ MongoDB, BỎ QUA schema/default của Mongoose. Projection
@@ -112,7 +116,7 @@ export const readNotifications = async (req, res) => {
   if (notificationId) {
     const result = await Notification.updateOne(
       { _id: ObjectId(notificationId), toUsers: { $in: [uid] } },
-      { isRead: true }
+      { isRead: true },
     );
     if (result.matchedCount === 0) {
       throw new NotFoundError("Notification not found");
@@ -120,7 +124,7 @@ export const readNotifications = async (req, res) => {
   } else {
     await Notification.updateMany(
       { toUsers: { $in: [uid] }, isRead: { $ne: true } }, // ⚠️ $ne: true — ARCH-1
-      { isRead: true }
+      { isRead: true },
     );
   }
 

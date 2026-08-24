@@ -361,6 +361,25 @@ test("FR-1: query kèm userId của Y -> $match.toUsers là ObjectId(X), 0 lần
   );
 });
 
+test("lean-api-response: $project KHÔNG include toUsers — viewer không cần thấy ai khác cũng nhận", async () => {
+  await postGet(
+    {
+      userId: USER_X,
+      cookie: `jwt=${tokenFor(USER_X)}`,
+      query: { page: "1", limit: "10" },
+    },
+    async ({ res, agg }) => {
+      assert.equal(res.status, 200);
+      const project = stageOf(agg.pipelines[0], "$project");
+      assert.equal(
+        Object.prototype.hasOwnProperty.call(project, "toUsers"),
+        false,
+        "$project không được có key toUsers"
+      );
+    }
+  );
+});
+
 /* -------------------------------------------------- FR-6: filter theo action (SC-14) */
 
 test("FR-6: action='like' -> $match có action và đứng trước $skip", async () => {
