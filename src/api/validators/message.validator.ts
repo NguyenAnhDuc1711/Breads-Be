@@ -20,22 +20,30 @@ export const getConversationByIdQuerySchema = {
   }),
 };
 
+const paginationQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).optional(),
+});
+
 export const getConversationMediaSchema = {
   params: z.object({
     conversationId: objectIdSchema,
   }),
+  query: paginationQuerySchema,
 };
 
 export const getConversationFilesSchema = {
   params: z.object({
     conversationId: objectIdSchema,
   }),
+  query: paginationQuerySchema,
 };
 
 export const getConversationLinksSchema = {
   params: z.object({
     conversationId: objectIdSchema,
   }),
+  query: paginationQuerySchema,
 };
 
 // `page`/`limit` tới từ JSON body (không phải query string) -> `z.number()`, KHÔNG

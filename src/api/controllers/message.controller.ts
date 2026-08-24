@@ -70,21 +70,35 @@ export const getConversationMedia = async (req, res) => {
   if (!conversationId) {
     throw new BadRequestError("Empty conversationId");
   }
-  const msgs = await Message.find({
-    conversationId: ObjectId(conversationId),
-    media: {
-      $gt: {
-        $size: 0,
+  const limit = Math.min(Number(req.query.limit) || 20, 50);
+  const page = Math.max(Number(req.query.page) || 1, 1);
+  const skip = (page - 1) * limit;
+
+  const [result] = await Message.aggregate([
+    {
+      $match: {
+        conversationId: ObjectId(conversationId),
+        "media.0": { $exists: true },
       },
     },
-  });
-  const media = [];
-  msgs?.forEach((msg) => {
-    media.push(...msg?.media);
-  });
+    { $sort: { createdAt: -1 } },
+    { $unwind: "$media" },
+    {
+      $facet: {
+        data: [
+          { $skip: skip },
+          { $limit: limit },
+          { $replaceRoot: { newRoot: "$media" } },
+        ],
+        totalCount: [{ $count: "count" }],
+      },
+    },
+  ]);
+  const media = result?.data || [];
+  const total = result?.totalCount?.[0]?.count || 0;
   new OK({
     message: "Conversation media fetched successfully",
-    metadata: media,
+    metadata: { data: media, total, page, limit },
   }).send(res);
 };
 
@@ -93,7 +107,11 @@ export const getConversationFiles = async (req, res) => {
   if (!conversationId) {
     throw new BadRequestError("Empty conversationId");
   }
-  const msgs = await Message.aggregate([
+  const limit = Math.min(Number(req.query.limit) || 20, 50);
+  const page = Math.max(Number(req.query.page) || 1, 1);
+  const skip = (page - 1) * limit;
+
+  const [result] = await Message.aggregate([
     {
       $match: {
         conversationId: ObjectId(conversationId),
@@ -102,6 +120,7 @@ export const getConversationFiles = async (req, res) => {
         },
       },
     },
+    { $sort: { createdAt: -1 } },
     {
       $lookup: {
         from: "files",
@@ -114,15 +133,21 @@ export const getConversationFiles = async (req, res) => {
       $unwind: "$fileInfo",
     },
     {
-      $project: {
-        fileInfo: 1,
+      $facet: {
+        data: [
+          { $skip: skip },
+          { $limit: limit },
+          { $replaceRoot: { newRoot: "$fileInfo" } },
+        ],
+        totalCount: [{ $count: "count" }],
       },
     },
   ]);
-  const files = msgs?.map((msg) => msg?.fileInfo);
+  const files = result?.data || [];
+  const total = result?.totalCount?.[0]?.count || 0;
   new OK({
     message: "Conversation files fetched successfully",
-    metadata: files,
+    metadata: { data: files, total, page, limit },
   }).send(res);
 };
 
@@ -131,26 +156,47 @@ export const getConversationLinks = async (req, res) => {
   if (!conversationId) {
     throw new BadRequestError("Empty conversationId");
   }
-  const msgWithLinks = await Message.aggregate([
+  const limit = Math.min(Number(req.query.limit) || 20, 50);
+  const page = Math.max(Number(req.query.page) || 1, 1);
+  const skip = (page - 1) * limit;
+
+  const [result] = await Message.aggregate([
     {
       $match: {
         conversationId: ObjectId(conversationId),
         "links.0": { $exists: true },
       },
     },
+    { $sort: { createdAt: -1 } },
+    { $unwind: "$links" },
+    {
+      $facet: {
+        linkIds: [
+          { $skip: skip },
+          { $limit: limit },
+          { $project: { _id: "$links" } },
+        ],
+        totalCount: [{ $count: "count" }],
+      },
+    },
   ]);
-  const linksId = [];
-  msgWithLinks?.forEach((msg) => {
-    linksId.push(...msg?.links);
-  });
+  const linkIds = (result?.linkIds || []).map((item) => item._id);
+  const total = result?.totalCount?.[0]?.count || 0;
   const linksInfo = await Link.find({
     _id: {
-      $in: linksId,
+      $in: linkIds,
     },
   });
+  // `Link.find` với `$in` không đảm bảo giữ đúng thứ tự đã phân trang -> sắp lại theo `linkIds`.
+  const linksById = new Map(
+    linksInfo.map((link) => [String(link._id), link])
+  );
+  const orderedLinks = linkIds
+    .map((id) => linksById.get(String(id)))
+    .filter(Boolean);
   new OK({
     message: "Conversation links fetched successfully",
-    metadata: linksInfo,
+    metadata: { data: orderedLinks, total, page, limit },
   }).send(res);
 };
 
