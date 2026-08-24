@@ -1,4 +1,5 @@
 import { ObjectId } from "../../utils/index.js";
+import { stripEmptyOptionalFields } from "../../utils/emptyFieldFilter.ts";
 import logger from "../../core/logger.js";
 import Follow from "../models/follow.model.js";
 import SavedPost from "../models/savedPost.model.js";
@@ -7,6 +8,21 @@ import {
   backfillFeedOnFollow,
   removeFeedOnUnfollow,
 } from "./feed/fanout.ts";
+import { USER_CONFIG } from "./userConfig.ts";
+
+// Field required — KHÔNG bao giờ bị lược dù giá trị rỗng (mở rộng lean-api-response sang User,
+// tương ứng REQUIRED_POST_FIELDS ở post.ts). `email`/`role` giữ nguyên vì mọi consumer hiện tại
+// đều cần (câu hỏi "email có nên ẩn với người xem khác" là vấn đề PHÂN QUYỀN khác, ngoài scope
+// lean-api-response, không xử lý ở đây).
+export const REQUIRED_USER_FIELDS: ReadonlySet<string> = new Set([
+  "_id",
+  "name",
+  "username",
+  "avatar",
+  "bio",
+  "email",
+  "role",
+]);
 
 // Without a cap, `$lookup` buffers every matching `follows` doc in memory
 // before continuing the pipeline. Celebrity accounts (see
@@ -84,7 +100,10 @@ export const getUserInfo = async (userId, { includeRelations = true } = {}) => {
       { postId: 1 }
     ).sort({ createdAt: -1 });
     user.collection = savedPosts.map(({ postId }) => postId);
-    return user;
+    if (!USER_CONFIG.responseFieldFilterEnabled) {
+      return user;
+    }
+    return stripEmptyOptionalFields(user, REQUIRED_USER_FIELDS);
   } catch (err) {
     logger.error({ err }, "getUserInfo failed");
   }
