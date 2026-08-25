@@ -80,16 +80,31 @@ test("FR-1: 2 route dùng 2 limiter instance riêng -> đếm độc lập, khô
 
 /* ------------------------------------------------------------------------- cấu hình mặc định */
 
-test("FR-1: authTierLimiter export sẵn (singleton) đúng ngưỡng mặc định 5/phút", async () => {
+// (epic rate-limit-algorithms, task 020 — cutover) Test này TRƯỚC ĐÂY assert singleton
+// `authTierLimiter` chặn ở request thứ 6. Sau cutover, singleton đó đếm bằng Redis, nên ngưỡng
+// 5/phút của nó CHỈ đúng khi `initRedis()` đã chạy — file này cố ý KHÔNG mở Redis (xem comment
+// đầu file), nên ở đây nó fail-open theo đúng AD-3. Assertion ngưỡng 5/phút KHÔNG bị bỏ: nó được
+// chuyển sang `rateLimitRedisStore.test.ts` ("FR-6 (cutover): authTierLimiter (singleton thật)
+// chặn request thứ 6 bằng store Redis"), nơi đã có sẵn harness Redis thật + skip-gate.
+//
+// Giữ lại 1 assertion ở đây vì nó pin đúng tính chất AN TOÀN quan trọng nhất của AD-3, cái mà
+// file kia (chạy CÓ Redis) không thể chứng minh: Redis không khả dụng thì auth-tier CHO QUA chứ
+// không khoá sạch đăng nhập/đăng ký của mọi user (fail-open, không phải fail-closed).
+test("AD-3 (rate-limit-algorithms): authTierLimiter fail-open khi Redis chưa khởi tạo (không fail-closed)", async () => {
   const { authTierLimiter } = await import("./rateLimiter.ts");
   const app = express();
   app.get("/t", authTierLimiter, (_req, res) => res.json({ ok: true }));
 
   await withServer(app, async (base) => {
-    for (let i = 1; i <= 5; i++) {
-      assert.equal((await fetch(`${base}/t`)).status, 200, `request ${i}/5`);
+    // 6 request > max 5: nếu policy là fail-closed (hoặc store ném lỗi ra ngoài middleware) thì
+    // request thứ 6 (hoặc sớm hơn) sẽ không còn là 200.
+    for (let i = 1; i <= 6; i++) {
+      assert.equal(
+        (await fetch(`${base}/t`)).status,
+        200,
+        `request ${i}/6 phải qua — Redis không khả dụng thì fail-open`
+      );
     }
-    assert.equal((await fetch(`${base}/t`)).status, 429, "request thứ 6 phải bị chặn");
   });
 });
 
