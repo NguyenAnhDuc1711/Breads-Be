@@ -20,12 +20,13 @@ import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import { after, before, test } from "node:test";
 import express from "express";
+import { ipKeyGenerator } from "express-rate-limit";
 import type { ClientRateLimitInfo, Store } from "express-rate-limit";
 import Redis from "ioredis";
 import type { Redis as RedisType } from "ioredis";
 import logger from "../../core/logger.ts";
 import initRedis, { getRedisInstance } from "../../dbs/redis.ts";
-import { createRateLimiter } from "./rateLimiter.ts";
+import { authTierLimiter, createRateLimiter } from "./rateLimiter.ts";
 import {
   authRedisStore,
   createRedisSlidingWindowStore,
@@ -241,6 +242,45 @@ test("FR-2: authRedisStore gắn vào express-rate-limit trả 200 x5 rồi 429 
     });
   } finally {
     for (const key of seen) await httpStore.resetKey?.(key);
+  }
+});
+
+// Task 020 (cutover, Migration Plan bước 3 + bước 6 của 020.md): test trên chính SINGLETON
+// `authTierLimiter` mà 4 route thật đang mount — không phải 1 limiter dựng lại từ
+// `createRateLimiter` trong test (test FR-2 ngay trên đã lo phần đó). Đây là bằng chứng TỰ ĐỘNG
+// cho "gọi thử route auth-tier, 429 đúng sau 5 lần" của bước cutover, và là nơi duy nhất còn assert
+// ngưỡng 5/phút của singleton sau khi nó chuyển sang Redis-backed (trước cutover assertion này nằm
+// ở `rateLimiter.test.ts`, nay file đó không init Redis nên singleton fail-open ở đó — xem comment
+// tương ứng bên ấy).
+test("FR-6 (cutover): authTierLimiter (singleton thật) chặn request thứ 6 bằng store Redis", needsRedis, async () => {
+  const seen = new Set<string>();
+  const app = express();
+  app.get(
+    "/t",
+    // Ghi lại ĐÚNG key mà default keyGenerator của express-rate-limit sinh ra cho request này
+    // (`ipKeyGenerator(req.ip)`) để `finally` dọn được đúng key — singleton dùng key IP thật, không
+    // namespace hoá được như các test trên.
+    (req, _res, next) => {
+      seen.add(ipKeyGenerator(req.ip ?? ""));
+      next();
+    },
+    authTierLimiter,
+    (_req, res) => res.json({ ok: true })
+  );
+
+  try {
+    await withServer(app, async (baseUrl) => {
+      for (let i = 1; i <= MAX; i++) {
+        assert.equal((await fetch(`${baseUrl}/t`)).status, 200, `request ${i}/${MAX} phải qua`);
+      }
+      const sixth = await fetch(`${baseUrl}/t`);
+      assert.equal(sixth.status, 429, "request thứ 6 phải bị chặn bởi singleton Redis-backed");
+      assert.ok(sixth.headers.get("retry-after"), "429 phải kèm Retry-After");
+    });
+  } finally {
+    // Bắt buộc dọn: key này là IP loopback DÙNG CHUNG với mọi test file khác + với lần chạy
+    // `npm test` kế tiếp trong vòng 60s.
+    for (const key of seen) await authTierLimiter.resetKey(key);
   }
 });
 

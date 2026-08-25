@@ -1,12 +1,12 @@
-import type { NextFunction, Request, Response } from "express";
-import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import type { Request } from "express";
+import rateLimit from "express-rate-limit";
 import type { Store } from "express-rate-limit";
 import { authRedisStore } from "./rateLimitRedisStore.ts";
-import logger from "../../core/logger.ts";
 
-// FR-1 (security-hardening, task 012). AD-2 (epic.md): DATN-Be hiện chỉ chạy 1 instance -> dùng
-// thẳng in-memory store mặc định của express-rate-limit, KHÔNG cần Redis. Nếu sau này mở rộng
-// multi-instance, chuyển sang `rate-limit-redis` (Redis đã sẵn có qua `initRedis()` trong app.ts).
+// FR-1 (security-hardening, task 012). Store mặc định của `createRateLimiter` vẫn là in-memory của
+// `express-rate-limit` — `globalTierLimiter`/`mediaSignLimiter` dùng đúng store đó, KHÔNG đổi
+// (NFR-2, epic rate-limit-algorithms). RIÊNG `authTierLimiter` đã chuyển sang Redis-backed
+// (Sliding Window Log) từ task 020 — lý do chi tiết ở khối comment ngay trên `authTierLimiter`.
 //
 // KHÔNG bật `trust proxy` ở đây/app.ts: mặc định Express không tin `X-Forwarded-For`, nên
 // `req.ip` luôn là địa chỉ kết nối TCP thật, không thể giả mạo qua header. Nếu sau này deploy sau
@@ -40,67 +40,47 @@ export const createRateLimiter = ({
 const AUTH_TIER_WINDOW_MS = 60_000;
 const AUTH_TIER_MAX = 5;
 
-// Limiter THẬT — in-memory, chưa đổi (Migration Plan bước 1, epic rate-limit-algorithms/AD-5:
-// chưa cutover, đây vẫn là limiter DUY NHẤT quyết định response cho tới task 020).
-const authTierLimiterReal = createRateLimiter({
+// (epic rate-limit-algorithms, task 020 — Migration Plan bước 3 "cutover") `authTierLimiter` giờ
+// đếm bằng `authRedisStore` (Redis) thay vì Fixed Window in-memory. 3 câu hỏi "vì sao" cần trả lời
+// được mà KHÔNG phải tra PRD/epic/lịch sử commit:
+//
+// (i) VÌ SAO Sliding Window Log (ZSET lưu timestamp từng request), không phải Fixed Window cũ /
+//     Sliding Window Counter / Token Bucket: Fixed Window (mặc định của express-rate-limit) reset
+//     bộ đếm theo BIÊN cửa sổ, nên kẻ tấn công canh đúng biên gửi được 2*max = 10 lần thử mật khẩu
+//     trong ~1 giây mà vẫn "đúng luật" — đây là lỗ hổng epic này sinh ra để đóng. Sliding Window
+//     Counter chỉ NỘI SUY giữa 2 cửa sổ (vẫn còn sai số quanh biên) và ưu thế của nó là tiết kiệm
+//     bộ nhớ ở tải lớn — vô nghĩa khi `max = 5` (tối đa 5 phần tử/key). Token Bucket thì CỐ Ý cho
+//     phép burst (tiêu token dự trữ) — ngược hẳn mục tiêu chống brute-force. Sliding Window Log cho
+//     độ chính xác tuyệt đối với chi phí không đáng kể ở quy mô này, và là đúng mô hình mà
+//     `SocketRateLimiter` (`src/socket/middlewares/rateLimiter.ts`) đã chạy production, chỉ khác
+//     nơi lưu trạng thái.
+//
+// (ii) VÌ SAO fail-open (Redis lỗi -> CHO QUA) chứ không fail-closed: Redis ở đây là 1 instance
+//      đơn, KHÔNG có failover. Fail-closed sẽ biến mọi lần restart/hiccup Redis thành outage
+//      đăng nhập/đăng ký cho MỌI user — blast radius lớn hơn nhiều so với việc tạm mất 1 lớp
+//      rate-limit trong vài trăm ms. Route auth-tier vẫn còn các lớp không phụ thuộc Redis
+//      (bcrypt làm chậm từng lần thử mật khẩu, `globalTierLimiter` in-memory bên dưới). Chi tiết
+//      cơ chế + debounce 2-lỗi-liên-tiếp: xem `rateLimitRedisStore.ts`.
+//
+// (iii) VÌ SAO connection Redis khởi tạo LAZY (bên trong `increment()`, không ở module scope):
+//       `app.ts` import file này Ở ĐẦU file còn `initRedis()` chạy SAU — theo ngữ nghĩa ESM, module
+//       body này chạy xong TRƯỚC khi Redis kịp khởi tạo, nên `.duplicate()` ở module scope sẽ gọi
+//       trên `null` và crash app 100% lúc khởi động. Cùng lý do `socket.ts` gọi `.duplicate()` bên
+//       trong `initSocket()`.
+//
+// NFR-1 (ngân sách latency) — ĐÃ CHỐT bằng benchmark thực đo 2026-08-25
+// (`test/results/rate-limit-auth-benchmark-20260825T061411Z.json`, N=500): p95 Redis-backed 0.15ms
+// vs in-memory 0ms => delta p95 = 0.14ms, dưới ngân sách 20ms tới hơn 2 bậc độ lớn; tỷ lệ lỗi/
+// timeout Redis 0/500 = 0%. Vì vậy GIỮ NGUYÊN `commandTimeout = 100ms` và debounce = 2 lỗi liên
+// tiếp (`rateLimitRedisStore.ts`), không nới lỏng: biên độ hiện tại đủ rộng để 100ms chỉ chạm tới
+// khi Redis thật sự bất thường (~700x p95), còn 0% lỗi nghĩa là không có false-positive nào ép
+// phải tăng debounce lên 3. Lưu ý provenance: số đo LOCAL (Redis + Node cùng máy), chưa phải
+// staging/production — nếu sau này deploy sau network thật, đo lại trước khi siết `commandTimeout`.
+export const authTierLimiter = createRateLimiter({
   windowMs: AUTH_TIER_WINDOW_MS,
   max: AUTH_TIER_MAX,
+  store: authRedisStore,
 });
-
-// Shadow mode (epic rate-limit-algorithms, AD-5 + PRD Migration Plan bước 1 + FR-6): quan sát
-// `authRedisStore` (Sliding Window Log, task 001/002) SONG SONG với limiter in-memory thật, CHỈ để
-// log/so sánh cho task 010 (test)/011 (benchmark) — KHÔNG được ảnh hưởng response thật.
-//
-// Gọi thẳng `authRedisStore.increment()` thay vì bọc lại 1 `rateLimit()` middleware đầy đủ: middleware
-// đầy đủ của express-rate-limit tự ghi `RateLimit-*`/headers và `req.rateLimit` vào chính request/response
-// thật đang xử lý (xem node_modules/express-rate-limit/dist/index.mjs, hàm `middleware` — set header cả
-// khi KHÔNG bị chặn), nên không thể đảm bảo tuyệt đối "không đụng res" nếu dùng lại nguyên khối đó. Gọi
-// `.increment()` trực tiếp là cách duy nhất chứng minh được KHÔNG chạm `res`/`next`.
-//
-// Key dùng `ipKeyGenerator(req.ip)` — chính là logic mặc định mà `authTierLimiterReal` đang dùng (không
-// truyền `keyGenerator` riêng nên rơi vào default keyGenerator của express-rate-limit, cũng gọi
-// `ipKeyGenerator(request.ip)` nội bộ). Bắt buộc phải khớp key này để FR-6/AD-5 "shadow quan sát ĐÚNG
-// request mà limiter thật đang đếm" là đúng nghĩa, không phải 2 luồng đếm độc lập theo 2 key khác nhau.
-const observeAuthTierShadow = (req: Request): void => {
-  const key = ipKeyGenerator(req.ip ?? "");
-  const startedAt = performance.now();
-  // `Store.increment` khai báo trả `ClientRateLimitInfo | Promise<...>` (đồng bộ hoặc bất đồng bộ tuỳ
-  // implementation) — bọc `Promise.resolve` để luôn `.then/.catch` được, không phân biệt 2 trường hợp.
-  Promise.resolve(authRedisStore.increment(key))
-    .then((result) => {
-      const latencyMs = performance.now() - startedAt;
-      // Format greppable cho task 011 (benchmark): field cố định `shadow`, `wouldBlock`, `totalHits`,
-      // `latencyMs` — xem handoff task 003 để biết field nào KHÔNG được đổi tên.
-      logger.info(
-        {
-          shadow: "authTierLimiter",
-          wouldBlock: result.totalHits > AUTH_TIER_MAX,
-          totalHits: result.totalHits,
-          latencyMs: Math.round(latencyMs * 100) / 100,
-        },
-        "[rateLimiter] authTierLimiter shadow observation"
-      );
-    })
-    .catch((err) => {
-      // authRedisStore (task 002) đã tự fail-open + tự log warn/error cho lỗi Redis — nhánh catch này
-      // chỉ chặn unhandled rejection nếu có lỗi KHÁC xảy ra (vd chính logger.info ném lỗi), không phải
-      // đường đi thường gặp.
-      logger.warn(
-        { err },
-        "[rateLimiter] authTierLimiter shadow observation lỗi không mong đợi"
-      );
-    });
-};
-
-// authTierLimiter giờ là 1 wrapper mỏng: (a) bắn observation tới shadow store fire-and-forget (không
-// await, không đụng res/next của request thật), (b) delegate toàn quyền quyết định response cho
-// `authTierLimiterReal`. Đảm bảo FR-6 (Migration Plan bước 1): MỌI request auth-tier đều được cả 2
-// limiter nhìn thấy, nhưng response thật CHỈ do limiter in-memory quyết định — kể cả khi shadow store
-// báo "sẽ chặn" hoặc bản thân shadow lỗi.
-export const authTierLimiter = (req: Request, res: Response, next: NextFunction): void => {
-  observeAuthTierShadow(req);
-  authTierLimiterReal(req, res, next);
-};
 
 // Global-tier: toàn bộ /api còn lại. Route đã có authTierLimiter riêng vẫn nhận thêm global-tier
 // (2 lớp rate-limit độc lập, lớp nghiêm ngặt hơn trigger trước — không xung đột).
