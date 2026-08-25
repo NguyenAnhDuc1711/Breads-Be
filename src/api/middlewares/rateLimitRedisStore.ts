@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ClientRateLimitInfo, Store } from "express-rate-limit";
 import type { Redis } from "ioredis";
 import { getRedisInstance } from "../../dbs/redis.ts";
+import logger from "../../core/logger.ts";
 
 // AD-1 (epic rate-limit-algorithms): Sliding Window Log qua Redis ZSET — cùng mô hình mà
 // `SocketRateLimiter.check()` (`src/socket/middlewares/rateLimiter.ts`) đã chạy production, chỉ
@@ -114,3 +115,76 @@ export const createRedisSlidingWindowStore = ({
     await getDedicatedClient().del(`${KEY_PREFIX}${key}`);
   },
 });
+
+// AD-3 (epic rate-limit-algorithms): Fail-OPEN khi Redis không khả dụng, KHÔNG phải fail-closed.
+// Lý do (tóm tắt AD-3 — chi tiết xem epic.md): Redis hiện KHÔNG có failover (single instance) —
+// fail-closed sẽ biến MỌI lần Redis restart/hiccup thành 1 lần OUTAGE TOÀN BỘ đăng nhập/đăng ký cho
+// MỌI user thật, blast radius lớn hơn nhiều so với việc tạm thời thiếu 1 lớp rate-limit trong vài
+// trăm ms. Route auth-tier vẫn còn các lớp bảo vệ khác không phụ thuộc Redis (bcrypt hashing,
+// `globalTierLimiter` theo IP không đổi trong epic này).
+//
+// Debounce (NFR-1): chỉ coi Redis "down" (log `error`) sau >=2 lỗi LIÊN TIẾP — 1 lỗi thoáng qua vẫn
+// fail-open CHO LẦN GỌI ĐÓ nhưng KHÔNG đổi trạng thái toàn cục (log `warn`). Debounce này đặc biệt
+// quan trọng vì bản thân connection riêng (`getDedicatedClient`) CHẮC CHẮN lỗi đúng 1 lần ở lệnh đầu
+// tiên sau khi app boot (`.duplicate()` kế thừa `enableOfflineQueue: false`, lệnh đầu khi socket còn
+// ở status `connecting` reject ngay lập tức — xem skillbook SKL-005/handoff task 001). Nếu không có
+// debounce, MỌI lần app khởi động sẽ tự kích hoạt fail-open toàn cục dù Redis hoàn toàn khoẻ mạnh.
+// Vì vậy 1 lần THÀNH CÔNG PHẢI reset `consecutiveFailures` về 0 ngay lập tức — nhờ đó lỗi cold-start
+// bị cô lập thành 1 sự kiện đơn lẻ, không cộng dồn với 1 lỗi thật không liên quan xảy ra sau đó.
+//
+// State đếm lỗi liên tiếp là MODULE-LEVEL (không per-key, epic.md task T2 "Key risk"): "Redis không
+// khả dụng" là trạng thái HẠ TẦNG áp dụng chung cho mọi key, không phải trạng thái riêng từng user.
+let consecutiveFailures = 0;
+
+// totalHits trả về lúc fail-open KHÔNG được là 0: `express-rate-limit`'s `positiveHits` validation
+// (node_modules/express-rate-limit/dist/index.mjs, khoảng dòng 380-390, gọi tại dòng ~902) throw
+// `ValidationError` nếu `hits < 1` — trả 0 sẽ biến 1 lỗi Redis đã bắt gọn gàng thành 1 exception
+// KHÔNG bắt được, ném thẳng ra khỏi middleware (tệ hơn cả không có wrapper). Giá trị AN TOÀN nhỏ
+// nhất là 1: luôn nhỏ hơn `limit` (mọi route hiện tại có `max >= 5`) nên `totalHits > limit`
+// (dist/index.mjs:1006) không bao giờ đúng => không bao giờ block, đồng thời là số nguyên dương hợp
+// lệ nên qua được `positiveHits`.
+const FAIL_OPEN_TOTAL_HITS = 1;
+
+// `resetTime: undefined` (thay vì tự bịa 1 mốc thời gian) lúc fail-open là lựa chọn có chủ đích: đã
+// xác nhận trong code thật (dist/index.mjs:761-762) `standardHeaders: true` (cấu hình đang dùng ở
+// `rateLimiter.ts`) resolve thành draft-6, và `setDraft6Headers`/`getResetSeconds` xử lý
+// `resetTime` rỗng bằng cách tự fallback về `config.windowMs` của middleware (không throw, không
+// crash) — đây chính xác là giá trị đúng cần dùng khi Redis không khả dụng, không cần wrapper tự
+// tính lại `windowMs` (mà `withFailOpen` không có, đúng chữ ký `(store: Store): Store` của Interface
+// Contract). Chỉ draft-7/draft-8 mới throw khi thiếu `resetTime` — route auth-tier không dùng 2 draft
+// đó.
+export const withFailOpen = (originalStore: Store): Store => ({
+  ...originalStore,
+
+  increment: async (key: string): Promise<ClientRateLimitInfo> => {
+    try {
+      const result = await originalStore.increment(key);
+      consecutiveFailures = 0; // Reset ngay khi thành công — xem giải thích cold-start ở trên.
+      return result;
+    } catch (err) {
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= 2) {
+        logger.error(
+          { err, key, consecutiveFailures, limiter: "authTierLimiter" },
+          "[rateLimitRedisStore] Redis không khả dụng — fail-open (authTierLimiter tạm thời không rate-limit)"
+        );
+      } else {
+        logger.warn(
+          { err, key, consecutiveFailures, limiter: "authTierLimiter" },
+          "[rateLimitRedisStore] Redis lỗi 1 lần — chưa đủ debounce, vẫn fail-open cho request này"
+        );
+      }
+      return { totalHits: FAIL_OPEN_TOTAL_HITS, resetTime: undefined };
+    }
+  },
+
+  // `resetKey`/`decrement` KHÔNG fail-open: đây không phải luồng request thật (test/admin thao tác
+  // trực tiếp) — để lỗi lộ ra thay vì nuốt âm thầm, đúng Interface Contract của task này.
+  decrement: (key: string) => originalStore.decrement(key),
+  resetKey: (key: string) => originalStore.resetKey(key),
+});
+
+// Export cuối cùng — task 003 import thẳng vào `rateLimiter.ts` (Interface Contract).
+export const authRedisStore: Store = withFailOpen(
+  createRedisSlidingWindowStore({ windowMs: 60_000, max: 5 })
+);
