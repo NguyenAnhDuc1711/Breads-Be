@@ -27,6 +27,12 @@
 // vì socket còn ở trạng thái "connecting". Script này chạy 1 lệnh warm-up TRƯỚC vòng đo, loại nó
 // khỏi mọi percentile/tỷ lệ lỗi steady-state, và báo cáo riêng — KHÔNG để nó làm lệch số liệu.
 //
+// CẬP NHẬT SAU CUTOVER (task 020): các đoạn nói "shadow mode"/`observeAuthTierShadow()` ở trên mô
+// tả trạng thái lúc ĐO (task 011). Từ task 020, `authTierLimiter` đã cutover — `authRedisStore`
+// không còn là store quan sát song song mà là store THẬT đang chặn, và `observeAuthTierShadow()`
+// đã bị gỡ khỏi `rateLimiter.ts`. Script này vẫn chạy đúng và số liệu vẫn còn giá trị so sánh vì
+// nó gọi THẲNG `.increment()` trên 2 store (không qua middleware), không phụ thuộc mode nào.
+//
 // Provenance (đọc trước khi dùng số liệu này để chốt NFR-1/SC-5 — task 020): đây là số đo LOCAL,
 // 1 lần chạy, Redis + Node trên CÙNG máy (127.0.0.1, không qua mạng thật), chạy dồn dập (không trải
 // theo thời gian) — KHÔNG phải số đo trên staging/production traffic thật. Tỷ lệ lỗi 0% ở đây chỉ
