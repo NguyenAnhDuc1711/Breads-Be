@@ -1,5 +1,8 @@
-import type { Request } from "express";
-import rateLimit from "express-rate-limit";
+import type { NextFunction, Request, Response } from "express";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import type { Store } from "express-rate-limit";
+import { authRedisStore } from "./rateLimitRedisStore.ts";
+import logger from "../../core/logger.ts";
 
 // FR-1 (security-hardening, task 012). AD-2 (epic.md): DATN-Be hiện chỉ chạy 1 instance -> dùng
 // thẳng in-memory store mặc định của express-rate-limit, KHÔNG cần Redis. Nếu sau này mở rộng
@@ -14,11 +17,13 @@ export const createRateLimiter = ({
   max,
   message,
   skip,
+  store,
 }: {
   windowMs: number;
   max: number;
   message?: string;
   skip?: (req: Request) => boolean;
+  store?: Store; // task 003 (rate-limit-algorithms, AD-5): optional, không truyền => in-memory mặc định
 }) =>
   rateLimit({
     windowMs,
@@ -27,11 +32,75 @@ export const createRateLimiter = ({
     standardHeaders: true, // trả RateLimit-* header + Retry-After (IETF draft)
     legacyHeaders: false, // tắt X-RateLimit-* cũ, tránh trùng lặp
     ...(skip ? { skip } : {}),
+    ...(store ? { store } : {}),
   });
 
 // Auth-tier: SIGN_UP/LOGIN/forgot-password (util.route.ts) + CRAWL_POST/CRAWL_USER (AD-3 — 2 route
 // này thiếu auth guard, không loại trừ khỏi rate-limit, xem PRD C-4).
-export const authTierLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
+const AUTH_TIER_WINDOW_MS = 60_000;
+const AUTH_TIER_MAX = 5;
+
+// Limiter THẬT — in-memory, chưa đổi (Migration Plan bước 1, epic rate-limit-algorithms/AD-5:
+// chưa cutover, đây vẫn là limiter DUY NHẤT quyết định response cho tới task 020).
+const authTierLimiterReal = createRateLimiter({
+  windowMs: AUTH_TIER_WINDOW_MS,
+  max: AUTH_TIER_MAX,
+});
+
+// Shadow mode (epic rate-limit-algorithms, AD-5 + PRD Migration Plan bước 1 + FR-6): quan sát
+// `authRedisStore` (Sliding Window Log, task 001/002) SONG SONG với limiter in-memory thật, CHỈ để
+// log/so sánh cho task 010 (test)/011 (benchmark) — KHÔNG được ảnh hưởng response thật.
+//
+// Gọi thẳng `authRedisStore.increment()` thay vì bọc lại 1 `rateLimit()` middleware đầy đủ: middleware
+// đầy đủ của express-rate-limit tự ghi `RateLimit-*`/headers và `req.rateLimit` vào chính request/response
+// thật đang xử lý (xem node_modules/express-rate-limit/dist/index.mjs, hàm `middleware` — set header cả
+// khi KHÔNG bị chặn), nên không thể đảm bảo tuyệt đối "không đụng res" nếu dùng lại nguyên khối đó. Gọi
+// `.increment()` trực tiếp là cách duy nhất chứng minh được KHÔNG chạm `res`/`next`.
+//
+// Key dùng `ipKeyGenerator(req.ip)` — chính là logic mặc định mà `authTierLimiterReal` đang dùng (không
+// truyền `keyGenerator` riêng nên rơi vào default keyGenerator của express-rate-limit, cũng gọi
+// `ipKeyGenerator(request.ip)` nội bộ). Bắt buộc phải khớp key này để FR-6/AD-5 "shadow quan sát ĐÚNG
+// request mà limiter thật đang đếm" là đúng nghĩa, không phải 2 luồng đếm độc lập theo 2 key khác nhau.
+const observeAuthTierShadow = (req: Request): void => {
+  const key = ipKeyGenerator(req.ip ?? "");
+  const startedAt = performance.now();
+  // `Store.increment` khai báo trả `ClientRateLimitInfo | Promise<...>` (đồng bộ hoặc bất đồng bộ tuỳ
+  // implementation) — bọc `Promise.resolve` để luôn `.then/.catch` được, không phân biệt 2 trường hợp.
+  Promise.resolve(authRedisStore.increment(key))
+    .then((result) => {
+      const latencyMs = performance.now() - startedAt;
+      // Format greppable cho task 011 (benchmark): field cố định `shadow`, `wouldBlock`, `totalHits`,
+      // `latencyMs` — xem handoff task 003 để biết field nào KHÔNG được đổi tên.
+      logger.info(
+        {
+          shadow: "authTierLimiter",
+          wouldBlock: result.totalHits > AUTH_TIER_MAX,
+          totalHits: result.totalHits,
+          latencyMs: Math.round(latencyMs * 100) / 100,
+        },
+        "[rateLimiter] authTierLimiter shadow observation"
+      );
+    })
+    .catch((err) => {
+      // authRedisStore (task 002) đã tự fail-open + tự log warn/error cho lỗi Redis — nhánh catch này
+      // chỉ chặn unhandled rejection nếu có lỗi KHÁC xảy ra (vd chính logger.info ném lỗi), không phải
+      // đường đi thường gặp.
+      logger.warn(
+        { err },
+        "[rateLimiter] authTierLimiter shadow observation lỗi không mong đợi"
+      );
+    });
+};
+
+// authTierLimiter giờ là 1 wrapper mỏng: (a) bắn observation tới shadow store fire-and-forget (không
+// await, không đụng res/next của request thật), (b) delegate toàn quyền quyết định response cho
+// `authTierLimiterReal`. Đảm bảo FR-6 (Migration Plan bước 1): MỌI request auth-tier đều được cả 2
+// limiter nhìn thấy, nhưng response thật CHỈ do limiter in-memory quyết định — kể cả khi shadow store
+// báo "sẽ chặn" hoặc bản thân shadow lỗi.
+export const authTierLimiter = (req: Request, res: Response, next: NextFunction): void => {
+  observeAuthTierShadow(req);
+  authTierLimiterReal(req, res, next);
+};
 
 // Global-tier: toàn bộ /api còn lại. Route đã có authTierLimiter riêng vẫn nhận thêm global-tier
 // (2 lớp rate-limit độc lập, lớp nghiêm ngặt hơn trigger trước — không xung đột).
