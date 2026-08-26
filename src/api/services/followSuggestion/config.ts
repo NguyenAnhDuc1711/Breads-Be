@@ -34,6 +34,12 @@ export const FOLLOW_SUGGESTION_CONFIG = Object.freeze({
     1800,
     "FOLLOW_SUGGESTION_LOCK_TTL_SECONDS",
   ),
+  // Lịch chạy cron refresh (task 012) — mặc định mỗi 6 giờ (khoảng 6-12h theo 012.md). Không dùng
+  // helper `int`/`num` (giá trị là chuỗi cron expression, không phải số) — mirror cách
+  // `FEED_CONFIG.fanoutMode` (feed/config.ts) đọc env dạng chuỗi bằng fallback đơn giản, không
+  // thêm validator riêng (node-cron tự throw ở `cron.schedule()` nếu expression sai — fail-fast
+  // lúc khởi tạo thay vì âm thầm dùng default).
+  refreshCronSchedule: process.env.FOLLOW_SUGGESTION_REFRESH_CRON_SCHEDULE || "0 */6 * * *",
 });
 
 console.log("[follow-suggestion-config]", FOLLOW_SUGGESTION_CONFIG);
