@@ -1,4 +1,4 @@
-const num = (
+export const num = (
   raw: string | undefined,
   def: number,
   key: string,
@@ -15,7 +15,7 @@ const num = (
   return v;
 };
 
-const int = (raw: string | undefined, def: number, key: string): number =>
+export const int = (raw: string | undefined, def: number, key: string): number =>
   Math.trunc(num(raw, def, key, true));
 
 export const ratio = (
