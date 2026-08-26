@@ -12,10 +12,12 @@ import { deleteCache, getCache, setCache } from "../../dbs/redis.ts";
 import { ObjectId } from "../../utils/index.js";
 import { crawlUser } from "../crawl.js";
 import Follow from "../models/follow.model.js";
+import FollowSuggestion from "../models/followSuggestion.model.js";
 import Post from "../models/post.model.js";
 import SavedPost from "../models/savedPost.model.js";
 import User from "../models/user.model.js";
 import { getUserInfo, getUsersByPage, toggleFollow } from "../services/user.js";
+import { FOLLOW_SUGGESTION_CONFIG } from "../services/followSuggestion/config.ts";
 import { sendMailService } from "../services/util.js";
 import generateTokens, {
   clearRefreshTokenCookie,
@@ -400,6 +402,82 @@ export const getUserProfile = async (req, res) => {
   }).send(res);
 };
 
+// Task 011 (epic follow-suggestions): bound the fallback's full-collection scan. `score` below is
+// computed per-request (depends on the viewer's own `catesCare`), so it can't be indexed directly —
+// that was the root cause of the original unindexed-full-scan issue. `followersCount` is the
+// dominant, unbounded term in the formula (`*2`, vs. category overlap which is bounded by how many
+// categories a user actually has, `*5`), so pre-sort/limit on it — backed by the new
+// `{followersCount: -1}` index on `User` (see user.model.ts) — before computing the per-viewer score,
+// instead of scanning + in-memory-sorting the whole collection on every request.
+const FALLBACK_CANDIDATE_POOL_SIZE = 2000;
+
+const buildFollowSuggestionFallbackAgg = (
+  excludeIds: any[],
+  searchValue: any,
+  userCatesCare: any[],
+) => [
+  {
+    $match: {
+      ...(excludeIds.length ? { _id: { $nin: excludeIds } } : {}),
+      ...(searchValue ? { username: { $regex: searchValue, $options: "i" } } : {}),
+    },
+  },
+  { $sort: { followersCount: -1 } },
+  { $limit: FALLBACK_CANDIDATE_POOL_SIZE },
+  {
+    $addFields: {
+      matchedCategories: {
+        $filter: {
+          input: "$catesCare",
+          as: "category",
+          cond: { $in: ["$$category", userCatesCare] },
+        },
+      },
+    },
+  },
+  {
+    $addFields: {
+      score: {
+        $add: [
+          {
+            $multiply: [
+              { $size: { $ifNull: ["$matchedCategories", []] } },
+              5,
+            ],
+          },
+          { $multiply: [{ $ifNull: ["$followersCount", 0] }, 2] },
+        ],
+      },
+    },
+  },
+  {
+    $sort: { score: -1 },
+  },
+];
+
+// Task 011 (FR-3 fix): hydrate + paginate the cached `FollowSuggestion.candidates` list, applying
+// the SAME already-followed/self exclusion as the fallback branch (`excludeIds`). Candidates are
+// already sorted by score (task 001/`computeSuggestionsForUser`) — order is preserved through the
+// filter/slice/hydrate steps below.
+const buildFollowSuggestionCacheResponse = async (
+  candidates: any[],
+  excludeIds: any[],
+  page: any,
+  limit: any,
+) => {
+  const excludeSet = new Set(excludeIds.map((id) => String(id)));
+  const filtered = candidates.filter((c) => !excludeSet.has(String(c.userId)));
+  const skip = Number((page - 1) * limit);
+  const pageIds = filtered.slice(skip, skip + Number(limit)).map((c) => c.userId);
+  if (pageIds.length === 0) return [];
+  const users = await User.find(
+    { _id: { $in: pageIds } },
+    { _id: 1, avatar: 1, username: 1, name: 1, bio: 1, status: 1 },
+  ).lean();
+  const usersById = new Map(users.map((u: any) => [String(u._id), u]));
+  return pageIds.map((id) => usersById.get(String(id))).filter(Boolean);
+};
+
 export const getUserToFollows = async (req, res) => {
   const { userId, page, limit, searchValue } = req.query;
   const isTest = req.query?.isTest ?? false;
@@ -423,55 +501,46 @@ export const getUserToFollows = async (req, res) => {
 
   let invalidToFollow: any[] = [];
   let userCatesCare: any[] = [];
+  let followedIds: any[] = [];
 
   if (userId) {
     const userInfo = await User.findOne({ _id: ObjectId(userId) });
     userCatesCare = userInfo?.catesCare ?? [];
     invalidToFollow = [ObjectId(userId)];
+    // FR-3 fix: loại cả những user requester ĐÃ follow (bug cũ chỉ loại chính requester qua
+    // `invalidToFollow`) — `excludeIds` bên dưới áp dụng cho CẢ 2 nhánh (cache-hit và fallback).
+    followedIds = await Follow.find({ followerId: ObjectId(userId) }).distinct("followeeId");
+  }
+  const excludeIds = [...invalidToFollow, ...followedIds];
+
+  const runFallback = () =>
+    getUsersByPage({
+      page,
+      limit,
+      agg: buildFollowSuggestionFallbackAgg(excludeIds, searchValue, userCatesCare),
+    });
+
+  let data;
+  if (userId && FOLLOW_SUGGESTION_CONFIG.enabled) {
+    // AD-6 kill-switch already gates entry into this branch (see `else` below). Plan-review FAIL-2:
+    // BOTH an empty cache (`candidates.length === 0`) and a thrown read error route to the SAME
+    // fallback aggregation — not just the empty case.
+    try {
+      const cached = await FollowSuggestion.findOne({ userId: ObjectId(userId) }).lean();
+      if (cached?.candidates?.length) {
+        data = await buildFollowSuggestionCacheResponse(cached.candidates, excludeIds, page, limit);
+      } else {
+        data = await runFallback();
+      }
+    } catch (err) {
+      logger.error({ err }, "getUserToFollows: FollowSuggestion cache read failed, using fallback");
+      data = await runFallback();
+    }
+  } else {
+    // Either no `userId` (no per-user cache to read) or AD-6 kill-switch is off — always fallback.
+    data = await runFallback();
   }
 
-  const agg = [
-    {
-      $match: {
-        ...(invalidToFollow.length ? { _id: { $nin: invalidToFollow } } : {}),
-        ...(searchValue ? { username: { $regex: searchValue, $options: "i" } } : {}),
-      },
-    },
-    {
-      $addFields: {
-        matchedCategories: {
-          $filter: {
-            input: "$catesCare",
-            as: "category",
-            cond: { $in: ["$$category", userCatesCare] },
-          },
-        },
-      },
-    },
-    {
-      $addFields: {
-        score: {
-          $add: [
-            {
-              $multiply: [
-                { $size: { $ifNull: ["$matchedCategories", []] } },
-                5,
-              ],
-            },
-            { $multiply: [{ $ifNull: ["$followersCount", 0] }, 2] },
-          ],
-        },
-      },
-    },
-    {
-      $sort: { score: -1 },
-    },
-  ];
-  const data = await getUsersByPage({
-    page,
-    limit,
-    agg,
-  });
   new OK({
     message: "Get users to follow successfully",
     metadata: data,
