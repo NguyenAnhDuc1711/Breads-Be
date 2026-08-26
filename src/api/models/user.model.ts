@@ -97,6 +97,15 @@ userSchema.index({ status: 1, followersCount: 1 });
 // không sort-in-memory (đối chứng: post KHÔNG cần index mới vì hệ feed ranking đã có sẵn
 // `{engagementScore:-1,_id:-1}` đúng hình dạng cần, xem `post.model.ts`).
 userSchema.index({ status: 1, followersCount: -1, _id: -1 });
+// Task 011 (epic follow-suggestions): `getUserToFollows`' fallback aggregation
+// (`user.controller.ts`) sorts by a per-request computed `score` field that can't be indexed
+// directly (it depends on the viewer's own `catesCare`, recomputed on every request). This
+// standalone index backs the pipeline's `$sort: {followersCount: -1}` pre-stage — `followersCount`
+// is `score`'s dominant, unbounded term — so the fallback can bound its candidate pool via an
+// indexed sort instead of scanning + in-memory-sorting the whole collection (the original root
+// cause). Not covered by `{status:1, followersCount:-1, _id:-1}` above since that query has no
+// `status` filter.
+userSchema.index({ followersCount: -1 });
 
 const User = mongoose.model("User", userSchema);
 
