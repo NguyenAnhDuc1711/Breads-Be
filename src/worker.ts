@@ -7,6 +7,7 @@ import {
   initFollowSuggestionWorker,
   closeFollowSuggestionQueue,
 } from "./api/services/followSuggestion/queue.ts";
+import { initFollowSuggestionCron } from "./api/services/followSuggestion/cron.ts";
 import logger from "./core/logger.ts";
 
 instanceMongoDB.connect();
@@ -38,6 +39,20 @@ try {
   logger.error({ err }, "[follow-suggestion-queue] initFollowSuggestionWorker failed — suggestion worker disabled, process continues");
 }
 
+// [follow-suggestion-cron task 012] Cùng subsystem/cùng mức độ "phụ trợ" như worker phía trên —
+// đặt trong try/catch RIÊNG (không gộp) để lỗi lịch cron không kéo theo lỗi worker và ngược lại.
+// initFollowSuggestionCron() không có trong "files:" của task 012.md (chỉ scope cron.ts) nên chưa
+// từng được wire vào bootstrap nào — bổ sung ở đây, chỗ tự nhiên duy nhất (giống initFanoutWorkers/
+// initFollowSuggestionWorker phía trên), để cron thực sự chạy thay vì chỉ tồn tại dưới dạng hàm
+// export chưa ai gọi.
+let followSuggestionCronTask: ReturnType<typeof initFollowSuggestionCron> | undefined;
+try {
+  followSuggestionCronTask = initFollowSuggestionCron();
+  logger.info("[follow-suggestion-cron] cron scheduled");
+} catch (err) {
+  logger.error({ err }, "[follow-suggestion-cron] initFollowSuggestionCron failed — refresh cron disabled, process continues");
+}
+
 process.on("uncaughtException", (err) => {
   logger.fatal({ err }, "uncaughtException");
   process.exit(1);
@@ -61,6 +76,12 @@ const shutdown = (signal: string) => {
       await closeFanoutQueues();
     } catch (err) {
       logger.error({ err }, "Error closing fanout queues");
+    }
+
+    try {
+      followSuggestionCronTask?.stop();
+    } catch (err) {
+      logger.error({ err }, "Error stopping follow-suggestion cron");
     }
 
     try {
