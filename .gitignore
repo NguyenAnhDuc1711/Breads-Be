@@ -33,6 +33,10 @@ uploads/
 test/results/*
 !test/results/.gitkeep
 
+# follow-suggestions benchmark reports (generated per run, task 021)
+benchmark-results/*
+!benchmark-results/.gitkeep
+
 # k6 test credentials (contains real access tokens)
 test/.k6-creds.json
 
