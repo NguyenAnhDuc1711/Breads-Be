@@ -25,6 +25,7 @@ import {
   type ProcessBatchJobDeps,
 } from "../services/followSuggestion/queue.ts";
 import { FOLLOW_SUGGESTION_CONFIG } from "../services/followSuggestion/config.ts";
+import { LOCK_KEY } from "../services/followSuggestion/cron.ts";
 import initRedis, { getRedisInstance } from "../../dbs/redis.ts";
 
 dotenv.config();
@@ -111,13 +112,10 @@ export const runBackfill = async (
 };
 
 // ---- Lock (đồng bộ với task 012 cron, AD-7/NFR-2) -------------------------------------------
-// `cron.ts` (task 012, đang phát triển song song trong cùng repo) export `LOCK_KEY =
-// "follow-suggestion:refresh-lock"` với chú thích tường minh "dùng chung với backfill script (task
-// 020)". Script này CỐ Ý không import từ `cron.ts` (tránh phụ thuộc vào 1 file đang được sửa song
-// song bởi task khác) mà tự cài `SET NX EX` riêng, dùng ĐÚNG key string đó + cùng nguồn TTL
-// (`FOLLOW_SUGGESTION_CONFIG.lockTtlSeconds`) để 2 script loại lẫn nhau thật sự dù không chia sẻ
-// code — xem cảnh báo cho task 090 trong handoff.
-const LOCK_KEY = "follow-suggestion:refresh-lock";
+// `LOCK_KEY` import từ `cron.ts` (task 012) — sửa sau verify Phase A gap G-2: 2 script từng tự
+// khai báo cùng 1 string literal độc lập (đã verify khớp nhau lúc đó, nhưng dễ vỡ nếu sau này
+// sửa 1 bên mà quên bên kia). Cùng nguồn TTL (`FOLLOW_SUGGESTION_CONFIG.lockTtlSeconds`) để 2
+// script loại lẫn nhau thật sự.
 
 type LockHandle = { extend: () => Promise<void>; release: () => Promise<void> };
 
