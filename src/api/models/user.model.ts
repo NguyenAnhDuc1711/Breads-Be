@@ -86,6 +86,11 @@ const userSchema = new mongoose.Schema(
 );
 
 userSchema.index({ lastActiveAt: -1 });
+// Follow-suggestion cron (`followSuggestion/cron.ts`) phân trang theo keyset
+// `sort({lastActiveAt:-1, _id:-1})` để chỉ enqueue user active trong `activeWindowDays` gần nhất —
+// index đơn `{lastActiveAt:-1}` ở trên không đủ để tránh in-memory sort khi thêm `_id` làm
+// tie-breaker (cùng lý do đã ghi ở index `{status,followersCount:-1,_id:-1}` bên dưới).
+userSchema.index({ lastActiveAt: -1, _id: -1 });
 // ESR: phục vụ query lọc `status` (equality) trước range trên `followersCount` (vd. sitemap FR-3
 // `{status:ACTIVE, followersCount:$gte}`).
 userSchema.index({ status: 1, followersCount: 1 });

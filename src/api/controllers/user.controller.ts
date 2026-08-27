@@ -18,6 +18,7 @@ import SavedPost from "../models/savedPost.model.js";
 import User from "../models/user.model.js";
 import { getUserInfo, getUsersByPage, toggleFollow } from "../services/user.js";
 import { FOLLOW_SUGGESTION_CONFIG } from "../services/followSuggestion/config.ts";
+import { enqueueOnDemandSuggestion } from "../services/followSuggestion/queue.ts";
 import { sendMailService } from "../services/util.js";
 import generateTokens, {
   clearRefreshTokenCookie,
@@ -116,6 +117,11 @@ export const validateEmailByCode = async (req, res) => {
       if (newUser) {
         // generateTokenAndSetCookie(newUser._id, res);
         await deleteCache(keyCache);
+        // Chủ động tính suggestion ngay lúc đăng ký thay vì đợi cron sweep (tối đa 6h sau, và user
+        // mới chưa có `lastActiveAt` nên không lọt vào active-window filter của cron) — không
+        // `await`, không được làm chậm response tạo tài khoản. Hàm tự nuốt lỗi enqueue (xem
+        // `queue.ts`), không cần `.catch()` ở call-site.
+        enqueueOnDemandSuggestion(String(newUser._id));
         new CREATED({
           message: "Create new user successfully",
           metadata: {},
@@ -530,6 +536,13 @@ export const getUserToFollows = async (req, res) => {
       if (cached?.candidates?.length) {
         data = await buildFollowSuggestionCacheResponse(cached.candidates, excludeIds, page, limit);
       } else {
+        if (!cached) {
+          // Chưa từng có document (user mới lọt lưới hook signup, hoặc bị active-window filter
+          // của cron loại ra rồi active trở lại) — enqueue tính on-demand, không `await`. KHÔNG
+          // enqueue lại khi `cached` tồn tại nhưng `candidates` rỗng hợp lệ (đã tính, không có
+          // mutual friend nào) — tránh enqueue lặp lại mỗi request cho case đó.
+          enqueueOnDemandSuggestion(String(userId));
+        }
         data = await runFallback();
       }
     } catch (err) {
