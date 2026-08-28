@@ -5,7 +5,6 @@ import {
   changePassword,
   checkValidUser,
   followUser,
-  getAdminAccount,
   getMe,
   getUserIdFromEmail,
   getUserProfile,
@@ -63,7 +62,6 @@ router.use(mongoSanitize());
 router.use(hpp());
 const {
   ME,
-  ADMIN,
   PROFILE,
   USERS_TO_FOLLOW,
   SIGN_UP,
@@ -84,12 +82,11 @@ const {
   SITEMAP_ELIGIBLE,
 } = USER_PATH;
 
-// FR-2 (Task 010, D-1): GET literal 1-segment paths (/me, /admin, /follow-list, /with-status)
+// FR-2 (Task 010, D-1): GET literal 1-segment paths (/me, /follow-list, /with-status)
 // PHẢI đăng ký TRƯỚC PROFILE ("/:userId") — nếu không, "/:userId" sẽ nuốt các path literal đó
 // (Express match theo thứ tự đăng ký, cùng số segment). PROFILE đứng cuối nhóm GET một cách
 // CỐ Ý, không phải ngẫu nhiên.
 router.get(ME, protectRoute, asyncHandler(getMe));
-router.get(ADMIN, asyncHandler(getAdminAccount));
 router.get(
   USERS_FOLLOW,
   validate(getUsersFollowQuerySchema),

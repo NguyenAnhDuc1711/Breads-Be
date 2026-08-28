@@ -136,7 +136,6 @@ const parsedUserRoutes = parseUserRouter(
 
 const REQUESTS: Record<string, { query?: string; body?: unknown }> = {
   ME: {},
-  ADMIN: {},
   PROFILE: {},
   USERS_FOLLOW: { query: `?userId=${VALID_ID}&type=followed&page=1&limit=20` },
   USERS_TO_FOLLOW: { query: `?userId=${VALID_ID}&page=1&limit=10` },
@@ -192,9 +191,10 @@ const send = (base: string, route: ParsedRoute) =>
         }),
   });
 
-test("NFR-2 (SMOKE 20/20): mọi route user.route.ts hoạt động bình thường với TOÀN BỘ middleware Phase 2 (express.json+mongoSanitize+hpp+validate) cùng lúc", async () => {
-  // Task 003 (epic seo-sitemap-schema): 19 -> 20 route sau khi thêm SITEMAP_ELIGIBLE.
-  assert.equal(parsedUserRoutes.length, 20, "phải parse đủ 20 route");
+test("NFR-2 (SMOKE 19/19): mọi route user.route.ts hoạt động bình thường với TOÀN BỘ middleware Phase 2 (express.json+mongoSanitize+hpp+validate) cùng lúc", async () => {
+  // Task 003 (epic seo-sitemap-schema): 19 -> 20 route sau khi thêm SITEMAP_ELIGIBLE; sau đó
+  // security-hardening gỡ backdoor GET /admin (không xác thực) -> 20 -> 19.
+  assert.equal(parsedUserRoutes.length, 19, "phải parse đủ 19 route");
   const app = buildFullUserApp();
   const failures: string[] = [];
 
@@ -214,7 +214,7 @@ test("NFR-2 (SMOKE 20/20): mọi route user.route.ts hoạt động bình thư�
     })
   );
 
-  assert.deepEqual(failures, [], `20 route phải pass hết:\n${failures.join("\n")}`);
+  assert.deepEqual(failures, [], `19 route phải pass hết:\n${failures.join("\n")}`);
 });
 
 /* ============================================================================================

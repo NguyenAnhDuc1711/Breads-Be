@@ -442,10 +442,10 @@ test("getUsersPendingPostSchema: limit=1000 KHÔNG bị chặn (cap .max(50) c�
 });
 
 /* ---------------------------------------------------------------- tầng HTTP */
-// Lưu ý: `getAdminAccount` (User.findOne) và `handleCrawlFakeUsers` (crawlUser) đều chạm DB/mạng
-// thật ngay cả khi input hợp lệ (route không có schema nên validate() không chặn được gì trước đó)
-// — theo đúng rule ở đầu file, KHÔNG test 2 route này qua tầng HTTP; "không có validate() chen
-// vào" cho 2 route này được xác nhận qua code review + checklist `grep -c "validate("` thủ công.
+// Lưu ý: `handleCrawlFakeUsers` (crawlUser) chạm DB/mạng thật ngay cả khi input hợp lệ (route
+// không có schema nên validate() không chặn được gì trước đó) — theo đúng rule ở đầu file, KHÔNG
+// test route này qua tầng HTTP; "không có validate() chen vào" được xác nhận qua code review +
+// checklist `grep -c "validate("` thủ công.
 
 test("FR-4 (pagination cap, local): GET /users/follow-list?limit=1000 -> 400 (vượt cap .max(50))", async () => {
   await withServer(mountUserRouter(), async (base) => {
@@ -569,15 +569,15 @@ test("FR-4 (getUserIdFromEmail): thiếu userEmail -> 400 trước khi controlle
 // Task 010 — bảng redesign 19 endpoint (epic restful-api-redesign, D-1)
 // ================================================================
 //
-// Route như ADMIN/CRAWL_USER/REFRESH_TOKEN chạm DB/mạng thật ngay cả với input hợp lệ và không có
+// Route như CRAWL_USER/REFRESH_TOKEN chạm DB/mạng thật ngay cả với input hợp lệ và không có
 // validate() chặn trước (đúng rule ở đầu file — KHÔNG test qua tầng HTTP round-trip). "Happy-path
-// qua route/method mới" cho ĐỦ 20 endpoint (19 gốc + `SITEMAP_ELIGIBLE` task 003) được đảm bảo ở
-// đây bằng cách đọc trực tiếp `userRouter.stack` (router THẬT, KHÔNG parse lại source) và so khớp
-// 1-1 (method, path) với đúng thứ tự đăng ký — thứ tự QUAN TRỌNG vì PROFILE ("/:userId") và UPDATE
-// ("/:id") là catch-all 1-segment, phải đứng SAU các path literal cùng số segment (/me, /admin,
-// /follow-list, /with-status, /sitemap-eligible, /follow) để không "nuốt" chúng (xem comment trong
-// user.route.ts).
-test("FR-2 (D-1): user.route.ts wiring khớp đúng 20 (method, path) mới, đúng thứ tự chống shadow route động", () => {
+// qua route/method mới" cho ĐỦ 19 endpoint (18 gốc + `SITEMAP_ELIGIBLE` task 003, sau khi bỏ route
+// backdoor GET /admin không xác thực — security-hardening) được đảm bảo ở đây bằng cách đọc trực
+// tiếp `userRouter.stack` (router THẬT, KHÔNG parse lại source) và so khớp 1-1 (method, path) với
+// đúng thứ tự đăng ký — thứ tự QUAN TRỌNG vì PROFILE ("/:userId") và UPDATE ("/:id") là catch-all
+// 1-segment, phải đứng SAU các path literal cùng số segment (/me, /follow-list, /with-status,
+// /sitemap-eligible, /follow) để không "nuốt" chúng (xem comment trong user.route.ts).
+test("FR-2 (D-1): user.route.ts wiring khớp đúng 19 (method, path) mới, đúng thứ tự chống shadow route động", () => {
   const routes = userRouter.stack
     .filter((layer: any) => layer.route)
     .map((layer: any) => ({
@@ -587,7 +587,6 @@ test("FR-2 (D-1): user.route.ts wiring khớp đúng 20 (method, path) mới, đ
 
   const expected = [
     { method: "get", path: "/me" },
-    { method: "get", path: "/admin" },
     { method: "get", path: "/follow-list" },
     { method: "get", path: "/suggestions/to-follow" },
     { method: "get", path: "/suggestions/to-tag" },
@@ -608,11 +607,11 @@ test("FR-2 (D-1): user.route.ts wiring khớp đúng 20 (method, path) mới, đ
     { method: "post", path: "/email-validations" },
   ];
 
-  assert.equal(routes.length, 20, "phải có đúng 20 route đăng ký trên router");
+  assert.equal(routes.length, 19, "phải có đúng 19 route đăng ký trên router");
   assert.deepEqual(
     routes,
     expected,
-    "method+path (và thứ tự đăng ký) phải khớp đúng bảng redesign 010.md + SITEMAP_ELIGIBLE task 003"
+    "method+path (và thứ tự đăng ký) phải khớp đúng bảng redesign 010.md + SITEMAP_ELIGIBLE task 003, trừ backdoor GET /admin đã gỡ"
   );
 });
 

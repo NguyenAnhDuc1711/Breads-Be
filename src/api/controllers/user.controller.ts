@@ -14,7 +14,6 @@ import { crawlUser } from "../crawl.js";
 import Follow from "../models/follow.model.js";
 import FollowSuggestion from "../models/followSuggestion.model.js";
 import Post from "../models/post.model.js";
-import SavedPost from "../models/savedPost.model.js";
 import User from "../models/user.model.js";
 import { getUserInfo, getUsersByPage, toggleFollow } from "../services/user.js";
 import { FOLLOW_SUGGESTION_CONFIG } from "../services/followSuggestion/config.ts";
@@ -29,38 +28,6 @@ import TokenBlacklist from "../models/tokenBlacklist.model.js";
 import logger from "../../core/logger.js";
 import bcrypt from "bcryptjs";
 import { uploadFileFromBase64, validateEmailForm } from "../utils/index.js";
-
-export const getAdminAccount = async (req, res) => {
-  let adminAccount = await User.findOne({
-    role: Constants.USER_ROLE.ADMIN,
-  });
-  if (!adminAccount) {
-    const newAdmin = new User({
-      email: "admin@gmail.com",
-      name: "Admin",
-      username: "Admin",
-      password: "123456",
-      role: Constants.USER_ROLE.ADMIN,
-    });
-    const result = await newAdmin.save();
-    return new CREATED({
-      message: "Admin account created successfully",
-      metadata: result,
-    }).send(res);
-  }
-  const savedPosts = await SavedPost.find(
-    { userId: adminAccount._id },
-    { postId: 1 },
-  ).sort({ createdAt: -1 });
-  adminAccount.collection = {
-    userId: adminAccount._id,
-    postsId: savedPosts.map(({ postId }) => postId),
-  };
-  new OK({
-    message: "Admin account fetched successfully",
-    metadata: adminAccount,
-  }).send(res);
-};
 
 //sign up
 export const signupUser = async (req, res) => {
