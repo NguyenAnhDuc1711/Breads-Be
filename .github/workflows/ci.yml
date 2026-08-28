@@ -60,3 +60,20 @@ jobs:
             src/socket/controllers src/socket/services src/socket/middlewares src/socket/validators \
             -maxdepth 1 -name '*.test.ts' "${FIND_ARGS[@]}")
           npx tsx --test $FILES
+
+      # 22 pre-existing vulnerabilities (1 critical, 14 high, 6 moderate, 1 low) surfaced
+      # the first run — not a required check yet, same treatment as lint/type-check above.
+      - name: Dependency audit (non-blocking)
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+      # Filesystem scan (not the built image) — vuln covers npm deps, secret catches
+      # committed credentials, misconfig checks the Dockerfile. exit-code 0 keeps this
+      # non-blocking for the same reason as the steps above.
+      - name: Trivy scan (non-blocking)
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: "0"
