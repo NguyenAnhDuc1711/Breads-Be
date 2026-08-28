@@ -65,6 +65,37 @@ export const processBatchJob = async (
   }
 };
 
+/**
+ * Enqueue tính suggestion cho ĐÚNG 1 user, ngoài luồng sweep định kỳ của cron — dùng cho 2 trường
+ * hợp: (1) user hoàn toàn chưa có `FollowSuggestion` doc lúc đọc (`getUserToFollows` cache-miss),
+ * (2) ngay sau khi user đăng ký (`validateEmailByCode`). Không throw ra ngoài — caller gọi
+ * fire-and-forget (không `await` kết quả job), lỗi enqueue chỉ nên log chứ không được ảnh hưởng
+ * response đang trả cho request khác.
+ *
+ * `jobId` cố định theo `userId` để BullMQ tự dedup: nhiều request trùng thời điểm cho cùng 1 user
+ * chỉ tạo ra ĐÚNG 1 job đang chờ, không xếp hàng lặp lại vô ích.
+ *
+ * `priority: 1` (khác mặc định — job cron sweep không set priority) để job on-demand được xử lý
+ * TRƯỚC các job sweep hàng trăm-user đang xếp hàng, không bị chờ lâu phía sau hàng nghìn job cron.
+ */
+export const enqueueOnDemandSuggestion = async (userId: string): Promise<void> => {
+  if (!FOLLOW_SUGGESTION_CONFIG.enabled) return;
+  try {
+    await followSuggestionQueue.add(
+      "on-demand-user",
+      { userIds: [userId] },
+      {
+        jobId: `on-demand:${userId}`,
+        priority: 1,
+        removeOnComplete: true,
+        removeOnFail: true,
+      },
+    );
+  } catch (err) {
+    console.error("[follow-suggestion-queue] enqueueOnDemandSuggestion failed:", err);
+  }
+};
+
 export const registerFollowSuggestionWorker = (conn: Redis): Worker => {
   const worker = new Worker(
     "follow-suggestion",

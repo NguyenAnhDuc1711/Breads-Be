@@ -60,10 +60,19 @@ export type RunFollowSuggestionRefreshResult = {
   jobCount: number;
 };
 
+/** Cutoff active-window (mirror `feed/fanout.ts:activeCutoff`) — chỉ user hoạt động trong
+ * `activeWindowDays` ngày gần nhất mới được refresh mỗi lần cron chạy (tránh quét + tính lại
+ * suggestion cho toàn bộ user, phần lớn trong đó không mở app để xem). User chưa từng active
+ * (mới đăng ký, `lastActiveAt` chưa set) được xử lý riêng lúc signup, không qua đường cron này —
+ * xem `enqueueOnDemandSuggestion` (`queue.ts`). */
+const DAY_MS = 86400_000;
+const activeCutoff = (): Date =>
+  new Date(Date.now() - FOLLOW_SUGGESTION_CONFIG.activeWindowDays * DAY_MS);
+
 /**
- * 1 lần chạy refresh: acquire lock -> đọc user theo batch cursor `_id` (KHÔNG resume, cron chạy
- * lại toàn bộ mỗi lần theo đúng 012.md) -> enqueue mỗi batch thành 1 job vào `follow-suggestion`
- * queue (task 010).
+ * 1 lần chạy refresh: acquire lock -> đọc user theo batch keyset `(lastActiveAt, _id)` giảm dần,
+ * CHỈ user active trong `activeWindowDays` ngày gần nhất (KHÔNG resume, cron chạy lại toàn bộ tập
+ * active mỗi lần) -> enqueue mỗi batch thành 1 job vào `follow-suggestion` queue (task 010).
  *
  * Lock CỐ Ý KHÔNG được release tường minh ở cuối hàm (AD-7 trade-off): release ngay sau khi
  * enqueue xong chỉ mới là enqueue xong — worker (task 010) vẫn còn đang xử lý các job đó, nên
@@ -93,19 +102,31 @@ export const runFollowSuggestionRefresh = async (
   }
 
   let jobCount = 0;
-  let cursor: mongoose.Types.ObjectId | undefined;
+  const cutoff = activeCutoff();
+  // Keyset pagination trên `(lastActiveAt, _id)` — dùng "trang trước kết thúc ở đâu" (giá trị
+  // `lastActiveAt`/`_id` của bản ghi cuối) làm điều kiện cho trang sau, thay vì `.skip()`, để không
+  // bị lệch trang khi `lastActiveAt` của user thay đổi giữa lúc loop đang chạy.
+  let cursor: { lastActiveAt: Date; _id: mongoose.Types.ObjectId } | undefined;
   for (;;) {
-    const users = await User.find(cursor ? { _id: { $gt: cursor } } : {})
-      .sort({ _id: 1 })
+    const query: Record<string, unknown> = { lastActiveAt: { $gte: cutoff } };
+    if (cursor) {
+      query.$or = [
+        { lastActiveAt: { $lt: cursor.lastActiveAt } },
+        { lastActiveAt: cursor.lastActiveAt, _id: { $lt: cursor._id } },
+      ];
+    }
+    const users = await User.find(query)
+      .sort({ lastActiveAt: -1, _id: -1 })
       .limit(batchSize)
-      .select("_id")
+      .select("_id lastActiveAt")
       .lean();
     if (users.length === 0) break;
 
     const userIds = users.map((u: any) => String(u._id));
     await enqueue({ userIds });
     jobCount += 1;
-    cursor = users[users.length - 1]._id;
+    const last = users[users.length - 1];
+    cursor = { lastActiveAt: last.lastActiveAt, _id: last._id };
 
     if (users.length < batchSize) break;
   }

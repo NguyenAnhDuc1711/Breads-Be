@@ -133,11 +133,15 @@ test("runFollowSuggestionRefresh: enqueue đúng số batch job = ceil(tổng us
   const TOTAL_USERS = 7;
   const BATCH_SIZE = 3; // inject nhỏ để không cần seed 300+ user thật (ENQUEUE_BATCH_SIZE mặc định)
 
+  // `lastActiveAt` gần đây bắt buộc phải set — cron giờ chỉ quét user trong active-window
+  // (activeWindowDays), test này đo logic chia batch nên seed toàn bộ user active để không bị
+  // filter đó loại mất (xem test riêng bên dưới cho chính hành vi filter).
   const docs = Array.from({ length: TOTAL_USERS }, (_, i) => ({
     name: `User ${i}`,
     username: `cron_test_user_${i}_${Date.now()}`,
     email: `cron_test_user_${i}_${Date.now()}@example.com`,
     password: "password123",
+    lastActiveAt: new Date(),
   }));
   await User.insertMany(docs);
 
@@ -166,6 +170,51 @@ test("runFollowSuggestionRefresh: enqueue đúng số batch job = ceil(tổng us
     [...allUserIdsInDb].sort(),
     "mọi user trong DB đều được enqueue đúng 1 lần",
   );
+});
+
+// --- Test: active-window filter (rút gọn tệp user, tránh quét/tính lại suggestion cho user không
+// mở app) ------------------------------------------------------------------------------------------
+test("runFollowSuggestionRefresh: chỉ enqueue user active trong activeWindowDays gần nhất", async () => {
+  await User.deleteMany({});
+  const DAY_MS = 86_400_000;
+  const now = Date.now();
+  const suffix = Date.now();
+
+  const activeUser = await User.create({
+    name: "Active",
+    username: `cron_test_active_${suffix}`,
+    email: `cron_test_active_${suffix}@example.com`,
+    password: "password123",
+    lastActiveAt: new Date(now - 1 * DAY_MS), // 1 ngày trước — trong window 7 ngày
+  });
+  await User.create({
+    name: "Stale",
+    username: `cron_test_stale_${suffix}`,
+    email: `cron_test_stale_${suffix}@example.com`,
+    password: "password123",
+    lastActiveAt: new Date(now - 10 * DAY_MS), // 10 ngày trước — ngoài window
+  });
+  await User.create({
+    name: "NeverActive",
+    username: `cron_test_never_${suffix}`,
+    email: `cron_test_never_${suffix}@example.com`,
+    password: "password123",
+    // không set lastActiveAt — user mới, chưa từng qua protectRoute/socket connect.
+  });
+
+  const enqueuedBatches: string[][] = [];
+  const result = await runFollowSuggestionRefresh({
+    enqueue: async (data) => {
+      enqueuedBatches.push(data.userIds);
+    },
+  });
+
+  assert.deepEqual(
+    enqueuedBatches.flat(),
+    [String(activeUser._id)],
+    "chỉ user active trong 7 ngày gần nhất được enqueue, user stale/chưa từng active bị loại",
+  );
+  assert.equal(result.jobCount, 1);
 });
 
 test("runFollowSuggestionRefresh: 0 user -> acquired=true nhưng jobCount=0, không gọi enqueue", async () => {

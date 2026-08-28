@@ -1,6 +1,6 @@
 // Mirror `src/api/services/feed/config.ts` (task 001/AD-5, AD-6, AD-7 — epic follow-suggestions).
 // Dùng lại `int` từ feed/config.ts thay vì copy-paste helper (DRY, xem WARN-3 trong epic.md).
-import { int } from "../feed/config.ts";
+import { FEED_CONFIG, int } from "../feed/config.ts";
 
 export const FOLLOW_SUGGESTION_CONFIG = Object.freeze({
   // W1 (AD-5) — trọng số mutual-friend trong công thức score = W1*mutualFriendCount +
@@ -40,6 +40,12 @@ export const FOLLOW_SUGGESTION_CONFIG = Object.freeze({
   // thêm validator riêng (node-cron tự throw ở `cron.schedule()` nếu expression sai — fail-fast
   // lúc khởi tạo thay vì âm thầm dùng default).
   refreshCronSchedule: process.env.FOLLOW_SUGGESTION_REFRESH_CRON_SCHEDULE || "0 */6 * * *",
+  // Cron refresh (task 012) chỉ quét user active trong N ngày gần nhất, tái dùng ĐÚNG khái niệm
+  // "active" của fan-out feed (`FEED_CONFIG.activeWindowDays`) thay vì định nghĩa ngưỡng riêng —
+  // tránh 2 nguồn sự thật cho cùng 1 khái niệm. Backfill (task 020) KHÔNG dùng field này — backfill
+  // seed baseline 1 lần cho toàn bộ user (kể cả inactive), còn cron chỉ giữ suggestion tươi cho
+  // user đang hoạt động.
+  activeWindowDays: FEED_CONFIG.activeWindowDays,
 });
 
 console.log("[follow-suggestion-config]", FOLLOW_SUGGESTION_CONFIG);
