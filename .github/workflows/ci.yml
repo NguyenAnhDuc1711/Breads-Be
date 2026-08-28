@@ -71,7 +71,7 @@ jobs:
       # committed credentials, misconfig checks the Dockerfile. exit-code 0 keeps this
       # non-blocking for the same reason as the steps above.
       - name: Trivy scan (non-blocking)
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scanners: vuln,secret,misconfig
