@@ -257,8 +257,9 @@ export const updateUser = async (req, res) => {
 
   let user = await User.findById(userId);
   if (!user) throw new BadRequestError("User not found");
-  if (req.params.id !== userId.toString())
-    throw new BadRequestError("You can't update other user's profile!");
+  // Ownership/role check moved to requireSelfOrRole middleware (route-level) —
+  // the check that used to live here compared req.params.id against a value
+  // derived from itself and never actually blocked anything.
 
   // if (password) {
   //   const salt = await bcrypt.genSalt(10);

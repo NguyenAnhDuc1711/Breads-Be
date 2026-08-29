@@ -23,7 +23,9 @@ import {
   refreshTokenHandler,
 } from "../controllers/user.controller.js";
 import { USER_PATH } from "../../Breads-Shared/APIConfig.js";
+import { Constants } from "../../Breads-Shared/Constants/index.js";
 import protectRoute from "../middlewares/protectRoute.js";
+import { requireRole, requireSelfOrRole } from "../middlewares/requireRole.js";
 import asyncHandler from "../../helpers/asyncHandler.js";
 import { validate } from "../middlewares/validate.js";
 import { authTierLimiter } from "../middlewares/rateLimiter.js";
@@ -105,6 +107,8 @@ router.get(
 );
 router.get(
   GET_USERS_WITH_STATUS,
+  protectRoute,
+  requireRole(Constants.USER_ROLE.ADMIN),
   validate(getUsersWithStatusQuerySchema),
   asyncHandler(getUsersWithStatus),
 );
@@ -173,6 +177,7 @@ router.put(
   mongoSanitize(),
   hpp(),
   protectRoute,
+  requireSelfOrRole(Constants.USER_ROLE.ADMIN),
   validate(updateUserSchema),
   asyncHandler(updateUser),
 );

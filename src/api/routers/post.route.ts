@@ -2,6 +2,7 @@ import express from "express";
 import mongoSanitize from "express-mongo-sanitize";
 import hpp from "hpp";
 import { POST_PATH } from "../../Breads-Shared/APIConfig.js";
+import { Constants } from "../../Breads-Shared/Constants/index.js";
 import asyncHandler from "../../helpers/asyncHandler.js";
 import {
   createPost,
@@ -20,6 +21,7 @@ import {
 import { crawlPosts } from "../crawl.js";
 import optionalAuth from "../middlewares/optionalAuth.js";
 import protectRoute from "../middlewares/protectRoute.js";
+import { requireRole } from "../middlewares/requireRole.js";
 import { authTierLimiter } from "../middlewares/rateLimiter.js";
 import sitemapAuthGate from "../middlewares/sitemapAuthGate.js";
 import { validate } from "../middlewares/validate.js";
@@ -129,11 +131,15 @@ router.post(
 );
 router.patch(
   UPDATE_POST_STATUS,
+  protectRoute,
+  requireRole(Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR),
   validate(updatePostStatusSchema),
   asyncHandler(updatePostStatus),
 );
 router.patch(
   UPDATE_POST_VISIBILITY,
+  protectRoute,
+  requireRole(Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR),
   validate(updatePostVisibilitySchema),
   asyncHandler(updatePostVisibility),
 );
