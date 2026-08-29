@@ -27,6 +27,7 @@
     "seed:fake-data": "npx tsx src/api/seed/index.ts",
     "seed:conversations": "npx tsx src/api/seed/seedConversations.ts",
     "seed:notifications": "npx tsx src/api/seed/seedNotifications.ts",
+    "seed:moderator": "npx tsx src/api/seed/createModerator.ts",
     "k6:history": "node test/scripts/build-history.js"
   },
   "keywords": [],
