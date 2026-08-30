@@ -715,18 +715,19 @@ export const getUserIdFromEmail = async (req, res) => {
 };
 
 export const getUsersPendingPost = async (req, res) => {
-  const { userId, page, limit, searchValue } = req.body;
+  // Task 009 (auth-gap fix): danh tính lấy từ `req.user._id` (gắn bởi `protectRoute`, đã qua jwt
+  // verify), KHÔNG còn đọc `userId` từ `req.body` — trước đây bất kỳ ai gửi ID của 1
+  // admin/moderator thật trong body cũng giả mạo được vì route không có `protectRoute`.
+  const { page, limit, searchValue } = req.body;
+  const userId = req.user._id;
   const skip = (page - 1) * limit;
-  if (!userId) {
-    throw new AuthFailureError("Unauthorize");
-  }
   if (!page || !limit) {
     throw new BadRequestError("Need page and limit");
   }
   const userInfo = await User.findOne({ _id: ObjectId(userId) });
-  const isAdmin = userInfo?.role === Constants.USER_ROLE.ADMIN;
-  if (!isAdmin) {
-    throw new AuthFailureError("Only for admin");
+  const allowedRoles = [Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR];
+  if (!allowedRoles.includes(userInfo?.role)) {
+    throw new AuthFailureError("Admin/Moderator only");
   }
   const authorIds = (
     await Post.find(

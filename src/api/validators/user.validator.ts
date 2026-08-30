@@ -141,10 +141,11 @@ export const getUsersWithStatusQuerySchema = {
   }),
 };
 
+// Task 009 (auth-gap fix): `userId` bỏ khỏi schema — danh tính giờ lấy từ `req.user._id`
+// (`protectRoute`), không còn qua `req.body` (xem `user.route.ts`/`user.controller.ts`).
 export const getUsersPendingPostSchema = {
   body: z.object({
     ...paginationQuerySchema.shape,
-    userId: objectIdSchema,
     searchValue: z.string().optional(),
   }),
 };
