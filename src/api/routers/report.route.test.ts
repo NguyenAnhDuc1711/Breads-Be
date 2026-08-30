@@ -235,10 +235,14 @@ test("Task 014: rejectReportSchema: id (path) + userId (body) hợp lệ -> 200"
 
 /* --------------------------------------------------------------- wiring/structure */
 
-test("report.route.ts: validate() wired vào đúng 4 route", async () => {
+test("report.route.ts: validate() wired vào đúng 5 route", async () => {
   const src = await fs.readFile("src/api/routers/report.route.ts", "utf8");
   const validateCalls = src.match(/validate\(/g) || [];
-  assert.equal(validateCalls.length, 4, "phải có đúng 4 lần gọi validate(...)");
+  assert.equal(
+    validateCalls.length,
+    5,
+    "phải có đúng 5 lần gọi validate(...) (4 gốc + GET_BY_USER, Users module)"
+  );
 });
 
 // AD-1: validate() phải đứng SAU protectRoute ở route CREATE (route duy nhất có auth trong file).

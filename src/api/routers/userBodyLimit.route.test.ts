@@ -133,6 +133,10 @@ const EXPECTED_LIMITS: Record<string, string | null> = {
   REFRESH_TOKEN: null,
   // Task 003 (epic seo-sitemap-schema): GET, không đọc `.body` -> KHÔNG mount, cùng nhóm ME/PROFILE/...
   SITEMAP_ELIGIBLE: null,
+  // MỚI (Breads-Admin Users module): admin-only detail (GET, không đọc `.body`) + admin-only
+  // role/status/lý do (PUT, `.body` optional 100kb — cùng nhóm SIGN_UP/LOGIN/...).
+  ADMIN_DETAIL: null,
+  ADMIN_ACTION: "100kb",
 };
 
 /** Payload hợp lệ TỐI THIỂU cho từng route (dùng cho smoke test 18/18). */
@@ -165,6 +169,11 @@ const REQUESTS: Record<string, { query?: string; body?: unknown }> = {
   VALIDATE_USER_EMAIL: { body: { email: "an@example.com", code: "123456" } },
   REFRESH_TOKEN: {},
   SITEMAP_ELIGIBLE: {},
+  ADMIN_DETAIL: {},
+  // body không rỗng (dù mọi field đều optional ở schema) — tránh false-positive ở check
+  // "spec.body && payload.bodyKeys === 0" (smoke test coi bodyKeys===0 là dấu hiệu thiếu
+  // express.json).
+  ADMIN_ACTION: { body: { role: 1 } },
 };
 
 /* --------------------------------------------------------------------------- test harness */
@@ -236,8 +245,8 @@ const send = (base: string, route: ParsedRoute, body?: unknown) =>
 
 /* ------------------------------------------------------- 1. wiring: đủ 18 route, đúng limit */
 
-test("FR-2: user.route.ts có ĐÚNG 19 route, không thiếu không thừa so với bảng 011.md + SITEMAP_ELIGIBLE task 003 (ADMIN đã gỡ)", () => {
-  assert.equal(parsedRoutes.length, 19, "phải parse ra đúng 19 route");
+test("FR-2: user.route.ts có ĐÚNG 21 route, không thiếu không thừa so với bảng 011.md + SITEMAP_ELIGIBLE task 003 + ADMIN_DETAIL/ADMIN_ACTION (Users module)", () => {
+  assert.equal(parsedRoutes.length, 21, "phải parse ra đúng 21 route");
   assert.deepEqual(
     parsedRoutes.map((r) => r.key).sort(),
     Object.keys(EXPECTED_LIMITS).sort(),
@@ -247,7 +256,7 @@ test("FR-2: user.route.ts có ĐÚNG 19 route, không thiếu không thừa so v
 
 // Bắt trực tiếp failure mode #1 khi soạn PRD: quên `UPDATE` (avatar) cần 50mb -> avatar vài MB
 // sẽ bị limit 100kb của nhóm auth chặn.
-test("FR-2: mỗi route mount ĐÚNG limit của nó (8×100kb + 1×50mb + 10×không mount)", () => {
+test("FR-2: mỗi route mount ĐÚNG limit của nó (9×100kb + 1×50mb + 11×không mount)", () => {
   for (const route of parsedRoutes) {
     assert.equal(
       route.jsonLimit,
@@ -258,10 +267,14 @@ test("FR-2: mỗi route mount ĐÚNG limit của nó (8×100kb + 1×50mb + 10×k
 
   const at = (limit: string | null) =>
     parsedRoutes.filter((r) => r.jsonLimit === limit).length;
-  assert.equal(at("100kb"), 8);
+  assert.equal(at("100kb"), 9);
   assert.equal(at("50mb"), 1);
-  assert.equal(at(null), 10, "9 route gốc (ADMIN đã gỡ) + SITEMAP_ELIGIBLE (task 003)");
-  assert.equal(at("100kb") + at("50mb") + at(null), 19);
+  assert.equal(
+    at(null),
+    11,
+    "9 route gốc (ADMIN đã gỡ) + SITEMAP_ELIGIBLE (task 003) + ADMIN_DETAIL (Users module)"
+  );
+  assert.equal(at("100kb") + at("50mb") + at(null), 21);
 });
 
 // Bắt trực tiếp failure mode #2: quên mount cho 6 route có `.body` ngoài SIGN_UP/LOGIN. Kỳ vọng
@@ -278,7 +291,7 @@ test("FR-2: mọi route có `.body` trong user.validator.ts đều PHẢI có ex
         : `route ${route.key} không đọc .body nhưng lại mount express.json thừa`
     );
   }
-  assert.equal(parsedRoutes.filter((r) => r.jsonLimit).length, 9);
+  assert.equal(parsedRoutes.filter((r) => r.jsonLimit).length, 10);
 });
 
 // Không được quay lại `router.use(express.json(...))` cấp file: sẽ áp CÙNG 1 limit cho cả nhóm
@@ -296,7 +309,7 @@ test("FR-2: user.route.ts KHÔNG mount express.json ở cấp router", async () 
 // vị trí an toàn và nhất quán nhất — cũng là mốc để T012 chèn rate-limiter mà không phá thứ tự này.
 test("FR-2: express.json luôn là middleware ĐẦU TIÊN (trước protectRoute/validate)", () => {
   const mounted = parsedRoutes.filter((r) => r.jsonLimit);
-  assert.equal(mounted.length, 9, "phải kiểm tra đủ 9 route có express.json");
+  assert.equal(mounted.length, 10, "phải kiểm tra đủ 10 route có express.json");
 
   for (const route of mounted) {
     assert.equal(
@@ -312,7 +325,7 @@ test("FR-2: express.json luôn là middleware ĐẦU TIÊN (trước protectRout
 // AC quan trọng nhất của 011.md: gọi CẢ 18 route với payload hợp lệ tối thiểu, không route nào
 // được lỗi vì `req.body` rỗng/undefined. Nếu bất kỳ route body nào thiếu `express.json`, Zod
 // `.parse(undefined)` -> 400 và test này fail ngay tại route đó.
-test("FR-2 (SMOKE 19/19): mọi route xử lý bình thường, không route nào lỗi do req.body undefined", async () => {
+test("FR-2 (SMOKE 21/21): mọi route xử lý bình thường, không route nào lỗi do req.body undefined", async () => {
   const app = buildAppFromSource();
   const failures: string[] = [];
 
@@ -338,7 +351,7 @@ test("FR-2 (SMOKE 19/19): mọi route xử lý bình thường, không route nà
     })
   );
 
-  assert.deepEqual(failures, [], `19 route phải pass hết:\n${failures.join("\n")}`);
+  assert.deepEqual(failures, [], `21 route phải pass hết:\n${failures.join("\n")}`);
 });
 
 // Đối chứng cho smoke test: nếu gỡ `express.json` khỏi các route có body (mô phỏng đúng lỗi đã
@@ -422,10 +435,10 @@ test("FR-2: 6 route từng bị quên (FOLLOW/CHANGE_PW/CHECK_VALID_USER/...) pa
 
 /* ------------------------------------------------- 4. 9 route không override: không regression */
 
-test("FR-2: 10 route không mount body-parser (GET listing + LOGOUT + CRAWL_USER + REFRESH_TOKEN + SITEMAP_ELIGIBLE) vẫn 200", async () => {
+test("FR-2: 11 route không mount body-parser (GET listing + LOGOUT + CRAWL_USER + REFRESH_TOKEN + SITEMAP_ELIGIBLE + ADMIN_DETAIL) vẫn 200", async () => {
   const app = buildAppFromSource();
   const noParser = parsedRoutes.filter((r) => !r.jsonLimit);
-  assert.equal(noParser.length, 10);
+  assert.equal(noParser.length, 11);
 
   await silenceWarn(() =>
     withServer(app, async (base) => {

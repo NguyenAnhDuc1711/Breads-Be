@@ -304,6 +304,57 @@ export const updateUser = async (req, res) => {
   }).send(res);
 };
 
+// Admin-only detail lookup cho Breads-Admin Users module — tách khỏi `getUserProfile` (public,
+// dùng chung với Breads-Fe) vì field trả về ở đây nhạy cảm hơn (email, role, status,
+// statusReason, createdAt) và route guard bằng `requireRole(ADMIN)`, không phải public.
+export const getUserAdminDetail = async (req, res) => {
+  const { id } = req.params;
+  const user = await User.findById(id).select(
+    "name username avatar bio email role status statusReason createdAt lastActiveAt followersCount followingCount",
+  );
+  if (!user) throw new NotFoundError("User not found");
+  new OK({
+    message: "Get user admin detail successfully",
+    metadata: user,
+  }).send(res);
+};
+
+const VALID_ROLES = Object.values(Constants.USER_ROLE);
+const VALID_STATUSES = Object.values(Constants.USER_STATUS);
+
+// Endpoint riêng cho thao tác quản trị (role/status/lý do) — KHÔNG tái dùng `updateUser` (route
+// đó guard `requireSelfOrRole`, cho phép self-edit, nên field nhạy cảm không được phép khai báo
+// ở `updateUserSchema`). Route này guard `requireRole(ADMIN)` only, allowlist đúng 3 field.
+export const adminUpdateUser = async (req, res) => {
+  const { id } = req.params;
+  const { role, status, reason } = req.body;
+
+  if (role !== undefined && !VALID_ROLES.includes(role)) {
+    throw new BadRequestError("Invalid role");
+  }
+  if (status !== undefined && !VALID_STATUSES.includes(status)) {
+    throw new BadRequestError("Invalid status");
+  }
+
+  const user = await User.findById(id);
+  if (!user) throw new NotFoundError("User not found");
+
+  if (role !== undefined) user.role = role;
+  if (status !== undefined) user.status = status;
+  if (reason !== undefined) user.statusReason = reason;
+  await user.save();
+
+  new OK({
+    message: "Update user role/status successfully",
+    metadata: {
+      _id: user._id,
+      role: user.role,
+      status: user.status,
+      statusReason: user.statusReason,
+    },
+  }).send(res);
+};
+
 export const changePassword = async (req, res) => {
   const { currentPW, newPW } = req.body;
   const forgotPW = req.body?.forgotPW;
@@ -703,7 +754,8 @@ export const getUsersPendingPost = async (req, res) => {
 };
 
 export const getUsersWithStatus = async (req, res) => {
-  const { userId, page, limit, searchValue } = req.query;
+  const { userId, page, limit, searchValue, role, status, dateFrom, dateTo } =
+    req.query;
   if (!userId) {
     throw new BadRequestError("Empty userId");
   }
@@ -714,21 +766,58 @@ export const getUsersWithStatus = async (req, res) => {
   if (!isAdmin) {
     throw new AuthFailureError("You don't have access to this");
   }
-  let agg = searchValue
-    ? [
+
+  // Users module (Breads-Admin): gộp mọi filter tuỳ chọn vào 1 `$match` — role/status là zod
+  // z.coerce.number() nên đã là number lúc tới đây, dateFrom/dateTo đã là Date (z.coerce.date()).
+  const match: Record<string, unknown> = {};
+  if (searchValue) match.username = { $regex: searchValue, $options: "i" };
+  if (role !== undefined) match.role = role;
+
+  // Status filter: ACTIVE/INACTIVE dựa trên lastActiveAt (online/offline), LOCK/BANNED giữ nguyên
+  // filter theo field `status` tĩnh. Ngưỡng 5 phút khớp với LAST_ACTIVE_THROTTLE_MS ở protectRoute.
+  if (status !== undefined) {
+    const { ACTIVE, INACTIVE, LOCK, BANNED } = Constants.USER_STATUS;
+    const ONLINE_THRESHOLD_MS = 5 * 60 * 1000;
+    const threshold = new Date(Date.now() - ONLINE_THRESHOLD_MS);
+
+    if (status === ACTIVE) {
+      // Online: lastActiveAt trong vòng 5 phút gần nhất, tài khoản không bị Lock/Banned
+      match.lastActiveAt = { $gte: threshold };
+      match.status = { $nin: [LOCK, BANNED] };
+    } else if (status === INACTIVE) {
+      // Offline: lastActiveAt quá 5 phút hoặc không có, tài khoản không bị Lock/Banned
+      match.$and = [
+        { status: { $nin: [LOCK, BANNED] } },
         {
-          $match: {
-            username: { $regex: searchValue, $options: "i" },
-          },
+          $or: [
+            { lastActiveAt: { $lt: threshold } },
+            { lastActiveAt: { $exists: false } },
+          ],
         },
-      ]
-    : [];
+      ];
+    } else {
+      // LOCK hoặc BANNED: giữ nguyên filter theo field status tĩnh
+      match.status = status;
+    }
+  }
+
+  if (dateFrom || dateTo) {
+    match.createdAt = {
+      ...(dateFrom ? { $gte: dateFrom } : {}),
+      ...(dateTo ? { $lte: dateTo } : {}),
+    };
+  }
+
+  const agg = Object.keys(match).length ? [{ $match: match }] : [];
   const data = await getUsersByPage({
     page,
     limit,
     agg,
   });
-  const count = await User.countDocuments(agg);
+  // Trước đây truyền `agg` (mảng aggregation stage) thẳng vào `countDocuments` (nhận filter
+  // object, không phải pipeline) -> count sai khi có searchValue. Dùng `match` (object thật)
+  // sửa luôn — cùng điều kiện với `agg` ở trên, không phải aggregation riêng.
+  const count = await User.countDocuments(match);
   new OK({
     message: "Get users with status successfully",
     metadata: {

@@ -128,6 +128,20 @@ export const getReports = async (req, res) => {
   }).send(res);
 };
 
+// Breads-Admin Users module: toàn bộ lịch sử report 1 user ĐÃ NỘP (mọi status) — khác `getReports`
+// (hàng đợi PENDING, search theo tên), không cần $lookup vì đã đứng trên trang chi tiết của đúng
+// user đó rồi. Guard `requireRole(ADMIN)` ở route.
+export const getReportsByUser = async (req, res) => {
+  const { id } = req.params;
+  const reports = await Report.find({ userId: id })
+    .select("content status createdAt")
+    .sort({ createdAt: -1 });
+  new OK({
+    message: "Reports by user fetched successfully",
+    metadata: reports,
+  }).send(res);
+};
+
 export const responseReport = async (req, res) => {
   const { from, to, subject, html, userId } = req.body;
   const { id: reportId } = req.params;

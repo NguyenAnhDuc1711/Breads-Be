@@ -55,3 +55,11 @@ export const rejectReportSchema = {
     userId: objectIdSchema,
   }),
 };
+
+// Breads-Admin Users module: toàn bộ lịch sử report 1 user ĐÃ NỘP (mọi status) — guard
+// `requireRole(ADMIN)` ở route, không cần userId caller trong query như `getReportsSchema`.
+export const getReportsByUserSchema = {
+  params: z.object({
+    id: objectIdSchema,
+  }),
+};

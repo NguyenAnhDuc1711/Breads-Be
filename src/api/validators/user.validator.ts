@@ -38,21 +38,34 @@ export const followUserSchema = {
 
 // `updateUser` (user.controller.ts:205-255) đọc `payload = req.body` nguyên khối rồi gán từng
 // key lên user doc (switch case đặc biệt cho `avatar`/`links`, `default` cho phép field bất kỳ
-// đi qua) — đây là hành vi mass-assignment có sẵn, KHÔNG thuộc scope epic này để sửa. Khai báo
-// rõ field thuộc `user.model.ts` hay dùng để update self-profile (đều optional — partial
-// update), và dùng `.passthrough()` để không âm thầm strip field khác mà controller vẫn đang
-// chấp nhận (rủi ro nêu ở AD-6).
+// đi qua). Route này guard bằng `requireSelfOrRole(ADMIN)` — tức 1 user thường sửa CHÍNH mình
+// cũng lọt qua guard đó, nên trước đây `.passthrough()` cho phép field bất kỳ (kể cả `role`,
+// `status`) đi xuyên qua validate rồi bị controller gán thẳng vào doc -> tự nâng quyền. Bỏ
+// `.passthrough()`: `z.object()` mặc định loại bỏ key không khai báo, nên `role`/`status` (và
+// bất kỳ field lạ nào khác) bị strip trước khi tới controller. Field `role`/`status` giờ CHỈ
+// đổi được qua `adminUpdateUserSchema` (guard `requireRole(ADMIN)` riêng, không phải self).
 export const updateUserSchema = {
   params: z.object({ id: objectIdSchema }),
-  body: z
-    .object({
-      name: z.string().optional(),
-      username: z.string().optional(),
-      avatar: z.string().optional(),
-      bio: z.string().optional(),
-      links: z.array(z.string()).optional(),
-    })
-    .passthrough(),
+  body: z.object({
+    name: z.string().optional(),
+    username: z.string().optional(),
+    avatar: z.string().optional(),
+    bio: z.string().optional(),
+    links: z.array(z.string()).optional(),
+  }),
+};
+
+export const getUserAdminDetailSchema = {
+  params: z.object({ id: objectIdSchema }),
+};
+
+export const adminUpdateUserSchema = {
+  params: z.object({ id: objectIdSchema }),
+  body: z.object({
+    role: z.number().optional(),
+    status: z.number().optional(),
+    reason: z.string().optional(),
+  }),
 };
 
 // `changePassword` (user.controller.ts:257-260): mọi field optional ở tầng schema — logic điều
@@ -113,11 +126,18 @@ export const getUsersToTagQuerySchema = {
   }),
 };
 
+// Users module (Breads-Admin): role/status/dateFrom/dateTo là filter tuỳ chọn cho danh sách —
+// role/status exact match, dateFrom/dateTo là range trên `createdAt` (đủ 1 trong 2 đầu vẫn hợp lệ,
+// business rule range hợp lý để controller tự xử lý, schema chỉ đảm bảo TYPE là Date).
 export const getUsersWithStatusQuerySchema = {
   query: z.object({
     ...paginationQuerySchema.shape,
     userId: objectIdSchema,
     searchValue: z.string().optional(),
+    role: z.coerce.number().optional(),
+    status: z.coerce.number().optional(),
+    dateFrom: z.coerce.date().optional(),
+    dateTo: z.coerce.date().optional(),
   }),
 };
 

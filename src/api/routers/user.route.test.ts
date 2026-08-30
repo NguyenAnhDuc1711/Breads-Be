@@ -577,7 +577,7 @@ test("FR-4 (getUserIdFromEmail): thiếu userEmail -> 400 trước khi controlle
 // đúng thứ tự đăng ký — thứ tự QUAN TRỌNG vì PROFILE ("/:userId") và UPDATE ("/:id") là catch-all
 // 1-segment, phải đứng SAU các path literal cùng số segment (/me, /follow-list, /with-status,
 // /sitemap-eligible, /follow) để không "nuốt" chúng (xem comment trong user.route.ts).
-test("FR-2 (D-1): user.route.ts wiring khớp đúng 19 (method, path) mới, đúng thứ tự chống shadow route động", () => {
+test("FR-2 (D-1): user.route.ts wiring khớp đúng 21 (method, path) mới, đúng thứ tự chống shadow route động", () => {
   const routes = userRouter.stack
     .filter((layer: any) => layer.route)
     .map((layer: any) => ({
@@ -591,6 +591,10 @@ test("FR-2 (D-1): user.route.ts wiring khớp đúng 19 (method, path) mới, đ
     { method: "get", path: "/suggestions/to-follow" },
     { method: "get", path: "/suggestions/to-tag" },
     { method: "get", path: "/with-status" },
+    // MỚI: admin-only detail (Breads-Admin Users module) — 2-segment, guard requireRole(ADMIN),
+    // đăng ký ngay sau GET_USERS_WITH_STATUS (cùng nhóm admin), không cần đứng trước /:userId vì
+    // khác số segment nên không bị nuốt.
+    { method: "get", path: "/:id/admin-detail" },
     { method: "get", path: "/sitemap-eligible" }, // MỚI (task 003): user đủ điều kiện sitemap, literal -> trước /:userId
     { method: "get", path: "/:userId" },
     { method: "post", path: "/pending-post-lookup" },
@@ -600,6 +604,9 @@ test("FR-2 (D-1): user.route.ts wiring khớp đúng 19 (method, path) mới, đ
     { method: "post", path: "/sessions/refresh" },
     { method: "put", path: "/follow" },
     { method: "put", path: "/:id" },
+    // MỚI: admin-only role/status/lý do — guard requireRole(ADMIN) only (không phải
+    // requireSelfOrRole như UPDATE ở trên), tách khỏi self-edit để không tái mở lỗ mass-assignment.
+    { method: "put", path: "/:id/admin-action" },
     { method: "put", path: "/:id/password" },
     { method: "post", path: "/crawl" },
     { method: "post", path: "/validity-checks" },
@@ -607,11 +614,11 @@ test("FR-2 (D-1): user.route.ts wiring khớp đúng 19 (method, path) mới, đ
     { method: "post", path: "/email-validations" },
   ];
 
-  assert.equal(routes.length, 19, "phải có đúng 19 route đăng ký trên router");
+  assert.equal(routes.length, 21, "phải có đúng 21 route đăng ký trên router");
   assert.deepEqual(
     routes,
     expected,
-    "method+path (và thứ tự đăng ký) phải khớp đúng bảng redesign 010.md + SITEMAP_ELIGIBLE task 003, trừ backdoor GET /admin đã gỡ"
+    "method+path (và thứ tự đăng ký) phải khớp đúng bảng redesign 010.md + SITEMAP_ELIGIBLE task 003 + admin-detail/admin-action (Users module), trừ backdoor GET /admin đã gỡ"
   );
 });
 

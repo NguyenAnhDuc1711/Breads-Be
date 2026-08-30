@@ -61,6 +61,10 @@ const userSchema = new mongoose.Schema(
       enum: userStatus,
       default: Constants.USER_STATUS.ACTIVE,
     },
+    statusReason: {
+      type: String,
+      default: "",
+    },
     catesCare: [
       {
         type: ObjectId,

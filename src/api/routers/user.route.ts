@@ -21,6 +21,8 @@ import {
   getSitemapEligibleUsers,
   validateEmailByCode,
   refreshTokenHandler,
+  getUserAdminDetail,
+  adminUpdateUser,
 } from "../controllers/user.controller.js";
 import { USER_PATH } from "../../Breads-Shared/APIConfig.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
@@ -46,6 +48,8 @@ import {
   checkValidUserSchema,
   getUserIdFromEmailSchema,
   getSitemapEligibleUsersQuerySchema,
+  getUserAdminDetailSchema,
+  adminUpdateUserSchema,
 } from "../validators/user.validator.js";
 
 // FR-2 (Task 011): router DUY NHẤT lẫn 2 nhóm payload trong cùng 1 file — nhóm auth/text nhỏ
@@ -82,6 +86,8 @@ const {
   VALIDATE_USER_EMAIL,
   REFRESH_TOKEN,
   SITEMAP_ELIGIBLE,
+  ADMIN_DETAIL,
+  ADMIN_ACTION,
 } = USER_PATH;
 
 // FR-2 (Task 010, D-1): GET literal 1-segment paths (/me, /follow-list, /with-status)
@@ -111,6 +117,14 @@ router.get(
   requireRole(Constants.USER_ROLE.ADMIN),
   validate(getUsersWithStatusQuerySchema),
   asyncHandler(getUsersWithStatus),
+);
+// 2-segment path -> không cần quan tâm thứ tự so với PROFILE ("/:userId", 1-segment) bên dưới.
+router.get(
+  ADMIN_DETAIL,
+  protectRoute,
+  requireRole(Constants.USER_ROLE.ADMIN),
+  validate(getUserAdminDetailSchema),
+  asyncHandler(getUserAdminDetail),
 );
 // Task 003 (epic seo-sitemap-schema, FR-2): route literal 1-segment -> đăng ký TRƯỚC `PROFILE`
 // (đăng ký ở dưới) để không bị nuốt, đúng convention đã ghi ở comment trên.
@@ -180,6 +194,19 @@ router.put(
   requireSelfOrRole(Constants.USER_ROLE.ADMIN),
   validate(updateUserSchema),
   asyncHandler(updateUser),
+);
+// Endpoint quản trị riêng cho role/status/lý do — guard `requireRole(ADMIN)` only (không phải
+// `requireSelfOrRole` như UPDATE ở trên), vì đây là hành động admin tác động lên user khác,
+// không phải self-service profile edit.
+router.put(
+  ADMIN_ACTION,
+  express.json({ limit: "100kb" }),
+  mongoSanitize(),
+  hpp(),
+  protectRoute,
+  requireRole(Constants.USER_ROLE.ADMIN),
+  validate(adminUpdateUserSchema),
+  asyncHandler(adminUpdateUser),
 );
 router.put(
   CHANGE_PW,

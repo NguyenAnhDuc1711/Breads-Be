@@ -6,6 +6,7 @@ import { Constants } from "../../Breads-Shared/Constants/index.ts";
 import asyncHandler from "../../helpers/asyncHandler.ts";
 import {
   getReports,
+  getReportsByUser,
   rejectReport,
   responseReport,
   sendReport,
@@ -14,6 +15,7 @@ import protectRoute from "../middlewares/protectRoute.js";
 import { requireRole } from "../middlewares/requireRole.js";
 import { validate } from "../middlewares/validate.ts";
 import {
+  getReportsByUserSchema,
   getReportsSchema,
   rejectReportSchema,
   responseReportSchema,
@@ -33,6 +35,15 @@ router.get(
   requireRole(Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR),
   validate(getReportsSchema),
   asyncHandler(getReports),
+);
+// Breads-Admin Users module: literal "user" đứng trước :id -> không xung đột với REPORT_PATH.GET
+// ("/", 0-segment) hay RESPONSE/REJECT ("/:id/response|reject", :id đứng đầu).
+router.get(
+  REPORT_PATH.GET_BY_USER,
+  protectRoute,
+  requireRole(Constants.USER_ROLE.ADMIN),
+  validate(getReportsByUserSchema),
+  asyncHandler(getReportsByUser),
 );
 router.post(
   REPORT_PATH.CREATE,
