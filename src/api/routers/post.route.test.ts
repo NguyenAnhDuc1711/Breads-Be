@@ -43,7 +43,7 @@ import Post from "../models/post.model.ts";
 import SavedPost from "../models/savedPost.model.ts";
 import User from "../models/user.model.ts";
 import { closeFanoutQueues } from "../services/feed/queue.ts";
-import { getPostsIdByFilter } from "../services/post.ts";
+import { getPostsIdByFilter, isAdminViewer } from "../services/post.ts";
 import {
   createPostSchema,
   deletePostSchema,
@@ -1316,6 +1316,45 @@ test("Task 015 (verify fix): admin/posts/validation sort createdAt tăng dần (
     });
     assert.deepEqual(calls.sort, { createdAt: 1 });
   });
+});
+
+// Phát hiện lúc merge (đúng bug pattern Issue #9, lần thứ 4): `isAdminViewer` (dùng trong
+// `getPostDetail` để quyết định có bỏ qua `filterViewablePosts` hay không) trước đây chỉ check
+// role===ADMIN. Moderator qua được gate ở `getPosts` (Issue #9) nhưng bị lọc mất bài PRE_ACCEPT/
+// non-public của người khác NGAY TẠI ĐÂY — silent, không có lỗi hiển thị, chỉ là danh sách rỗng/
+// thiếu. Test stub `User.findOne` để không cần Mongo thật.
+const withStubbedUserFindOne = async (
+  role: number | undefined,
+  fn: () => Promise<void>,
+) => {
+  const original = (User as any).findOne;
+  (User as any).findOne = () => ({
+    lean: async () => (role === undefined ? null : { role }),
+  });
+  try {
+    await fn();
+  } finally {
+    (User as any).findOne = original;
+  }
+};
+
+test("Issue #9 (lần 4, phát hiện lúc merge): isAdminViewer trả true cho cả ADMIN và MODERATOR", async () => {
+  await withStubbedUserFindOne(Constants.USER_ROLE.ADMIN, async () => {
+    assert.equal(await isAdminViewer(VALID_ID), true);
+  });
+  await withStubbedUserFindOne(Constants.USER_ROLE.MODERATOR, async () => {
+    assert.equal(await isAdminViewer(VALID_ID), true);
+  });
+});
+
+test("isAdminViewer trả false cho USER thường, cho user không tồn tại, và cho viewerId rỗng", async () => {
+  await withStubbedUserFindOne(Constants.USER_ROLE.USER, async () => {
+    assert.equal(await isAdminViewer(VALID_ID), false);
+  });
+  await withStubbedUserFindOne(undefined, async () => {
+    assert.equal(await isAdminViewer(VALID_ID), false);
+  });
+  assert.equal(await isAdminViewer(null), false);
 });
 
 /* --------------------------- Task 009: role-gate cho updatePostStatus (MODERATOR) ------------ */

@@ -114,14 +114,21 @@ export const filterViewablePosts = async (
  * KHÔNG phải từ query string `filter[page]=admin...` — nếu không, cờ admin do client tự khai
  * sẽ trở thành đường vòng qua chính lớp enforce này.
  */
-const isAdminViewer = async (viewerId: any): Promise<boolean> => {
+// Epic post-management (fix phát hiện lúc merge): trước đây chỉ check role===ADMIN, bỏ sót
+// MODERATOR — cùng 1 bug pattern đã sửa ở getPosts/updatePostStatus/getUsersPendingPost (Issue
+// #9). Hệ quả im lặng: Moderator qua được gate ở getPosts nhưng bị filterViewablePosts (rule
+// hiển thị thường) lọc mất bài PRE_ACCEPT/non-public của người khác ngay tại getPostDetail.
+export const isAdminViewer = async (viewerId: any): Promise<boolean> => {
   if (!viewerId) return false;
   try {
     const user: any = await User.findOne(
       { _id: ObjectId(viewerId) },
       { role: 1 },
     ).lean();
-    return user?.role === Constants.USER_ROLE.ADMIN;
+    return (
+      user?.role === Constants.USER_ROLE.ADMIN ||
+      user?.role === Constants.USER_ROLE.MODERATOR
+    );
   } catch (err) {
     logger.error({ err }, "isAdminViewer failed");
     return false;
