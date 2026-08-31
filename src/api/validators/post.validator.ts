@@ -147,6 +147,8 @@ export const tickPostSurveySchema = {
   }),
 };
 
+const POST_STATUS_VALUES: number[] = Object.values(Constants.POST_STATUS);
+
 // Task 011 correction: postId chuyển từ body vào params.id (route PATCH /:id/status).
 export const updatePostStatusSchema = {
   params: z.object({
@@ -154,7 +156,12 @@ export const updatePostStatusSchema = {
   }),
   body: z.object({
     userId: objectIdSchema,
-    status: z.number(),
+    // Task 009: enum-validate — trước đây nhận bất kỳ số nào, cùng pattern `visibilitySchema` ở
+    // trên đã làm cho `visibility`.
+    status: z.number().refine(
+      (v) => POST_STATUS_VALUES.includes(v),
+      "invalid status",
+    ),
   }),
 };
 

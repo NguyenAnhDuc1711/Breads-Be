@@ -17,7 +17,10 @@ import { test } from "node:test";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import express from "express";
+import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 import { z } from "zod";
+import { Constants } from "../../Breads-Shared/Constants/index.js";
 import {
   getUserProfileSchema,
   signupUserSchema,
@@ -43,6 +46,7 @@ import sitemapAuthGate, {
 } from "../middlewares/sitemapAuthGate.ts";
 import asyncHandler from "../../helpers/asyncHandler.ts";
 import User from "../models/user.model.ts";
+import Post from "../models/post.model.ts";
 
 const VALID_OBJECT_ID = "652f1b2c3d4e5f6071829304";
 const VALID_OBJECT_ID_2 = "652f1b2c3d4e5f6071829305";
@@ -850,4 +854,99 @@ test("FR-2 (wiring, source): SITEMAP_ELIGIBLE có sitemapAuthGate + validate(get
     idxSitemapEligible < idxProfile,
     "SITEMAP_ELIGIBLE (literal 1-segment) phải đăng ký TRƯỚC PROFILE, nếu không sẽ bị nuốt",
   );
+});
+
+/* --------------------------- Task 009: auth-gap fix — POST /users/pending-post-lookup --------
+   Route trước đây KHÔNG có `protectRoute` — danh tính đọc thẳng từ `req.body.userId`, ai cũng
+   giả mạo được nếu biết ID của 1 admin/moderator thật. Giờ `protectRoute` đứng TRƯỚC `validate`
+   (đúng convention đầu file), danh tính lấy từ jwt (`req.user._id`), schema không còn nhận
+   `userId` trong body. Router THẬT (`userRouter`) đã mount sẵn ở `mountUserRouter()` phía trên. */
+
+process.env.JWT_SECRET = process.env.JWT_SECRET || "user-route-test-secret";
+
+const PENDING_POST_VIEWER_ID = "652f1b2c3d4e5f6071829310";
+const pendingPostAuthToken = jwt.sign(
+  { userId: PENDING_POST_VIEWER_ID },
+  process.env.JWT_SECRET,
+);
+
+/** Stub `User.findById` (đọc bởi `protectRoute`) + `User.findOne` (role-check trong controller) +
+ * `Post.find`/`User.find` (query chính) — không cần Mongo thật. `lastActiveAt` để "mới" nên
+ * `protectRoute` không kích hoạt nhánh `User.updateOne` (cùng pattern `media.route.test.ts`). */
+const withStubbedPendingPostModels = async (
+  role: number,
+  fn: () => Promise<void>,
+) => {
+  const originalFindById = (User as any).findById;
+  const originalFindOne = (User as any).findOne;
+  const originalUserFind = (User as any).find;
+  const originalPostFind = (Post as any).find;
+
+  (User as any).findById = () => ({
+    select: () =>
+      Promise.resolve({
+        _id: new mongoose.Types.ObjectId(PENDING_POST_VIEWER_ID),
+        role,
+        lastActiveAt: new Date(),
+      }),
+  });
+  (User as any).findOne = async () => ({ role });
+  (Post as any).find = () => ({ lean: () => Promise.resolve([]) });
+  const userFindChain: any = {
+    skip() {
+      return this;
+    },
+    limit() {
+      return this;
+    },
+    then(resolve: any) {
+      resolve([]);
+    },
+  };
+  (User as any).find = () => userFindChain;
+
+  try {
+    await fn();
+  } finally {
+    (User as any).findById = originalFindById;
+    (User as any).findOne = originalFindOne;
+    (User as any).find = originalUserFind;
+    (Post as any).find = originalPostFind;
+  }
+};
+
+test("Task 009: POST /users/pending-post-lookup role=MODERATOR (jwt) -> 200, không cần userId trong body", async () => {
+  await withStubbedPendingPostModels(Constants.USER_ROLE.MODERATOR, async () => {
+    await withServer(mountUserRouter(), async (base) => {
+      const res = await fetch(`${base}/users/pending-post-lookup`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          Authorization: `Bearer ${pendingPostAuthToken}`,
+        },
+        body: JSON.stringify({ page: 1, limit: 20 }),
+      });
+      assert.equal(res.status, 200, "MODERATOR (trước đây bị 403 do bug pattern ADMIN-only) phải qua được");
+    });
+  });
+});
+
+// Auth-gap fix / scenario: KHÔNG có JWT hợp lệ, dù kèm `userId` giả mạo của 1 admin thật trong
+// body cũ -> 401 (protectRoute), không còn đường vòng qua `req.body.userId`.
+test("Task 009 (auth-gap fix): POST /users/pending-post-lookup không có JWT -> 401, kể cả gửi userId giả mạo trong body", async () => {
+  await withStubbedPendingPostModels(Constants.USER_ROLE.ADMIN, async () => {
+    await withServer(mountUserRouter(), async (base) => {
+      const res = await fetch(`${base}/users/pending-post-lookup`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: PENDING_POST_VIEWER_ID, page: 1, limit: 20 }),
+      });
+      assert.equal(res.status, 401);
+    });
+  });
+});
+
+test("getUsersPendingPostSchema: body không còn nhận/yêu cầu userId", () => {
+  const parsed: any = getUsersPendingPostSchema.body.parse({ page: 1, limit: 20 });
+  assert.equal((parsed as any).userId, undefined, "userId phải bị strip/không tồn tại trong schema");
 });

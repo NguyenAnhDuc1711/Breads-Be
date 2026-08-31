@@ -28,7 +28,12 @@ import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import logger from "../../core/logger.ts";
 import asyncHandler from "../../helpers/asyncHandler.ts";
-import { createPost, getSitemapEligiblePosts } from "../controllers/post.controller.ts";
+import {
+  createPost,
+  getPosts,
+  getSitemapEligiblePosts,
+  updatePostStatus,
+} from "../controllers/post.controller.ts";
 import { VALIDATION_ERROR_MESSAGE, validate } from "../middlewares/validate.ts";
 import { sanitizeText } from "../middlewares/sanitize.ts";
 import sitemapAuthGate, {
@@ -38,7 +43,7 @@ import Post from "../models/post.model.ts";
 import SavedPost from "../models/savedPost.model.ts";
 import User from "../models/user.model.ts";
 import { closeFanoutQueues } from "../services/feed/queue.ts";
-import { getPostsIdByFilter } from "../services/post.ts";
+import { getPostsIdByFilter, isAdminViewer } from "../services/post.ts";
 import {
   createPostSchema,
   deletePostSchema,
@@ -1056,6 +1061,353 @@ test("FR-1 (wiring, source): SITEMAP_ELIGIBLE có sitemapAuthGate + validate(get
     idxSitemapEligible < idxSitemap,
     "SITEMAP_ELIGIBLE (literal 1-segment) phải đăng ký TRƯỚC /:id, nếu không sẽ bị nuốt",
   );
+});
+
+/* --------------------------- Task 009: role-gate cho getPosts (admin/*) -------------------- */
+
+// `getPosts` dùng CHUNG cho mọi loại feed (for_you/following/saved/user/admin/*) -> role-check
+// chỉ áp dụng khi `filter.page` bắt đầu bằng "admin" (xem Context task 009). Test dựng app riêng
+// (không qua `post.route.ts` thật — lý do "không import" đã ghi ở đầu file: kéo Redis lúc import).
+// Middleware test-only dưới đây thay `optionalAuth` thật, nhưng giữ ĐÚNG hợp đồng của nó (chỉ set
+// `req.viewerId` từ 1 nguồn test tương đương jwt đã verify) — cùng cách `withStubbedModels` ở
+// tầng R-6 phía trên thay `protectRoute`/DB thật bằng stub mongoose.
+const fakeOptionalAuth = (req, _res, next) => {
+  req.viewerId = (req.headers["x-test-viewer-id"] as string) || null;
+  next();
+};
+
+const getPostsApp = () => {
+  const app = express();
+  app.get("/posts", fakeOptionalAuth, validate(getPostsQuerySchema), asyncHandler(getPosts));
+  app.use(errorHandler);
+  return app;
+};
+
+/** Stub `User.findById` (role-gate đọc viewer) + `Post.find` (cả 2 nhánh admin đều rơi vào
+ * `Post.find` cuối `getPostsIdByFilter` SAU KHI qua gate — xem `services/post.ts`) — không cần
+ * Mongo. `role: null` mô phỏng ẩn danh/không tìm thấy user (viewer falsy -> gate chặn). */
+const withStubbedAdminGateModels = async (
+  role: number | null,
+  fn: () => Promise<void>,
+) => {
+  const originalFindById = (User as any).findById;
+  const originalPostFind = (Post as any).find;
+  (User as any).findById = async () => (role === null ? null : { _id: VALID_ID, role });
+  const chain: any = {
+    sort() { return this; },
+    skip() { return this; },
+    limit() { return this; },
+    then(resolve: any) { resolve([]); },
+  };
+  (Post as any).find = () => chain;
+  try {
+    await fn();
+  } finally {
+    (User as any).findById = originalFindById;
+    (Post as any).find = originalPostFind;
+  }
+};
+
+// LƯU Ý status code: Implementation Steps của task 009 chỉ định dùng ĐÚNG `AuthFailureError` cho
+// cả 2 role-check này (giống hệt code review đã confirm), và `AuthFailureError` trong
+// `core/error.response.ts` mặc định là 401 (`HTTPStatus.UNAUTHORIZED`), KHÔNG phải 403
+// (`ForbiddenError`/403 là 1 class riêng, không được dùng ở đây). Acceptance Criteria của task ghi
+// "403" nhưng hành vi THẬT của code theo đúng Implementation Steps là 401 — test dưới đây khớp
+// hành vi thật (đã note lại làm warning cho review, xem task report).
+const ADMIN_GATE_ROLE_CASES: Array<[string, number | null, number]> = [
+  ["ADMIN", Constants.USER_ROLE.ADMIN, 200],
+  ["MODERATOR", Constants.USER_ROLE.MODERATOR, 200],
+  ["USER", Constants.USER_ROLE.USER, 401],
+  ["anonymous (không có viewerId)", null, 401],
+];
+
+for (const adminPage of [PageConstant.ADMIN.POSTS, PageConstant.ADMIN.POSTS_VALIDATION]) {
+  for (const [label, role, expectedStatus] of ADMIN_GATE_ROLE_CASES) {
+    test(`Task 009 role-matrix: GET /posts?filter[page]=${adminPage} role=${label} -> ${expectedStatus}`, async () => {
+      await silenceWarn(() =>
+        withStubbedAdminGateModels(role, async () => {
+          await withServer(getPostsApp(), async (base) => {
+            const headers: Record<string, string> = {};
+            if (role !== null) headers["x-test-viewer-id"] = VALID_ID;
+            const res = await fetch(
+              `${base}/posts?filter[page]=${encodeURIComponent(adminPage)}`,
+              { headers },
+            );
+            assert.equal(res.status, expectedStatus);
+            if (expectedStatus !== 200) {
+              const body: any = await res.json();
+              assert.equal("data" in body, false, "response chặn không được kèm data");
+            }
+          });
+        }),
+      );
+    });
+  }
+}
+
+// AC FR-4 (regression): non-admin page không được bị đòi role — role-gate mới CHỈ kích hoạt khi
+// `filter.page` bắt đầu bằng "admin". Dùng nhánh SAVED (đã stub sẵn ở integration test phía trên,
+// đơn giản/ổn định) thay vì `for_you` — nhánh mặc định kéo theo toàn bộ pipeline fanout/Redis
+// không liên quan tới điều đang test ở đây (role-gate không được kích hoạt), AC cũng chấp nhận
+// "for_you (hoặc bất kỳ page không phải admin/*)".
+test("Task 009 regression: GET /posts?filter[page]=saved role=USER vẫn 200, không bị đòi role", async () => {
+  const originalSavedFind = (SavedPost as any).find;
+  const chain: any = {
+    sort() { return this; },
+    skip() { return this; },
+    limit() { return this; },
+    then(resolve: any) { resolve([]); },
+  };
+  (SavedPost as any).find = () => chain;
+  try {
+    await withServer(getPostsApp(), async (base) => {
+      const res = await fetch(
+        `${base}/posts?filter[page]=saved&userId=${VALID_ID}`,
+        { headers: { "x-test-viewer-id": VALID_ID } },
+      );
+      assert.equal(
+        res.status,
+        200,
+        "non-admin page không được bị chặn bởi role-gate mới (Task 009)",
+      );
+    });
+  } finally {
+    (SavedPost as any).find = originalSavedFind;
+  }
+});
+
+/* --------------------------- Task 016: query-builder cho filter ở admin/posts ----------------- */
+
+// Trước fix: nhánh `ADMIN.POSTS` (`services/post.ts`) chỉ set `sort`, không build `query` từ
+// filter -> `Post.find({}, ...)` trả toàn bộ post bất kể filter FE gửi (xem Context task #16).
+// Test dưới đây gọi thẳng `getPostsIdByFilter` (đã import ở đầu file cho tầng integration phía
+// trên), stub `Post.find` để bắt CHÍNH XÁC `query` được build, không cần Mongo.
+const withCapturedPostFind = async (
+  fn: (calls: { query?: any; sort?: any }) => Promise<void>,
+) => {
+  const originalFind = (Post as any).find;
+  const calls: { query?: any; sort?: any } = {};
+  const chain: any = {
+    sort(s: any) { calls.sort = s; return this; },
+    skip() { return this; },
+    limit() { return this; },
+    then(resolve: any) { resolve([]); },
+  };
+  (Post as any).find = (query: any) => {
+    calls.query = query;
+    return chain;
+  };
+  try {
+    await fn(calls);
+  } finally {
+    (Post as any).find = originalFind;
+  }
+};
+
+test("Task 016: admin/posts + filter.postContent=image -> query lọc theo media.type image", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: { page: PageConstant.ADMIN.POSTS, postContent: ["image"] },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.deepEqual(calls.query, {
+      $and: [{ $or: [{ "media.type": Constants.MEDIA_TYPE.IMAGE }] }],
+    });
+  });
+});
+
+test("Task 016: admin/posts + filter.dateFrom/dateTo -> query range trên createdAt", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: {
+        page: PageConstant.ADMIN.POSTS,
+        dateFrom: "2026-01-01",
+        dateTo: "2026-01-31",
+      },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.deepEqual(calls.query, {
+      $and: [
+        {
+          createdAt: {
+            $gte: new Date("2026-01-01"),
+            $lte: new Date("2026-01-31"),
+          },
+        },
+      ],
+    });
+  });
+});
+
+test("Task 016: admin/posts + filter.user=<authorId> -> query lọc đúng tác giả", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: { page: PageConstant.ADMIN.POSTS, user: VALID_ID },
+      userId: OTHER_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.equal(calls.query.$and.length, 1);
+    assert.equal(String(calls.query.$and[0].authorId), VALID_ID);
+  });
+});
+
+test("Task 016: admin/posts không filter gì -> query rỗng {}, KHÔNG ràng buộc status (khác admin/posts/validation)", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: { page: PageConstant.ADMIN.POSTS },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.deepEqual(calls.query, {});
+  });
+});
+
+// Regression AC (task #16): refactor tách `buildAdminPostFilterSubQueries` KHÔNG được đổi hành vi
+// nhánh `admin/posts/validation` — vẫn ràng buộc PRE_ACCEPT, vẫn nhận đúng filter.user.
+test("Task 016 regression: admin/posts/validation vẫn ràng buộc status PRE_ACCEPT + filter.user sau refactor", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: { page: PageConstant.ADMIN.POSTS_VALIDATION, user: VALID_ID },
+      userId: OTHER_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.equal(calls.query.$and.length, 2);
+    assert.equal(calls.query.$and[0].status, Constants.POST_STATUS.PRE_ACCEPT);
+    assert.equal(String(calls.query.$and[1].authorId), VALID_ID);
+  });
+});
+
+test("Task 016 regression: admin/posts/validation không filter -> query chỉ {status: PRE_ACCEPT} (giữ nguyên)", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: { page: PageConstant.ADMIN.POSTS_VALIDATION },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.deepEqual(calls.query, { status: Constants.POST_STATUS.PRE_ACCEPT });
+  });
+});
+
+// FR-3 (phát hiện lúc verify task #15): default `sort` trong getPostsIdByFilter là
+// {createdAt:-1} (mới nhất trước) -> hàng đợi validation PHẢI override sang cũ-nhất-trước
+// (FIFO), nếu không bài chờ duyệt lâu sẽ bị chìm xuống cuối, dễ bỏ sót.
+test("Task 015 (verify fix): admin/posts/validation sort createdAt tăng dần (FIFO, cũ nhất trước)", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: { page: PageConstant.ADMIN.POSTS_VALIDATION },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.deepEqual(calls.sort, { createdAt: 1 });
+  });
+});
+
+// Phát hiện lúc merge (đúng bug pattern Issue #9, lần thứ 4): `isAdminViewer` (dùng trong
+// `getPostDetail` để quyết định có bỏ qua `filterViewablePosts` hay không) trước đây chỉ check
+// role===ADMIN. Moderator qua được gate ở `getPosts` (Issue #9) nhưng bị lọc mất bài PRE_ACCEPT/
+// non-public của người khác NGAY TẠI ĐÂY — silent, không có lỗi hiển thị, chỉ là danh sách rỗng/
+// thiếu. Test stub `User.findOne` để không cần Mongo thật.
+const withStubbedUserFindOne = async (
+  role: number | undefined,
+  fn: () => Promise<void>,
+) => {
+  const original = (User as any).findOne;
+  (User as any).findOne = () => ({
+    lean: async () => (role === undefined ? null : { role }),
+  });
+  try {
+    await fn();
+  } finally {
+    (User as any).findOne = original;
+  }
+};
+
+test("Issue #9 (lần 4, phát hiện lúc merge): isAdminViewer trả true cho cả ADMIN và MODERATOR", async () => {
+  await withStubbedUserFindOne(Constants.USER_ROLE.ADMIN, async () => {
+    assert.equal(await isAdminViewer(VALID_ID), true);
+  });
+  await withStubbedUserFindOne(Constants.USER_ROLE.MODERATOR, async () => {
+    assert.equal(await isAdminViewer(VALID_ID), true);
+  });
+});
+
+test("isAdminViewer trả false cho USER thường, cho user không tồn tại, và cho viewerId rỗng", async () => {
+  await withStubbedUserFindOne(Constants.USER_ROLE.USER, async () => {
+    assert.equal(await isAdminViewer(VALID_ID), false);
+  });
+  await withStubbedUserFindOne(undefined, async () => {
+    assert.equal(await isAdminViewer(VALID_ID), false);
+  });
+  assert.equal(await isAdminViewer(null), false);
+});
+
+/* --------------------------- Task 009: role-gate cho updatePostStatus (MODERATOR) ------------ */
+
+const updatePostStatusApp = () => {
+  const app = express();
+  app.use(express.json());
+  app.patch(
+    "/posts/:id/status",
+    validate(updatePostStatusSchema),
+    asyncHandler(updatePostStatus),
+  );
+  app.use(errorHandler);
+  return app;
+};
+
+test("Task 009: PATCH /posts/:id/status role=MODERATOR -> 200 (trước đây 403/401, bug pattern ADMIN-only)", async () => {
+  const originalFindOne = (User as any).findOne;
+  const originalUpdateOne = (Post as any).updateOne;
+  (User as any).findOne = async () => ({ role: Constants.USER_ROLE.MODERATOR });
+  (Post as any).updateOne = async () => ({ acknowledged: true });
+  try {
+    await withServer(updatePostStatusApp(), async (base) => {
+      const res = await fetch(`${base}/posts/${VALID_ID}/status`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          userId: VALID_ID,
+          status: Constants.POST_STATUS.PUBLIC,
+        }),
+      });
+      assert.equal(res.status, 200);
+    });
+  } finally {
+    (User as any).findOne = originalFindOne;
+    (Post as any).updateOne = originalUpdateOne;
+  }
+});
+
+// AC "Enum-validate": status ngoài {0 (PRE_ACCEPT), 1 (PUBLIC), 4 (DELETED)} phải bị 400 ở tầng
+// schema, không chạm tới DB.
+test("Task 009 (enum-validate): updatePostStatusSchema từ chối status ngoài enum {0,1,4}", () => {
+  const ids = { userId: VALID_ID };
+  for (const status of Object.values(Constants.POST_STATUS) as number[]) {
+    assert.doesNotThrow(() => updatePostStatusSchema.body.parse({ ...ids, status }));
+  }
+  for (const status of [999, -1, 2, 3]) {
+    assert.throws(
+      () => updatePostStatusSchema.body.parse({ ...ids, status }),
+      z.ZodError,
+      `status=${status} phải bị từ chối (không thuộc {0,1,4})`,
+    );
+  }
 });
 
 after(async () => {

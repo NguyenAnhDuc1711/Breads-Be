@@ -149,6 +149,10 @@ router.post(
   express.json({ limit: "100kb" }),
   mongoSanitize(),
   hpp(),
+  // Task 009 (auth-gap fix): route trước đây KHÔNG có `protectRoute` — danh tính đọc thẳng từ
+  // `req.body.userId`, ai cũng giả mạo được nếu biết ID của 1 admin/moderator thật. `protectRoute`
+  // đứng TRƯỚC `validate` đúng convention đầu file ("validate luôn đứng SAU optionalAuth/protectRoute").
+  protectRoute,
   validate(getUsersPendingPostSchema),
   asyncHandler(getUsersPendingPost),
 );

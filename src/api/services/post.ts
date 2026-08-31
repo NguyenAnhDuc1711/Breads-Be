@@ -114,14 +114,21 @@ export const filterViewablePosts = async (
  * KHÔNG phải từ query string `filter[page]=admin...` — nếu không, cờ admin do client tự khai
  * sẽ trở thành đường vòng qua chính lớp enforce này.
  */
-const isAdminViewer = async (viewerId: any): Promise<boolean> => {
+// Epic post-management (fix phát hiện lúc merge): trước đây chỉ check role===ADMIN, bỏ sót
+// MODERATOR — cùng 1 bug pattern đã sửa ở getPosts/updatePostStatus/getUsersPendingPost (Issue
+// #9). Hệ quả im lặng: Moderator qua được gate ở getPosts nhưng bị filterViewablePosts (rule
+// hiển thị thường) lọc mất bài PRE_ACCEPT/non-public của người khác ngay tại getPostDetail.
+export const isAdminViewer = async (viewerId: any): Promise<boolean> => {
   if (!viewerId) return false;
   try {
     const user: any = await User.findOne(
       { _id: ObjectId(viewerId) },
       { role: 1 },
     ).lean();
-    return user?.role === Constants.USER_ROLE.ADMIN;
+    return (
+      user?.role === Constants.USER_ROLE.ADMIN ||
+      user?.role === Constants.USER_ROLE.MODERATOR
+    );
   } catch (err) {
     logger.error({ err }, "isAdminViewer failed");
     return false;
@@ -342,13 +349,15 @@ export const getPostDetail = async ({
   }
 };
 
-const getQueryPostValidation = (filter) => {
-  const user = filter.user;
+/**
+ * Dựng 3 khối sub-query dùng chung cho cả `admin/posts` và `admin/posts/validation`:
+ * lọc theo tác giả (`filter.user`), theo loại nội dung (`filter.postContent`) và theo
+ * loại post (`filter.postType`). KHÔNG ràng buộc `status` — mỗi nơi gọi tự thêm nếu cần.
+ */
+const buildAdminPostFilterSubQueries = (filter) => {
+  const user = filter?.user;
   const postContent = filter?.postContent;
   const postType = filter?.postType;
-  if (!user && !postContent && !postType) {
-    return { status: Constants.POST_STATUS.PRE_ACCEPT };
-  }
   let userQuery = null;
   let postContentQuery = null;
   let postTypeQuery = null;
@@ -393,6 +402,18 @@ const getQueryPostValidation = (filter) => {
       $or: postTypeConditions,
     };
   }
+  return { userQuery, postContentQuery, postTypeQuery };
+};
+
+const getQueryPostValidation = (filter) => {
+  const user = filter.user;
+  const postContent = filter?.postContent;
+  const postType = filter?.postType;
+  if (!user && !postContent && !postType) {
+    return { status: Constants.POST_STATUS.PRE_ACCEPT };
+  }
+  const { userQuery, postContentQuery, postTypeQuery } =
+    buildAdminPostFilterSubQueries(filter);
   const subQueries = [{ status: Constants.POST_STATUS.PRE_ACCEPT }];
   [userQuery, postContentQuery, postTypeQuery].forEach((subQuery) => {
     if (subQuery) {
@@ -546,11 +567,28 @@ export const getPostsIdByFilter = async (payload) => {
         ).map(({ postId }) => postId);
         break;
       case PageConstant.ADMIN.POSTS_VALIDATION:
+        // FR-3 (epic post-management, task #15 verify): hàng đợi phải FIFO (cũ nhất trước) để
+        // tránh bỏ sót bài chờ duyệt lâu — default `sort` ở trên là {createdAt:-1} (mới nhất
+        // trước), phải override giống nhánh ADMIN.POSTS.
+        sort = { createdAt: 1 };
         query = getQueryPostValidation(filter);
         break;
-      case PageConstant.ADMIN.POSTS:
+      case PageConstant.ADMIN.POSTS: {
         sort = { createdAt: 1 };
+        const { userQuery, postContentQuery, postTypeQuery } =
+          buildAdminPostFilterSubQueries(filter);
+        const dateQuery: { createdAt?: { $gte?: Date; $lte?: Date } } = {};
+        if (filter.dateFrom || filter.dateTo) {
+          dateQuery.createdAt = {};
+          if (filter.dateFrom) dateQuery.createdAt.$gte = new Date(filter.dateFrom);
+          if (filter.dateTo) dateQuery.createdAt.$lte = new Date(filter.dateTo);
+        }
+        const subQueries = [userQuery, postContentQuery, postTypeQuery, dateQuery].filter(
+          (q) => q && Object.keys(q).length > 0,
+        );
+        query = subQueries.length > 0 ? { $and: subQueries } : {};
         break;
+      }
       default:
         // Fetch 1 lần, tái dùng cho cả buildVisibilityQuery (bên trong getForYouFeed) lẫn
         // filterViewablePosts (bên trong getPostDetail, gọi sau ở controller) -> đúng 1

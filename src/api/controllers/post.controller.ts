@@ -550,6 +550,17 @@ export const getPosts = async (req, res) => {
   if (isAdminPage) {
     payload.isAdminPage = true;
   }
+  // Task 009: `getPosts` dùng CHUNG cho mọi feed (for_you/following/saved/user/admin/*) nên không
+  // thể gắn `requireRole` ở route (sẽ chặn luôn feed thường) — role-check chỉ áp dụng khi request
+  // thực sự thuộc nhánh admin. Danh tính lấy từ `req.viewerId` (jwt qua `optionalAuth`), không tin
+  // giá trị client tự khai trong query.
+  if (isAdminPage) {
+    const viewer = await User.findById(req.viewerId);
+    const allowedRoles = [Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR];
+    if (!viewer || !allowedRoles.includes(viewer.role)) {
+      throw new AuthFailureError("Admin/Moderator only");
+    }
+  }
   // [010] Danh tính người xem chỉ lấy từ jwt (`optionalAuth`), luôn ghi đè giá trị client gửi lên:
   // `userId` trong query là "feed/trang cá nhân của AI", không phải "AI đang hỏi" (NFR-2).
   payload.viewerId = req.viewerId ?? null;
@@ -671,9 +682,9 @@ export const updatePostStatus = async (req, res) => {
   const userInfo = await User.findOne({
     _id: ObjectId(userId),
   });
-  const isAdmin = userInfo?.role === Constants.USER_ROLE.ADMIN;
-  if (!isAdmin) {
-    throw new AuthFailureError("Only for admin");
+  const allowedRoles = [Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR];
+  if (!allowedRoles.includes(userInfo?.role)) {
+    throw new AuthFailureError("Admin/Moderator only");
   }
   await Post.updateOne(
     {
