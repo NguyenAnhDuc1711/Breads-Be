@@ -560,6 +560,10 @@ export const getPostsIdByFilter = async (payload) => {
         ).map(({ postId }) => postId);
         break;
       case PageConstant.ADMIN.POSTS_VALIDATION:
+        // FR-3 (epic post-management, task #15 verify): hàng đợi phải FIFO (cũ nhất trước) để
+        // tránh bỏ sót bài chờ duyệt lâu — default `sort` ở trên là {createdAt:-1} (mới nhất
+        // trước), phải override giống nhánh ADMIN.POSTS.
+        sort = { createdAt: 1 };
         query = getQueryPostValidation(filter);
         break;
       case PageConstant.ADMIN.POSTS: {

@@ -1183,12 +1183,12 @@ test("Task 009 regression: GET /posts?filter[page]=saved role=USER vẫn 200, kh
 // Test dưới đây gọi thẳng `getPostsIdByFilter` (đã import ở đầu file cho tầng integration phía
 // trên), stub `Post.find` để bắt CHÍNH XÁC `query` được build, không cần Mongo.
 const withCapturedPostFind = async (
-  fn: (calls: { query?: any }) => Promise<void>,
+  fn: (calls: { query?: any; sort?: any }) => Promise<void>,
 ) => {
   const originalFind = (Post as any).find;
-  const calls: { query?: any } = {};
+  const calls: { query?: any; sort?: any } = {};
   const chain: any = {
-    sort() { return this; },
+    sort(s: any) { calls.sort = s; return this; },
     skip() { return this; },
     limit() { return this; },
     then(resolve: any) { resolve([]); },
@@ -1299,6 +1299,22 @@ test("Task 016 regression: admin/posts/validation không filter -> query chỉ {
       isAdminPage: true,
     });
     assert.deepEqual(calls.query, { status: Constants.POST_STATUS.PRE_ACCEPT });
+  });
+});
+
+// FR-3 (phát hiện lúc verify task #15): default `sort` trong getPostsIdByFilter là
+// {createdAt:-1} (mới nhất trước) -> hàng đợi validation PHẢI override sang cũ-nhất-trước
+// (FIFO), nếu không bài chờ duyệt lâu sẽ bị chìm xuống cuối, dễ bỏ sót.
+test("Task 015 (verify fix): admin/posts/validation sort createdAt tăng dần (FIFO, cũ nhất trước)", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: { page: PageConstant.ADMIN.POSTS_VALIDATION },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.deepEqual(calls.sort, { createdAt: 1 });
   });
 });
 
