@@ -59,10 +59,12 @@ export const getReports = async (req, res) => {
   const userInfo = await User.findOne({
     _id: ObjectId(userId),
   });
-  const isAdmin = userInfo?.role === Constants.USER_ROLE.ADMIN;
-  if (!isAdmin) {
+  const allowedRoles = [Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR];
+  if (!allowedRoles.includes(userInfo?.role)) {
     throw new ForbiddenError();
   }
+  const pageNum = Number(page) || 1;
+  const limitNum = Number(limit) || 10;
   const agg = [
     {
       $match: {
@@ -97,34 +99,48 @@ export const getReports = async (req, res) => {
     {
       $unwind: "$userReport",
     },
-    {
-      $match: {
-        $or: [
+    // Guard `searchValue` rỗng: BSON driver drop field `undefined` khỏi $regex, để lại $options
+    // mồ côi -> Mongo lỗi ngay. Chỉ thêm stage search khi searchValue thực sự có giá trị.
+    ...(searchValue
+      ? [
           {
-            "userReport.username": {
-              $regex: searchValue,
-              $options: "i",
+            $match: {
+              $or: [
+                {
+                  "userReport.username": {
+                    $regex: searchValue,
+                    $options: "i",
+                  },
+                },
+                {
+                  "userReport.name": {
+                    $regex: searchValue,
+                    $options: "i",
+                  },
+                },
+              ],
             },
           },
-          {
-            "userReport.name": {
-              $regex: searchValue,
-              $options: "i",
-            },
-          },
-        ],
-      },
-    },
+        ]
+      : []),
     {
       $sort: {
         createdAt: -1,
       },
     },
+    {
+      $facet: {
+        data: [{ $skip: (pageNum - 1) * limitNum }, { $limit: limitNum }],
+        totalCount: [{ $count: "count" }],
+      },
+    },
   ];
-  const data = await Report.aggregate(agg);
+  const [result] = await Report.aggregate(agg);
+  const data = result?.data ?? [];
+  const totalCount = result?.totalCount?.[0]?.count ?? 0;
   new OK({
     message: "Reports fetched successfully",
-    metadata: data,
+    metadata: { data, totalCount },
   }).send(res);
 };
 
@@ -151,8 +167,8 @@ export const responseReport = async (req, res) => {
   const userInfo = await User.findOne({
     _id: ObjectId(userId),
   });
-  const isAdmin = userInfo?.role == Constants.USER_ROLE.ADMIN;
-  if (!isAdmin) {
+  const allowedRoles = [Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR];
+  if (!allowedRoles.includes(userInfo?.role)) {
     throw new ForbiddenError();
   }
   const result = await sendMailService({
@@ -184,8 +200,8 @@ export const rejectReport = async (req, res) => {
   const userInfo = await User.findOne({
     _id: ObjectId(userId),
   });
-  const isAdmin = userInfo?.role == Constants.USER_ROLE.ADMIN;
-  if (!isAdmin) {
+  const allowedRoles = [Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR];
+  if (!allowedRoles.includes(userInfo?.role)) {
     throw new ForbiddenError();
   }
   await Report.updateOne(
