@@ -342,13 +342,15 @@ export const getPostDetail = async ({
   }
 };
 
-const getQueryPostValidation = (filter) => {
-  const user = filter.user;
+/**
+ * Dựng 3 khối sub-query dùng chung cho cả `admin/posts` và `admin/posts/validation`:
+ * lọc theo tác giả (`filter.user`), theo loại nội dung (`filter.postContent`) và theo
+ * loại post (`filter.postType`). KHÔNG ràng buộc `status` — mỗi nơi gọi tự thêm nếu cần.
+ */
+const buildAdminPostFilterSubQueries = (filter) => {
+  const user = filter?.user;
   const postContent = filter?.postContent;
   const postType = filter?.postType;
-  if (!user && !postContent && !postType) {
-    return { status: Constants.POST_STATUS.PRE_ACCEPT };
-  }
   let userQuery = null;
   let postContentQuery = null;
   let postTypeQuery = null;
@@ -393,6 +395,18 @@ const getQueryPostValidation = (filter) => {
       $or: postTypeConditions,
     };
   }
+  return { userQuery, postContentQuery, postTypeQuery };
+};
+
+const getQueryPostValidation = (filter) => {
+  const user = filter.user;
+  const postContent = filter?.postContent;
+  const postType = filter?.postType;
+  if (!user && !postContent && !postType) {
+    return { status: Constants.POST_STATUS.PRE_ACCEPT };
+  }
+  const { userQuery, postContentQuery, postTypeQuery } =
+    buildAdminPostFilterSubQueries(filter);
   const subQueries = [{ status: Constants.POST_STATUS.PRE_ACCEPT }];
   [userQuery, postContentQuery, postTypeQuery].forEach((subQuery) => {
     if (subQuery) {
@@ -548,9 +562,22 @@ export const getPostsIdByFilter = async (payload) => {
       case PageConstant.ADMIN.POSTS_VALIDATION:
         query = getQueryPostValidation(filter);
         break;
-      case PageConstant.ADMIN.POSTS:
+      case PageConstant.ADMIN.POSTS: {
         sort = { createdAt: 1 };
+        const { userQuery, postContentQuery, postTypeQuery } =
+          buildAdminPostFilterSubQueries(filter);
+        const dateQuery: any = {};
+        if (filter.dateFrom || filter.dateTo) {
+          dateQuery.createdAt = {};
+          if (filter.dateFrom) dateQuery.createdAt.$gte = new Date(filter.dateFrom);
+          if (filter.dateTo) dateQuery.createdAt.$lte = new Date(filter.dateTo);
+        }
+        const subQueries = [userQuery, postContentQuery, postTypeQuery, dateQuery].filter(
+          (q) => q && Object.keys(q).length > 0,
+        );
+        query = subQueries.length > 0 ? { $and: subQueries } : {};
         break;
+      }
       default:
         // Fetch 1 lần, tái dùng cho cả buildVisibilityQuery (bên trong getForYouFeed) lẫn
         // filterViewablePosts (bên trong getPostDetail, gọi sau ở controller) -> đúng 1

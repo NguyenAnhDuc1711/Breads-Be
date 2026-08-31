@@ -1176,6 +1176,132 @@ test("Task 009 regression: GET /posts?filter[page]=saved role=USER vẫn 200, kh
   }
 });
 
+/* --------------------------- Task 016: query-builder cho filter ở admin/posts ----------------- */
+
+// Trước fix: nhánh `ADMIN.POSTS` (`services/post.ts`) chỉ set `sort`, không build `query` từ
+// filter -> `Post.find({}, ...)` trả toàn bộ post bất kể filter FE gửi (xem Context task #16).
+// Test dưới đây gọi thẳng `getPostsIdByFilter` (đã import ở đầu file cho tầng integration phía
+// trên), stub `Post.find` để bắt CHÍNH XÁC `query` được build, không cần Mongo.
+const withCapturedPostFind = async (
+  fn: (calls: { query?: any }) => Promise<void>,
+) => {
+  const originalFind = (Post as any).find;
+  const calls: { query?: any } = {};
+  const chain: any = {
+    sort() { return this; },
+    skip() { return this; },
+    limit() { return this; },
+    then(resolve: any) { resolve([]); },
+  };
+  (Post as any).find = (query: any) => {
+    calls.query = query;
+    return chain;
+  };
+  try {
+    await fn(calls);
+  } finally {
+    (Post as any).find = originalFind;
+  }
+};
+
+test("Task 016: admin/posts + filter.postContent=image -> query lọc theo media.type image", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: { page: PageConstant.ADMIN.POSTS, postContent: ["image"] },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.deepEqual(calls.query, {
+      $and: [{ $or: [{ "media.type": Constants.MEDIA_TYPE.IMAGE }] }],
+    });
+  });
+});
+
+test("Task 016: admin/posts + filter.dateFrom/dateTo -> query range trên createdAt", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: {
+        page: PageConstant.ADMIN.POSTS,
+        dateFrom: "2026-01-01",
+        dateTo: "2026-01-31",
+      },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.deepEqual(calls.query, {
+      $and: [
+        {
+          createdAt: {
+            $gte: new Date("2026-01-01"),
+            $lte: new Date("2026-01-31"),
+          },
+        },
+      ],
+    });
+  });
+});
+
+test("Task 016: admin/posts + filter.user=<authorId> -> query lọc đúng tác giả", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: { page: PageConstant.ADMIN.POSTS, user: VALID_ID },
+      userId: OTHER_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.equal(calls.query.$and.length, 1);
+    assert.equal(String(calls.query.$and[0].authorId), VALID_ID);
+  });
+});
+
+test("Task 016: admin/posts không filter gì -> query rỗng {}, KHÔNG ràng buộc status (khác admin/posts/validation)", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: { page: PageConstant.ADMIN.POSTS },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.deepEqual(calls.query, {});
+  });
+});
+
+// Regression AC (task #16): refactor tách `buildAdminPostFilterSubQueries` KHÔNG được đổi hành vi
+// nhánh `admin/posts/validation` — vẫn ràng buộc PRE_ACCEPT, vẫn nhận đúng filter.user.
+test("Task 016 regression: admin/posts/validation vẫn ràng buộc status PRE_ACCEPT + filter.user sau refactor", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: { page: PageConstant.ADMIN.POSTS_VALIDATION, user: VALID_ID },
+      userId: OTHER_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.equal(calls.query.$and.length, 2);
+    assert.equal(calls.query.$and[0].status, Constants.POST_STATUS.PRE_ACCEPT);
+    assert.equal(String(calls.query.$and[1].authorId), VALID_ID);
+  });
+});
+
+test("Task 016 regression: admin/posts/validation không filter -> query chỉ {status: PRE_ACCEPT} (giữ nguyên)", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: { page: PageConstant.ADMIN.POSTS_VALIDATION },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.deepEqual(calls.query, { status: Constants.POST_STATUS.PRE_ACCEPT });
+  });
+});
+
 /* --------------------------- Task 009: role-gate cho updatePostStatus (MODERATOR) ------------ */
 
 const updatePostStatusApp = () => {
