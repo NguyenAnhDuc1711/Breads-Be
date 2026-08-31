@@ -602,6 +602,17 @@ export const getPostsIdByFilter = async (payload) => {
       Object.keys(query).length > 0 ||
       filter?.page === PageConstant.ADMIN.POSTS
     ) {
+      // Chỉ 2 trang admin cần tổng số bản ghi thật cho phân trang (PostsPage/
+      // PostsValidationPage — FE trước đây phải ƯỚC LƯỢNG totalPages bằng "còn nguyên 1 trang
+      // đầy => chắc còn trang sau", gây bug: totalPages chỉ tăng dần từng nấc khi user bấm next
+      // thay vì hiện đúng tổng ngay từ đầu). KHÔNG tính cho USER/FRIEND (feed cá nhân, không cần
+      // — tránh thêm 1 countDocuments không cần thiết trên path nóng).
+      if (
+        filter?.page === PageConstant.ADMIN.POSTS ||
+        filter?.page === PageConstant.ADMIN.POSTS_VALIDATION
+      ) {
+        payload.totalCount = await Post.countDocuments(query);
+      }
       // getPostDetail() expects raw ids in `postIds` (it re-maps results back to this exact
       // array via `id.toString()`) — every other branch above already returns raw ids
       // (SavedPost/Like `.map(({postId}) => postId)`, getForYouFeed's `.map(({_id}) => _id)`).

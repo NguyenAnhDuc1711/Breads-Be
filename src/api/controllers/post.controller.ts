@@ -574,9 +574,16 @@ export const getPosts = async (req, res) => {
       followeeIds: payload.followeeIds ?? null,
     });
   }
+  // Bug fix (phân trang PostsPage/PostsValidationPage): CHỈ 2 trang admin đổi shape response
+  // sang {data, totalCount} — mọi nhánh feed khác (for_you/following/saved/user) giữ NGUYÊN
+  // metadata là mảng thô như trước, không phá contract của Breads-Fe.
+  const metadata =
+    isAdminPage && payload.totalCount !== undefined
+      ? { data: result, totalCount: payload.totalCount }
+      : result;
   new OK({
     message: "Get posts successfully",
-    metadata: result,
+    metadata,
   }).send(res);
 };
 

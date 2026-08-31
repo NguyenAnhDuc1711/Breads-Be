@@ -1092,6 +1092,7 @@ const withStubbedAdminGateModels = async (
 ) => {
   const originalFindById = (User as any).findById;
   const originalPostFind = (Post as any).find;
+  const originalCountDocuments = (Post as any).countDocuments;
   (User as any).findById = async () => (role === null ? null : { _id: VALID_ID, role });
   const chain: any = {
     sort() { return this; },
@@ -1100,11 +1101,15 @@ const withStubbedAdminGateModels = async (
     then(resolve: any) { resolve([]); },
   };
   (Post as any).find = () => chain;
+  // Bug fix totalCount: role hợp lệ (200) giờ đi tới `Post.countDocuments` thật trong
+  // `getPostsIdByFilter` — stub để không treo chờ Mongo thật (không có DB trong test env).
+  (Post as any).countDocuments = async () => 0;
   try {
     await fn();
   } finally {
     (User as any).findById = originalFindById;
     (Post as any).find = originalPostFind;
+    (Post as any).countDocuments = originalCountDocuments;
   }
 };
 
@@ -1183,10 +1188,11 @@ test("Task 009 regression: GET /posts?filter[page]=saved role=USER vẫn 200, kh
 // Test dưới đây gọi thẳng `getPostsIdByFilter` (đã import ở đầu file cho tầng integration phía
 // trên), stub `Post.find` để bắt CHÍNH XÁC `query` được build, không cần Mongo.
 const withCapturedPostFind = async (
-  fn: (calls: { query?: any; sort?: any }) => Promise<void>,
+  fn: (calls: { query?: any; sort?: any; countQuery?: any }) => Promise<void>,
 ) => {
   const originalFind = (Post as any).find;
-  const calls: { query?: any; sort?: any } = {};
+  const originalCountDocuments = (Post as any).countDocuments;
+  const calls: { query?: any; sort?: any; countQuery?: any } = {};
   const chain: any = {
     sort(s: any) { calls.sort = s; return this; },
     skip() { return this; },
@@ -1197,10 +1203,17 @@ const withCapturedPostFind = async (
     calls.query = query;
     return chain;
   };
+  // Task (bug fix totalCount): admin/posts + admin/posts/validation giờ gọi thêm
+  // `Post.countDocuments(query)` — stub để không chạm Mongo thật trong test này.
+  (Post as any).countDocuments = async (query: any) => {
+    calls.countQuery = query;
+    return 0;
+  };
   try {
     await fn(calls);
   } finally {
     (Post as any).find = originalFind;
+    (Post as any).countDocuments = originalCountDocuments;
   }
 };
 
@@ -1315,6 +1328,52 @@ test("Task 015 (verify fix): admin/posts/validation sort createdAt tăng dần (
       isAdminPage: true,
     });
     assert.deepEqual(calls.sort, { createdAt: 1 });
+  });
+});
+
+// Bug fix (báo cáo sau merge): FE ước lượng totalPages sai (tăng dần theo từng lần bấm next)
+// vì BE không trả tổng số bản ghi thật. Payload.totalCount phải được set (qua countDocuments)
+// cho CẢ 2 trang admin, và KHÔNG set cho nhánh khác (USER) — tránh countDocuments thừa trên
+// path nóng không cần nó.
+test("Bug fix totalCount: admin/posts set payload.totalCount đúng bằng countQuery", async () => {
+  await withCapturedPostFind(async (calls) => {
+    const payload: any = {
+      filter: { page: PageConstant.ADMIN.POSTS },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    };
+    await getPostsIdByFilter(payload);
+    assert.equal(payload.totalCount, 0);
+    assert.deepEqual(calls.countQuery, calls.query);
+  });
+});
+
+test("Bug fix totalCount: admin/posts/validation set payload.totalCount", async () => {
+  await withCapturedPostFind(async (calls) => {
+    const payload: any = {
+      filter: { page: PageConstant.ADMIN.POSTS_VALIDATION },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    };
+    await getPostsIdByFilter(payload);
+    assert.equal(payload.totalCount, 0);
+  });
+});
+
+test("Bug fix totalCount: nhánh USER KHÔNG set payload.totalCount (không cần cho feed cá nhân)", async () => {
+  await withCapturedPostFind(async () => {
+    const payload: any = {
+      filter: { page: PageConstant.USER, value: "" },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+    };
+    await getPostsIdByFilter(payload);
+    assert.equal(payload.totalCount, undefined);
   });
 });
 
