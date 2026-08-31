@@ -570,7 +570,7 @@ export const getPostsIdByFilter = async (payload) => {
         sort = { createdAt: 1 };
         const { userQuery, postContentQuery, postTypeQuery } =
           buildAdminPostFilterSubQueries(filter);
-        const dateQuery: any = {};
+        const dateQuery: { createdAt?: { $gte?: Date; $lte?: Date } } = {};
         if (filter.dateFrom || filter.dateTo) {
           dateQuery.createdAt = {};
           if (filter.dateFrom) dateQuery.createdAt.$gte = new Date(filter.dateFrom);
