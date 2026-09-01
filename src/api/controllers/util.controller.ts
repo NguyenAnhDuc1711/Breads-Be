@@ -7,7 +7,7 @@ import { forgotPWMailForm } from "../utils/index.js";
 
 export const sendForgotPWMail = async (req, res) => {
   const { from, to, subject, code, url } = req.body;
-  if (!from || !to) {
+  if (!to) {
     throw new BadRequestError("Empty user's mail");
   }
   let decodedCode = decodeString(code);
@@ -26,7 +26,7 @@ export const sendForgotPWMail = async (req, res) => {
   const result = await sendMailService({
     from,
     to,
-    subject,
+    subject: subject || "Reset password",
     html: forgotPWMailForm(to, decodedCode, newUrl),
   });
   new OK({

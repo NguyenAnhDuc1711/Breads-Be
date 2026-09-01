@@ -2,8 +2,10 @@ import { Constants } from "../../Breads-Shared/Constants";
 import {
   AuthFailureError,
   BadRequestError,
+  ErrorResponse,
   ForbiddenError,
 } from "../../core/error.response";
+import HTTPStatus from "../../utils/httpStatus.ts";
 import { OK } from "../../core/success.response";
 import { ObjectId } from "../../utils";
 import Report from "../models/report.model";
@@ -161,7 +163,7 @@ export const getReportsByUser = async (req, res) => {
 export const responseReport = async (req, res) => {
   const { from, to, subject, html, userId } = req.body;
   const { id: reportId } = req.params;
-  if (!userId || !from || !to || !subject) {
+  if (!userId || !to || !subject) {
     throw new BadRequestError("Invalid input");
   }
   const userInfo = await User.findOne({
@@ -177,6 +179,9 @@ export const responseReport = async (req, res) => {
     subject,
     html,
   });
+  if (!result) {
+    throw new ErrorResponse("Failed to send email", HTTPStatus.SERVER_ERR);
+  }
   await Report.updateOne(
     {
       _id: ObjectId(reportId),

@@ -29,9 +29,9 @@ export const uploadSchema = {
 
 export const sendForgotPWMailSchema = {
   body: z.object({
-    from: z.string().email(),
+    from: z.string().email().optional(),
     to: z.string().email(),
-    subject: z.string().min(1),
+    subject: z.string().min(1).optional(),
     code: z.string().min(1),
     url: z.string().min(1),
   }),

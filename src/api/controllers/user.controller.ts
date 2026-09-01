@@ -45,7 +45,6 @@ export const signupUser = async (req, res) => {
   const expireTime = 10; // Minutes
   const code = genRandomCode();
   const result = await sendMailService({
-    from: "mraducky@gmail.com",
     to: email,
     subject: "Validation for creating Breads account",
     html: validateEmailForm(code, expireTime),

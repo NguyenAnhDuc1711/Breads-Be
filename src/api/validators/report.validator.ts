@@ -38,7 +38,7 @@ export const responseReportSchema = {
     id: objectIdSchema,
   }),
   body: z.object({
-    from: z.string().email(),
+    from: z.string().email().optional(),
     to: z.string().email(),
     subject: z.string().min(1),
     html: z.string().optional(),
