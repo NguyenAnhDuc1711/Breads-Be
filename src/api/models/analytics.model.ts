@@ -18,6 +18,5 @@ const analyticsSchema = new mongoose.Schema(
 
 analyticsSchema.index({ userId: 1, event: 1, createdAt: 1 });
 
-const analyticsDB = mongoose.createConnection(process.env.ANALYTICS_DB_URI);
-const AnalyticsModel = analyticsDB.model("Analytics", analyticsSchema);
+const AnalyticsModel = mongoose.model("Analytics", analyticsSchema);
 export default AnalyticsModel;

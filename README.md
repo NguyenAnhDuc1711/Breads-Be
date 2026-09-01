@@ -39,8 +39,7 @@ Backend API server for **Breads**, a social networking application — REST API 
 
 ### Required Environment Variables
 
-- `MONGO_URI` — primary MongoDB connection string
-- `ANALYTICS_DB_URI` — analytics MongoDB connection string
+- `MONGO_URI` — primary MongoDB connection string (also stores analytics events, `events` collection)
 - `UNSPLASH_API_KEY` — Unsplash API key (seed/demo content)
 - `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` — Cloudinary credentials
 - `SEND_MAIL_PASS` — email sending credential

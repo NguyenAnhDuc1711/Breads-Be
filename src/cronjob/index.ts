@@ -1,6 +1,5 @@
 import cron from "node-cron";
-import { MongoClient } from "mongodb";
-import { destructObjectId } from "../utils";
+import { destructObjectId, getCollection } from "../utils";
 import { getPostsCatesByIds } from "../api/services/post";
 import User from "../api/models/user.model";
 import { ObjectId } from "../utils";
@@ -73,12 +72,8 @@ const getUsersEventsFromRange = async (
   query,
   project
 ) => {
-  const client = new MongoClient(process.env.ANALYTICS_DB_URI);
-
   try {
-    await client.connect();
-    const db = client.db();
-    const collection = db.collection("events");
+    const collection = getCollection("events");
 
     const rangeQuery = {
       ...query,
@@ -94,7 +89,5 @@ const getUsersEventsFromRange = async (
   } catch (error) {
     logger.error({ err: error }, "getUsersEventsFromRange failed");
     return [];
-  } finally {
-    client.close();
   }
 };

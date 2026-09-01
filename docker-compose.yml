@@ -30,7 +30,6 @@ services:
       NODE_ENV: production
       PORT: 8080
       MONGO_URI: mongodb://mongo:27017/Breads
-      ANALYTICS_DB_URI: mongodb://mongo:27017/Breads-analytics
       REDIS_HOST: redis
       REDIS_PORT: 6379
     ports:
@@ -54,7 +53,6 @@ services:
     environment:
       NODE_ENV: production
       MONGO_URI: mongodb://mongo:27017/Breads
-      ANALYTICS_DB_URI: mongodb://mongo:27017/Breads-analytics
       REDIS_HOST: redis
       REDIS_PORT: 6379
     depends_on:

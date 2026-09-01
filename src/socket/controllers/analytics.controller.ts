@@ -1,7 +1,7 @@
 import {
   destructObjectId,
   formatDate,
-  getAnalyticsDateCollection,
+  getCollection,
   getCountKeyAnalyticValue,
   getDatesInRange,
   getOSFromUserAgent,
@@ -78,34 +78,30 @@ export default class AnalyticsController {
     const dateRangeArr = getDatesInRange(fromDate, toDate);
 
     try {
-      // Process collections in parallel using Promise.all
-      const dataPromises = dateRangeArr.map(async (date) => {
-        const table = await getAnalyticsDateCollection(date);
-        if (!table) return [];
+      const table = getCollection("events");
 
-        // Include all fields needed by the processing functions
-        const cursor = await table.find(
-          {},
-          {
-            projection: {
-              createdAt: 1,
-              userId: 1,
-              deviceInfo: 1,
-              localeInfo: 1,
-              browserInfo: 1,
-              event: 1,
-            },
-          }
-        );
+      const rangeStart = new Date(fromDate);
+      const rangeEnd = new Date(toDate);
+      rangeEnd.setHours(23, 59, 59, 999);
 
-        return cursor.toArray();
-      });
+      // Include all fields needed by the processing functions
+      const cursor = table.find(
+        {
+          createdAt: { $gte: rangeStart, $lte: rangeEnd },
+        },
+        {
+          projection: {
+            createdAt: 1,
+            userId: 1,
+            deviceInfo: 1,
+            localeInfo: 1,
+            browserInfo: 1,
+            event: 1,
+          },
+        }
+      );
 
-      // Wait for all queries to complete in parallel
-      const results = await Promise.all(dataPromises);
-
-      // Flatten the array of arrays
-      const totalData = results.flat();
+      const totalData = await cursor.toArray();
 
       // Process the data for different metrics
       const userActiveData = getUserActiveData(totalData, dateRangeArr);

@@ -21,7 +21,10 @@ instanceMongoDB.connect();
 initRedis();
 const app = express();
 
-app.use(pinoHttp({ logger }));
+// Dev: chỉ cần thấy log lỗi (đã có ở error handler bên dưới) — tắt auto-log của pino-http cho
+// từng request thành công để log terminal đỡ nhiễu. Prod: giữ nguyên, log mọi request cho traffic/latency observability.
+const isDevEnv = process.env.NODE_ENV === "dev";
+app.use(pinoHttp({ logger, autoLogging: !isDevEnv }));
 
 // FR-2 (security-hardening, task 010): KHÔNG mount `express.json` global ở đây nữa. `body-parser`
 // có hành vi parse-once (`req._body`) nên global 50mb sẽ làm mọi override nhỏ hơn phía sau thành

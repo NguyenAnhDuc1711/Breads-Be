@@ -1,5 +1,4 @@
 import mongoose from "mongoose";
-import logger from "../core/logger.ts";
 
 export const getCollection = (name: string) => {
   const db = mongoose.connection.db;
@@ -9,19 +8,6 @@ export const getCollection = (name: string) => {
   }
 
   return db.collection(name);
-};
-
-export const getAnalyticsDateCollection = async (collectionName: string) => {
-  try {
-    const analytic_db = process.env.ANALYTICS_DB_URI;
-    if (analytic_db) {
-      const analyticsDB = mongoose.createConnection(analytic_db);
-      const collection = await analyticsDB.collection(collectionName);
-      return collection;
-    }
-  } catch (err) {
-    logger.error({ err }, "getAnalyticsDateCollection failed");
-  }
 };
 
 export const ObjectId = (_id: any = null) => {
