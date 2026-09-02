@@ -354,10 +354,16 @@ export const getPostDetail = async ({
  * lọc theo tác giả (`filter.user`), theo loại nội dung (`filter.postContent`) và theo
  * loại post (`filter.postType`). KHÔNG ràng buộc `status` — mỗi nơi gọi tự thêm nếu cần.
  */
+// `qs` (query parser) trả string khi client gửi 1 giá trị, array khi gửi nhiều (xem comment
+// `post.validator.ts`) — validator cố ý passthrough cả 2 dạng, nên phải normalize về array ở đây
+// trước khi lặp, nếu không `"image".forEach` ném TypeError, bị nuốt ở `getPostsIdByFilter` và trả
+// về mảng rỗng một cách âm thầm.
+const toArray = (value) => (value == null ? [] : Array.isArray(value) ? value : [value]);
+
 const buildAdminPostFilterSubQueries = (filter) => {
   const user = filter?.user;
-  const postContent = filter?.postContent;
-  const postType = filter?.postType;
+  const postContent = toArray(filter?.postContent);
+  const postType = toArray(filter?.postType);
   let userQuery = null;
   let postContentQuery = null;
   let postTypeQuery = null;
@@ -366,7 +372,7 @@ const buildAdminPostFilterSubQueries = (filter) => {
       authorId: ObjectId(user),
     };
   }
-  if (!!postContent && postContent?.length > 0) {
+  if (postContent.length > 0) {
     const contentConditions = [];
     const { GIF, IMAGE, VIDEO } = Constants.MEDIA_TYPE;
     postContent.forEach((contentType) => {
@@ -392,7 +398,7 @@ const buildAdminPostFilterSubQueries = (filter) => {
       $or: contentConditions,
     };
   }
-  if (!!postType && postType?.length > 0) {
+  if (postType.length > 0) {
     const postTypeConditions = postType.map((type) => {
       return {
         type: type,

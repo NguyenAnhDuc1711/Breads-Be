@@ -1232,6 +1232,42 @@ test("Task 016: admin/posts + filter.postContent=image -> query lọc theo media
   });
 });
 
+// Bug fix (Posts page filter trả rỗng): dropdown single-select trên Admin FE luôn gửi filter
+// content type dưới dạng CHUỖI ĐƠN (không phải mảng) — `fetchBaseQuery` serialize `["image"]`
+// bằng `String(["image"])` = `"image"`, và `qs` parse `filter[postContent]=image` (không `[]`)
+// thành string, không phải array. `buildAdminPostFilterSubQueries` trước đây gọi thẳng
+// `postContent.forEach` -> TypeError trên string, bị nuốt ở `getPostsIdByFilter` và trả `[]` âm
+// thầm dù có data thật khớp. Test này tái hiện đúng shape request thật (string, không phải mảng).
+test("Task 016 (bug fix): admin/posts + filter.postContent='image' (string đơn, không phải mảng) -> vẫn lọc đúng, không throw", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: { page: PageConstant.ADMIN.POSTS, postContent: "image" },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.deepEqual(calls.query, {
+      $and: [{ $or: [{ "media.type": Constants.MEDIA_TYPE.IMAGE }] }],
+    });
+  });
+});
+
+test("Task 016 (bug fix): admin/posts + filter.postType='reply' (string đơn) -> vẫn lọc đúng, không throw", async () => {
+  await withCapturedPostFind(async (calls) => {
+    await getPostsIdByFilter({
+      filter: { page: PageConstant.ADMIN.POSTS, postType: "reply" },
+      userId: VALID_ID,
+      page: 1,
+      limit: 20,
+      isAdminPage: true,
+    });
+    assert.deepEqual(calls.query, {
+      $and: [{ $or: [{ type: "reply" }] }],
+    });
+  });
+});
+
 test("Task 016: admin/posts + filter.dateFrom/dateTo -> query range trên createdAt", async () => {
   await withCapturedPostFind(async (calls) => {
     await getPostsIdByFilter({

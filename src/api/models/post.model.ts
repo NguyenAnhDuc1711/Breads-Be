@@ -149,6 +149,10 @@ postSchema.index({ status: 1, visibility: 1, engagementScore: 1 });
 // scan toàn bộ index `createdAt_-1` (~6M doc mới trả 9 kết quả, ~20s). Index này không có
 // partial filter nên áp dụng được với mọi giá trị `type`.
 postSchema.index({ authorId: 1, createdAt: -1 });
+// ESR: Posts Validation queue luôn lọc `{status: PRE_ACCEPT}` (equality) rồi sort `createdAt` (FIFO)
+// — trước đây chỉ có index đơn `createdAt_-1`, phải fetch+lọc status trong bộ nhớ cho từng doc quét
+// qua, chi phí tăng theo độ sâu trang.
+postSchema.index({ status: 1, createdAt: 1 });
 
 const Post = mongoose.model("Post", postSchema);
 
