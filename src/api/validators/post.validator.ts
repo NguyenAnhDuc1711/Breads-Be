@@ -86,10 +86,13 @@ export const getPostSchema = {
 
 // Route DUY NHẤT không bọc `asyncHandler` -> `validate()` bắt buộc phải đồng bộ (AD-4), nếu không
 // payload sai sẽ TREO request thay vì trả 400.
+// Bước 3 (access-control-hardening): `authorId` ĐÃ BỎ khỏi schema. Danh tính tác giả lấy từ
+// `req.user` (`protectRoute`), không phải từ payload — khai báo nó ở đây là hợp thức hoá việc
+// client tự khai mình là ai. `z.object()` strip key không khai báo nên client cũ vẫn gửi `authorId`
+// vẫn đi lọt tầng validate, chỉ là giá trị bị vứt bỏ trước khi tới controller (không breaking).
 export const createPostSchema = {
   body: z.object({
     _id: objectIdSchema,
-    authorId: objectIdSchema,
     // FR-3: required, luôn là string -> `.transform()` trực tiếp, không cần guard undefined.
     content: z.string().max(500).transform((val) => sanitizeText(val)),
     media: z.array(z.any()).optional(),
@@ -105,9 +108,12 @@ export const createPostSchema = {
   query: z.object({ action: z.string().optional() }),
 };
 
+// Bước 3: `query.userId` ĐÃ BỎ — quyền xoá đối chiếu `post.authorId` với `req.user._id`, không
+// với giá trị do chính người gọi cung cấp. Giữ `query: z.object({})` (thay vì xoá hẳn key `query`)
+// để `validate()` vẫn strip mọi query param lạ thay vì để chúng đi thẳng vào controller.
 export const deletePostSchema = {
   params: z.object({ id: objectIdSchema }),
-  query: z.object({ userId: objectIdSchema }),
+  query: z.object({}),
 };
 
 // FAIL-1 (epic `unified-payload-sanitize`, task 010): `content` LÀ optional, và
@@ -119,7 +125,7 @@ export const deletePostSchema = {
 export const updatePostSchema = {
   body: z.object({
     _id: objectIdSchema,
-    userId: objectIdSchema,
+    // Bước 3: `userId` ĐÃ BỎ — cùng lý do `authorId` ở `createPostSchema`.
     content: z
       .string()
       .max(500)
@@ -139,10 +145,10 @@ export const likeUnlikePostSchema = {
 
 // AD-5: body KHÔNG coerce — `express.json()` đã cho đúng kiểu JS, nên `isAdd: "true"` (string)
 // phải fail chứ không được ép thành boolean.
+// Bước 3: `userId` ĐÃ BỎ — phiếu luôn ghi cho người đang đăng nhập.
 export const tickPostSurveySchema = {
   body: z.object({
     optionId: objectIdSchema,
-    userId: objectIdSchema,
     isAdd: z.boolean(),
   }),
 };
@@ -150,12 +156,12 @@ export const tickPostSurveySchema = {
 const POST_STATUS_VALUES: number[] = Object.values(Constants.POST_STATUS);
 
 // Task 011 correction: postId chuyển từ body vào params.id (route PATCH /:id/status).
+// Bước 10: `userId` ĐÃ BỎ — quyền xét trên `req.user.role` (protectRoute đã nạp), không phải trên userId client gửi.
 export const updatePostStatusSchema = {
   params: z.object({
     id: objectIdSchema,
   }),
   body: z.object({
-    userId: objectIdSchema,
     // Task 009: enum-validate — trước đây nhận bất kỳ số nào, cùng pattern `visibilitySchema` ở
     // trên đã làm cho `visibility`.
     status: z.number().refine(
@@ -166,12 +172,12 @@ export const updatePostStatusSchema = {
 };
 
 // Task 011 correction: postId chuyển từ body vào params.id (route PATCH /:id/visibility).
+// #13: `userId` ĐÃ BỎ — quyền xét trên `req.user` (chủ sở hữu hoặc admin/mod).
 export const updatePostVisibilitySchema = {
   params: z.object({
     id: objectIdSchema,
   }),
   body: z.object({
-    userId: objectIdSchema,
     visibility: visibilitySchema,
   }),
 };

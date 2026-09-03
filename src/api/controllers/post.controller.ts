@@ -5,6 +5,7 @@ import PostConstants from "../../Breads-Shared/Constants/PostConstants.js";
 import { IPost } from "../../Breads-Shared/Types/index.js";
 import { CREATED, OK } from "../../core/success.response.js";
 import {
+  ForbiddenError,
   AuthFailureError,
   BadRequestError,
   NotFoundError,
@@ -31,6 +32,7 @@ import {
 } from "../services/post.js";
 import { uploadFileFromBase64 } from "../utils/index.js";
 import { validateMediaUrl } from "../validators/validateMediaUrl.ts";
+import { assertRole } from "../middlewares/requireRole.js";
 
 /**
  * FR-10 / Task 090 fix: một payload "giống repost" (copy nội dung bài khác vào `quote.content`)
@@ -141,7 +143,9 @@ export const processNewPostMediaItem = async (
     const mediaUrl = await uploadFileFromBase64({ base64: item.url });
     return { ...item, url: mediaUrl };
   }
-  if (!validateMediaUrl(item.url, { namespace: "post", expectedKey: authorId })) {
+  if (
+    !validateMediaUrl(item.url, { namespace: "post", expectedKey: authorId })
+  ) {
     return null;
   }
   return item;
@@ -153,7 +157,6 @@ export const createPost = async (req, res) => {
   const action = req.query.action;
   const {
     _id,
-    authorId,
     content,
     media,
     parentPost,
@@ -164,10 +167,16 @@ export const createPost = async (req, res) => {
     links,
     files,
   } = payload;
-  const user = await User.findById(authorId);
-  if (!user) {
-    throw new NotFoundError("User not found");
-  }
+  // Bước 3 (access-control-hardening): tác giả lấy từ JWT (`protectRoute` gán `req.user`), KHÔNG
+  // còn từ `payload.authorId` — route này trước đây không có guard nào, nên bất kỳ ai cũng đăng
+  // được bài dưới tên người khác (probe V2a xác nhận 201 + document ghi vào DB với authorId nạn nhân).
+  //
+  // `String(...)` BẮT BUỘC, không được truyền thẳng ObjectId: `validateMediaUrl` so sánh
+  // `parsed.key === options.expectedKey` bằng `===` trên chuỗi (`validateMediaUrl.ts:37`), nên một
+  // ObjectId sẽ KHÔNG BAO GIỜ khớp và mọi media hợp lệ bị từ chối "Invalid media URL".
+  const authorId = String(req.user._id);
+  // `User.findById(authorId)` cũ đã bỏ: `protectRoute` vừa nạp chính document đó vào `req.user`,
+  // và một userId đến từ JWT đã xác thực thì không thể "không tồn tại" như khi client tự khai.
   if (
     !content.trim() &&
     !media?.[0]?.url &&
@@ -180,9 +189,7 @@ export const createPost = async (req, res) => {
   }
   const maxLength = 500;
   if (content.length > maxLength) {
-    throw new BadRequestError(
-      `Text must be less than ${maxLength} characters`,
-    );
+    throw new BadRequestError(`Text must be less than ${maxLength} characters`);
   }
   // [plan-review] `visibility` do client gửi lên phải nằm trong enum — chặn ở đây thay vì để
   // Mongoose enum ném ValidationError 500 lúc `.save()`.
@@ -377,15 +384,15 @@ export const getPostReplies = async (req, res) => {
 //delete Post
 export const deletePost = async (req, res) => {
   const postId = req.params.id;
-  const userId = req.query.userId;
-  if (!postId || !userId) {
-    throw new BadRequestError("Empty payload");
-  }
+  // Bước 3: danh tính từ JWT thay cho `req.query.userId`. Phép so sánh cũ đối chiếu
+  // `post.authorId` với một giá trị do CHÍNH kẻ gọi cung cấp — truyền đúng authorId thật của bài
+  // là qua ngay (probe V2c xác nhận xoá được bài người khác mà không cần đăng nhập).
+  const userId = String(req.user._id);
   const post = await Post.findById(postId);
   if (!post) {
     throw new NotFoundError("Post not found");
   }
-  if (post.authorId.toString() !== userId.toString()) {
+  if (post.authorId.toString() !== userId) {
     throw new AuthFailureError("Unauthorized to delete post");
   }
   // Cascade xoá con: trước đây đọc `post.replies` (mảng nhúng) rồi `updateMany({_id:{$in:...}})`.
@@ -438,7 +445,8 @@ export const updatePost = async (req, res) => {
     throw new NotFoundError("Post not found");
   }
 
-  if (post.authorId.toString() !== payload.userId.toString()) {
+  // Bước 3: cùng lớp lỗi với `deletePost` — `payload.userId` do client tự khai (probe V2b).
+  if (post.authorId.toString() !== String(req.user._id)) {
     throw new AuthFailureError("Unauthorized to update this post");
   }
   let newSurvey = [];
@@ -467,9 +475,7 @@ export const updatePost = async (req, res) => {
   // `media === undefined` (client không gửi field này, vd. chỉ update `survey`) -> không đụng
   // `post.media`, giữ nguyên giá trị hiện có.
   if (media !== undefined) {
-    const existingUrls = new Set(
-      (post.media || []).map((m: any) => m?.url),
-    );
+    const existingUrls = new Set((post.media || []).map((m: any) => m?.url));
     const processedMedia = [];
     for (const item of media) {
       if (existingUrls.has(item.url)) {
@@ -556,7 +562,10 @@ export const getPosts = async (req, res) => {
   // giá trị client tự khai trong query.
   if (isAdminPage) {
     const viewer = await User.findById(req.viewerId);
-    const allowedRoles = [Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR];
+    const allowedRoles = [
+      Constants.USER_ROLE.ADMIN,
+      Constants.USER_ROLE.MODERATOR,
+    ];
     if (!viewer || !allowedRoles.includes(viewer.role)) {
       throw new AuthFailureError("Admin/Moderator only");
     }
@@ -602,7 +611,9 @@ export const getSitemapEligiblePosts = async (req, res) => {
   // ĐÚNG index có sẵn từ hệ feed ranking (`post.model.ts`, `{engagementScore:-1,_id:-1}`) — không
   // cần index mới cho post (khác user, xem user.model.ts).
   const { cursor, limit } = req.query as { cursor?: string; limit: number };
-  const [cursorScore, cursorId] = cursor ? cursor.split(":") : [undefined, undefined];
+  const [cursorScore, cursorId] = cursor
+    ? cursor.split(":")
+    : [undefined, undefined];
 
   const baseFilter = {
     status: Constants.POST_STATUS.PUBLIC,
@@ -651,10 +662,10 @@ export const getSitemapEligiblePosts = async (req, res) => {
 };
 
 export const tickPostSurvey = async (req, res) => {
-  const { optionId, userId, isAdd } = req.body;
-  if (!optionId || !userId) {
-    throw new BadRequestError("Empty payload");
-  }
+  const { optionId, isAdd } = req.body;
+  // Bước 3: phiếu ghi cho NGƯỜI ĐANG ĐĂNG NHẬP, không cho `req.body.userId` (probe V5: nhồi phiếu
+  // dưới danh nghĩa người khác mà không cần đăng nhập).
+  const userId = ObjectId(String(req.user._id));
   if (isAdd) {
     await SurveyOption.updateOne(
       { _id: ObjectId(optionId) },
@@ -681,18 +692,17 @@ export const updatePostStatus = async (req, res) => {
   // PATCH /:id/status từ đầu task 011 nhưng controller quên đổi nguồn đọc, khiến :id trong URL
   // vô nghĩa (client có thể gửi bất kỳ chuỗi nào ở đó, danh tính thật vẫn qua body). Phát hiện khi
   // viết lại FE call site (T020).
-  const { userId, status } = req.body;
+  const { status } = req.body;
   const { id: postId } = req.params;
-  if (!userId || !postId) {
+  if (!postId) {
     throw new BadRequestError("Empty payload");
   }
-  const userInfo = await User.findOne({
-    _id: ObjectId(userId),
-  });
-  const allowedRoles = [Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR];
-  if (!allowedRoles.includes(userInfo?.role)) {
-    throw new AuthFailureError("Admin/Moderator only");
-  }
+  // Bước 10: quyền xét trên `req.user` thay vì trên document tra theo `userId` client gửi.
+  assertRole(
+    req.user,
+    Constants.USER_ROLE.ADMIN,
+    Constants.USER_ROLE.MODERATOR,
+  );
   await Post.updateOne(
     {
       _id: ObjectId(postId),
@@ -711,9 +721,9 @@ export const updatePostStatus = async (req, res) => {
 // đụng tới field `status` — hai field độc lập (SC-8). Quyền: tác giả bài viết, không phải admin.
 export const updatePostVisibility = async (req, res) => {
   // Task 011 correction — cùng lý do với updatePostStatus ở trên: postId từ req.params.id.
-  const { userId, visibility } = req.body;
+  const { visibility } = req.body;
   const { id: postId } = req.params;
-  if (!userId || !postId) {
+  if (!postId) {
     throw new BadRequestError("Empty payload");
   }
   const validVisibilityValues: number[] = Object.values(
@@ -726,8 +736,22 @@ export const updatePostVisibility = async (req, res) => {
   if (!post) {
     throw new NotFoundError("Post not found");
   }
-  if (post.authorId.toString() !== userId.toString()) {
-    throw new AuthFailureError("Unauthorized to update this post");
+  // Route này TRƯỚC ĐÂY tự mâu thuẫn: `requireRole(ADMIN, MODERATOR)` ở tầng route chỉ cho admin/mod
+  // vào, còn controller lại đòi người gọi phải LÀ TÁC GIẢ bài. Hệ quả: user thường bấm đổi quyền
+  // riêng tư bài của chính mình (menu do `Actions.tsx:166` hiện cho `isAuthor`) luôn nhận 403 —
+  // tính năng hỏng, không phải lỗ hổng. Đồng thời `userId` lấy từ body nên admin muốn kiểm duyệt
+  // bài người khác chỉ cần gửi kèm authorId của bài đó: phép so sánh cũ không ràng buộc được gì.
+  //
+  // Chính sách mới, tường minh: CHỦ SỞ HỮU hoặc ADMIN/MODERATOR. Cả hai vế đều xét trên `req.user`.
+  const isOwner = post.authorId.toString() === String(req.user._id);
+  const isModerator = [
+    Constants.USER_ROLE.ADMIN,
+    Constants.USER_ROLE.MODERATOR,
+  ].includes(req.user?.role);
+  if (!isOwner && !isModerator) {
+    throw new ForbiddenError(
+      "Chỉ tác giả hoặc quản trị viên mới đổi được quyền riêng tư",
+    );
   }
   await Post.updateOne(
     {
@@ -805,7 +829,7 @@ export const getPostActivities = async (req, res) => {
       .populate("authorId", "_id username name avatar bio followersCount");
 
     users = repostPosts
-      .map((r: any) => ((r.authorId as any)?.toObject?.() || r.authorId))
+      .map((r: any) => (r.authorId as any)?.toObject?.() || r.authorId)
       .filter((u) => u && u._id);
   }
 
@@ -816,7 +840,7 @@ export const getPostActivities = async (req, res) => {
       followeeId: { $in: userIds },
     });
     const followingSet = new Set(
-      followingDocs.map((f: any) => f.followeeId.toString())
+      followingDocs.map((f: any) => f.followeeId.toString()),
     );
     users = users.map((u) => ({
       ...(typeof u.toObject === "function" ? u.toObject() : u),
@@ -836,4 +860,3 @@ export const getPostActivities = async (req, res) => {
     },
   }).send(res);
 };
-

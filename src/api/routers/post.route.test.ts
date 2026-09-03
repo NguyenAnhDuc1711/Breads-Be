@@ -310,7 +310,8 @@ test("createPostSchema: payload đầy đủ hợp lệ pass", () => {
     usersTag: [VALID_ID],
     visibility: Constants.POST_VISIBILITY.PUBLIC,
   });
-  assert.equal(body.authorId, OTHER_ID);
+  // Bước 3: `authorId` không còn trong schema nên không còn trên kiểu kết quả — assert đã chuyển
+  // sang test riêng "không còn nhận authorId" bên dưới. Ở đây chỉ giữ phần `visibility`.
   assert.equal(body.visibility, Constants.POST_VISIBILITY.PUBLIC);
 });
 
@@ -327,11 +328,60 @@ test("createPostSchema: content > 500 ký tự fail", () => {
   );
 });
 
-test("createPostSchema: visibility ngoài enum fail, thiếu authorId fail", () => {
-  const base = { _id: VALID_ID, authorId: OTHER_ID, content: "hi", type: "create" };
+test("createPostSchema: visibility ngoài enum fail", () => {
+  const base = { _id: VALID_ID, content: "hi", type: "create" };
   assert.throws(() => createPostSchema.body.parse({ ...base, visibility: 99 }), z.ZodError);
-  const { authorId, ...withoutAuthor } = base;
-  assert.throws(() => createPostSchema.body.parse(withoutAuthor), z.ZodError);
+});
+
+/* ------------------------- Bước 3 (access-control-hardening): danh tính rời khỏi payload ------ */
+
+// ĐẢO NGƯỢC kỳ vọng cũ ("thiếu authorId -> fail"). `authorId` giờ KHÔNG còn là field hợp lệ: payload
+// không có nó vẫn parse được, và payload CÓ nó thì giá trị bị strip trước khi tới controller —
+// client không còn cửa nào tự khai mình là tác giả (probe V2a).
+test("Bước 3: createPostSchema không còn nhận authorId — thiếu thì pass, gửi kèm thì bị strip", () => {
+  const base = { _id: VALID_ID, content: "hi", type: "create" };
+  assert.doesNotThrow(() => createPostSchema.body.parse(base));
+  const parsed: any = createPostSchema.body.parse({ ...base, authorId: OTHER_ID });
+  assert.equal(parsed.authorId, undefined, "authorId do client gửi phải bị strip");
+});
+
+test("Bước 3: updatePostSchema không còn nhận userId — gửi kèm thì bị strip", () => {
+  const parsed: any = updatePostSchema.body.parse({ _id: VALID_ID, userId: OTHER_ID });
+  assert.equal(parsed.userId, undefined, "userId do client gửi phải bị strip");
+});
+
+test("Bước 3: deletePostSchema không còn yêu cầu query.userId — vắng thì pass, gửi kèm thì bị strip", () => {
+  assert.doesNotThrow(() => deletePostSchema.query.parse({}));
+  const parsed: any = deletePostSchema.query.parse({ userId: OTHER_ID });
+  assert.equal(parsed.userId, undefined, "userId do client gửi phải bị strip");
+});
+
+test("Bước 3: tickPostSurveySchema không còn nhận userId — gửi kèm thì bị strip", () => {
+  const parsed: any = tickPostSurveySchema.body.parse({
+    optionId: VALID_ID,
+    isAdd: true,
+    userId: OTHER_ID,
+  });
+  assert.equal(parsed.userId, undefined, "userId do client gửi phải bị strip");
+});
+
+// Guard chống hồi quy ở tầng wiring: 4 route GHI của post đều phải có `protectRoute`. Không có nó
+// thì mọi thay đổi ở trên vô nghĩa — controller sẽ đọc `req.user._id` của `undefined` và ném 500
+// thay vì 401, một chế độ hỏng khó truy hơn hẳn lỗ hổng ban đầu.
+test("Bước 3 (wiring): 4 route ghi của posts đều có protectRoute", async () => {
+  const src = await readRouteSource();
+  for (const [marker, label] of [
+    ["router.post(CREATE, protectRoute,", "POST /posts"],
+    ['router.delete("/:id", protectRoute,', "DELETE /posts/:id"],
+    ["router.put(UPDATE, protectRoute,", "PUT /posts/:id"],
+  ] as const) {
+    assert.ok(src.includes(marker), `${label} phải có protectRoute`);
+  }
+  const tickSurvey = src.slice(src.indexOf("router.post(\n  TICK_SURVEY,"));
+  assert.ok(
+    tickSurvey.slice(0, tickSurvey.indexOf(");")).includes("protectRoute"),
+    "POST /posts/:id/survey-ticks phải có protectRoute"
+  );
 });
 
 /* ---------------------------------- Task 010 (FR-3/FR-5/FAIL-1): sanitize post.content ---------------------------------- */
@@ -450,7 +500,7 @@ test("updatePostVisibilitySchema / updatePostStatusSchema: giá trị sai bị t
 // AD-5: chỉ query/params mới coerce. Body tới từ `express.json()` nên đã đúng kiểu — "true" dạng
 // string là lỗi client thật sự, không được nuốt.
 test("AD-5: tickPostSurveySchema — isAdd là string \"true\" bị từ chối, boolean thì pass", () => {
-  const base = { optionId: VALID_ID, userId: OTHER_ID };
+  const base = { optionId: VALID_ID };
   assert.equal(tickPostSurveySchema.body.parse({ ...base, isAdd: true }).isAdd, true);
   assert.throws(
     () => tickPostSurveySchema.body.parse({ ...base, isAdd: "true" }),
@@ -724,7 +774,16 @@ const createPostApp = () => {
   const app = express();
   app.use(express.json());
   const router = express.Router();
-  router.post(POST_PATH.CREATE, validate(createPostSchema), asyncHandler(createPost));
+  // Bước 3 (access-control-hardening): route thật giờ có `protectRoute` đứng trước `validate`, và
+  // `createPost` đọc tác giả từ `req.user._id`. Harness này CỐ Ý stub thay vì mount `protectRoute`
+  // thật (nó cần JWT + Mongo): mục tiêu của nhóm test R-6 là guard repost, không phải tầng auth —
+  // auth đã có test riêng. Thiếu stub thì mọi test R-6 trả 500 (đọc `_id` của undefined) và không
+  // còn chứng minh được điều gì về guard repost.
+  const fakeProtectRoute = (req: any, _res: any, next: any) => {
+    req.user = { _id: AUTHOR_ID };
+    next();
+  };
+  router.post(POST_PATH.CREATE, fakeProtectRoute, validate(createPostSchema), asyncHandler(createPost));
   app.use(Route.POST, router);
   app.use(errorHandler);
   return app;
@@ -762,7 +821,7 @@ const withStubbedModels = async (
  * nằm trong body — nó chỉ tồn tại ở query string, nên bỏ query = bỏ tín hiệu `action`. */
 const quotePayload = (type: string) => ({
   _id: "652f1b2c3d4e5f6071829308",
-  authorId: AUTHOR_ID,
+  // `authorId` đã bỏ khỏi payload (bước 3) — tác giả đến từ `req.user`, xem `fakeProtectRoute`.
   content: "",
   media: [],
   survey: [],
@@ -1454,11 +1513,19 @@ test("isAdminViewer trả false cho USER thường, cho user không tồn tại,
 
 /* --------------------------- Task 009: role-gate cho updatePostStatus (MODERATOR) ------------ */
 
-const updatePostStatusApp = () => {
+// Bước 10 (access-control-hardening): `updatePostStatus` xét quyền trên `req.user.role` (do
+// `protectRoute` gán) thay vì tra `User.findOne({_id: req.body.userId})`. Harness stub `req.user`
+// thay vì stub tầng model — mô phỏng đúng thứ production cung cấp.
+const updatePostStatusApp = (role: number) => {
   const app = express();
   app.use(express.json());
+  const fakeProtectRoute = (req: any, _res: any, next: any) => {
+    req.user = { _id: VALID_ID, role };
+    next();
+  };
   app.patch(
     "/posts/:id/status",
+    fakeProtectRoute,
     validate(updatePostStatusSchema),
     asyncHandler(updatePostStatus),
   );
@@ -1467,12 +1534,10 @@ const updatePostStatusApp = () => {
 };
 
 test("Task 009: PATCH /posts/:id/status role=MODERATOR -> 200 (trước đây 403/401, bug pattern ADMIN-only)", async () => {
-  const originalFindOne = (User as any).findOne;
   const originalUpdateOne = (Post as any).updateOne;
-  (User as any).findOne = async () => ({ role: Constants.USER_ROLE.MODERATOR });
   (Post as any).updateOne = async () => ({ acknowledged: true });
   try {
-    await withServer(updatePostStatusApp(), async (base) => {
+    await withServer(updatePostStatusApp(Constants.USER_ROLE.MODERATOR), async (base) => {
       const res = await fetch(`${base}/posts/${VALID_ID}/status`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -1484,7 +1549,32 @@ test("Task 009: PATCH /posts/:id/status role=MODERATOR -> 200 (trước đây 40
       assert.equal(res.status, 200);
     });
   } finally {
-    (User as any).findOne = originalFindOne;
+    (Post as any).updateOne = originalUpdateOne;
+  }
+});
+
+// Đối chứng cho test trên: cùng harness, chỉ đổi role -> phải bị chặn. Không có nó, test
+// "MODERATOR -> 200" vẫn xanh kể cả khi `assertRole` bị gỡ hoàn toàn.
+test("Bước 10 (đối chứng): PATCH /posts/:id/status role=USER -> 403, không chạm Post.updateOne", async () => {
+  const originalUpdateOne = (Post as any).updateOne;
+  let updateCalled = false;
+  (Post as any).updateOne = async () => {
+    updateCalled = true;
+    return { acknowledged: true };
+  };
+  try {
+    await silenceWarn(() =>
+      withServer(updatePostStatusApp(Constants.USER_ROLE.USER), async (base) => {
+        const res = await fetch(`${base}/posts/${VALID_ID}/status`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ status: Constants.POST_STATUS.PUBLIC }),
+        });
+        assert.equal(res.status, 403);
+        assert.equal(updateCalled, false, "USER thường không được chạm tới DB");
+      }),
+    );
+  } finally {
     (Post as any).updateOne = originalUpdateOne;
   }
 });
@@ -1492,7 +1582,8 @@ test("Task 009: PATCH /posts/:id/status role=MODERATOR -> 200 (trước đây 40
 // AC "Enum-validate": status ngoài {0 (PRE_ACCEPT), 1 (PUBLIC), 4 (DELETED)} phải bị 400 ở tầng
 // schema, không chạm tới DB.
 test("Task 009 (enum-validate): updatePostStatusSchema từ chối status ngoài enum {0,1,4}", () => {
-  const ids = { userId: VALID_ID };
+  // Bước 10: body chỉ còn `status` — `userId` đã bỏ khỏi schema.
+  const ids = {};
   for (const status of Object.values(Constants.POST_STATUS) as number[]) {
     assert.doesNotThrow(() => updatePostStatusSchema.body.parse({ ...ids, status }));
   }

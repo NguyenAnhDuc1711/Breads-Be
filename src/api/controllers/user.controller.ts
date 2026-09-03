@@ -5,10 +5,11 @@ import { genRandomCode } from "../../Breads-Shared/util/index.js";
 import {
   AuthFailureError,
   BadRequestError,
+  ForbiddenError,
   NotFoundError,
 } from "../../core/error.response.js";
 import { CREATED, OK } from "../../core/success.response.js";
-import { deleteCache, getCache, setCache } from "../../dbs/redis.ts";
+import { deleteCache, getCache, getRedisInstance, setCache } from "../../dbs/redis.ts";
 import { ObjectId } from "../../utils/index.js";
 import { crawlUser } from "../crawl.js";
 import Follow from "../models/follow.model.js";
@@ -28,7 +29,10 @@ import RefreshToken from "../models/refreshToken.model.js";
 import TokenBlacklist from "../models/tokenBlacklist.model.js";
 import logger from "../../core/logger.js";
 import bcrypt from "bcryptjs";
-import { uploadFileFromBase64, validateEmailForm } from "../utils/index.js";
+import { forgotPWMailForm, uploadFileFromBase64, validateEmailForm } from "../utils/index.js";
+import ALLOWED_ORIGINS from "../../utils/allowedOrigins.ts";
+import { isAccountRestricted } from "../../utils/accountStatus.ts";
+import { assertRole } from "../middlewares/requireRole.js";
 
 //sign up
 export const signupUser = async (req, res) => {
@@ -108,8 +112,18 @@ export const loginUser = async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ email: email });
 
+  // Bước 6 (V8): "Account not found" và "Wrong password" trước đây là 2 thông báo KHÁC NHAU, tức
+  // endpoint login tự nó trả lời câu hỏi "email này có tài khoản không" cho bất kỳ ai hỏi. Gộp về
+  // MỘT thông báo duy nhất cho cả 2 nhánh.
+  //
+  // `!user` vẫn phải return sớm (không thể so mật khẩu với thứ không tồn tại), nên vẫn còn chênh
+  // lệch thời gian phản hồi giữa 2 nhánh — bcrypt chạy ở nhánh có user, không chạy ở nhánh không.
+  // Đây là timing oracle mức thấp, đo được nhưng nhiễu qua mạng thật; đóng nó cần chạy bcrypt giả
+  // trên một hash cố định, chi phí CPU thật cho mọi lần đăng nhập sai. Chấp nhận có ý thức, ghi
+  // lại ở đây để lần review sau không tưởng là bỏ sót.
+  const INVALID_CREDENTIALS = "Email hoặc mật khẩu không đúng";
   if (!user) {
-    throw new BadRequestError("Account not found");
+    throw new AuthFailureError(INVALID_CREDENTIALS);
   }
 
   let isPasswordCorrect = false;
@@ -127,7 +141,21 @@ export const loginUser = async (req, res) => {
   }
 
   if (!isPasswordCorrect) {
-    throw new AuthFailureError("Wrong password");
+    throw new AuthFailureError(INVALID_CREDENTIALS);
+  }
+
+  // Bước 6 (V9): chặn SAU khi xác thực mật khẩu, không phải trước — nếu chặn trước, endpoint sẽ
+  // tiết lộ trạng thái tài khoản cho người chỉ đoán email mà không biết mật khẩu.
+  if (isAccountRestricted(user.status)) {
+    logger.warn(
+      { userId: String(user._id), status: user.status },
+      "login bị từ chối — tài khoản đang bị khoá/cấm",
+    );
+    throw new ForbiddenError(
+      user.statusReason
+        ? `Tài khoản đang bị hạn chế: ${user.statusReason}`
+        : "Tài khoản đang bị hạn chế",
+    );
   }
 
   const result = await getUserInfo(user._id);
@@ -234,14 +262,17 @@ export const refreshTokenHandler = async (req, res) => {
 
 //follow and unfollow
 export const followUser = async (req, res) => {
-  const { userFlId, userId } = req.body;
-  if (!userFlId || !userId) {
-    throw new BadRequestError("Empty payload");
-  }
-  const userInfo = await User.findOne({ _id: ObjectId(userId) });
-  if (!userInfo) {
-    throw new NotFoundError("User not found");
-  }
+  const { userFlId } = req.body;
+  // Bước 4 (access-control-hardening): NGƯỜI FOLLOW luôn là người đang đăng nhập. Route này VỐN ĐÃ
+  // có `protectRoute`, nhưng controller lại đọc `req.body.userId` — nên bất kỳ tài khoản hợp lệ nào
+  // cũng ép được user khác follow/unfollow ai đó (probe V4). Đây là ca điển hình cho thấy thêm guard
+  // vào route là chưa đủ: nguồn danh tính trong controller mới là thứ quyết định.
+  //
+  // Hệ quả không hiển nhiên của lỗ hổng cũ: `followersCount` bị bơm chính là ngưỡng celebrity của
+  // feed (`FEED_CELEBRITY_FOLLOWER_THRESHOLD`), nên nó đổi cả chiến lược fan-out của hệ thống.
+  const userId = String(req.user._id);
+  // `User.findOne` cũ đã bỏ: userId đến từ JWT đã xác thực, `protectRoute` vừa nạp chính document
+  // đó vào `req.user` — không thể "không tồn tại" như khi client tự khai.
   await toggleFollow(userId, userFlId);
   new OK({
     message: "Follow user successfully",
@@ -354,16 +385,17 @@ export const adminUpdateUser = async (req, res) => {
   }).send(res);
 };
 
+/**
+ * Đổi mật khẩu KHI ĐÃ ĐĂNG NHẬP.
+ *
+ * Danh tính do `protectRoute` + `requireSelfOrRole(ADMIN)` ở tầng route bảo đảm (`user.route.ts`),
+ * nên `req.params.id` tại đây đã là "chính chủ hoặc admin" — không còn là giá trị client tự khai
+ * như trước. Nhánh `forgotPW` đã bị XOÁ HẲN: quên mật khẩu giờ đi qua
+ * `requestPasswordReset`/`confirmPasswordReset` bên dưới, nơi mã OTP được server sinh và đối chiếu.
+ */
 export const changePassword = async (req, res) => {
   const { currentPW, newPW } = req.body;
-  const forgotPW = req.body?.forgotPW;
   const userId = req.params.id;
-  if (!userId) {
-    throw new BadRequestError("Empty userId");
-  }
-  if ((!currentPW || !newPW) && !forgotPW) {
-    throw new BadRequestError("Empty payload");
-  }
   const user = await User.findOne({ _id: ObjectId(userId) });
   if (!user) {
     throw new BadRequestError("User not found");
@@ -377,23 +409,191 @@ export const changePassword = async (req, res) => {
     }
   }
 
-  if (!isCurrentPWCorrect && !forgotPW) {
+  if (!isCurrentPWCorrect) {
     throw new AuthFailureError("Wrong password");
-  } else if (newPW.length < 6) {
-    throw new BadRequestError("Password must be at least 6 characters");
-  } else if (currentPW === newPW && !forgotPW) {
+  }
+  if (currentPW === newPW) {
     throw new BadRequestError("Nothing change");
   }
 
-  const hashedNewPW = await bcrypt.hash(newPW, 10);
-  await User.updateOne(
-    { _id: ObjectId(userId) },
-    {
-      password: hashedNewPW,
-    },
-  );
+  await applyNewPassword(user._id, newPW, {
+    // Giữ lại ĐÚNG session đang thao tác (refresh token trong cookie của chính request này) và
+    // huỷ mọi session khác: đổi mật khẩu phải đá kẻ đã chiếm phiên ra ngoài, nhưng không có lý do
+    // bắt chính người vừa đổi phải đăng nhập lại.
+    keepRefreshTokenRaw: req.cookies?.refreshToken,
+  });
+
   new OK({
     message: "Change password successfully",
+    metadata: {},
+  }).send(res);
+};
+
+/* ------------------------------------------------- quên mật khẩu (server-side) */
+
+const PW_RESET_TTL_SECONDS = 15 * 60;
+const PW_RESET_MAX_ATTEMPTS = 5;
+
+const pwResetCacheKey = (userId: string) => `pw_reset_${userId}`;
+
+type PwResetEntry = { codeHash: string; attempts: number };
+
+/**
+ * Hash mã trước khi lưu — cùng lý do `RefreshToken` chỉ lưu hash (`generateTokens.ts`): dump Redis
+ * hoặc file RDB backup không được phép chứa thứ dùng lại được ngay.
+ */
+const hashResetCode = (code: string) => hashToken(code.toUpperCase());
+
+/**
+ * Đọc + xác thực mã reset. Trả `userId` khi hợp lệ, `null` khi không — KHÔNG phân biệt "mã sai" với
+ * "không có yêu cầu reset nào" ở tầng gọi, để không rò rỉ tài khoản nào đang có phiên reset.
+ *
+ * Đếm số lần sai và tự huỷ mã sau `PW_RESET_MAX_ATTEMPTS`: mã chỉ 6 ký tự nên `authTierLimiter`
+ * (5 req/phút/IP) là lớp chặn brute-force chính, còn bộ đếm này chặn nốt trường hợp kẻ tấn công
+ * xoay IP.
+ */
+const consumeResetCode = async (
+  userId: string,
+  code: string,
+  { deleteOnSuccess }: { deleteOnSuccess: boolean },
+): Promise<boolean> => {
+  const key = pwResetCacheKey(userId);
+  const entry = await getCache<PwResetEntry>(key);
+  if (!entry?.codeHash) return false;
+
+  if (entry.codeHash !== hashResetCode(code)) {
+    const attempts = (entry.attempts ?? 0) + 1;
+    if (attempts >= PW_RESET_MAX_ATTEMPTS) {
+      await deleteCache(key);
+    } else {
+      // TTL giữ nguyên theo mốc phát hành ban đầu — ghi lại entry với TTL còn lại xấp xỉ là đủ,
+      // không được reset TTL về 15 phút mỗi lần đoán sai (sẽ thành cửa gia hạn vô hạn).
+      const ttl = await getRemainingTtl(key);
+      if (ttl > 0) await setCache(key, { ...entry, attempts }, ttl);
+    }
+    return false;
+  }
+
+  if (deleteOnSuccess) await deleteCache(key);
+  return true;
+};
+
+const getRemainingTtl = async (key: string): Promise<number> => {
+  const redis = getRedisInstance();
+  if (!redis) return 0;
+  try {
+    return await redis.ttl(key);
+  } catch {
+    return 0;
+  }
+};
+
+/**
+ * Đổi mật khẩu + dọn session, dùng chung cho cả `changePassword` lẫn `confirmPasswordReset`.
+ *
+ * Việc revoke refresh token là BẮT BUỘC, không phải "nice to have": trước đây đổi mật khẩu không
+ * đụng tới `RefreshToken`, nên một phiên đã bị chiếm vẫn sống thêm 7 ngày sau khi nạn nhân đổi
+ * mật khẩu — tức là hành động khắc phục của nạn nhân không khắc phục được gì.
+ */
+const applyNewPassword = async (
+  userId: any,
+  newPW: string,
+  { keepRefreshTokenRaw }: { keepRefreshTokenRaw?: string } = {},
+) => {
+  const hashedNewPW = await bcrypt.hash(newPW, 10);
+  await User.updateOne({ _id: ObjectId(String(userId)) }, { password: hashedNewPW });
+
+  const filter: any = { userId: ObjectId(String(userId)) };
+  if (keepRefreshTokenRaw) {
+    filter.token = { $ne: hashToken(keepRefreshTokenRaw) };
+  }
+  await RefreshToken.deleteMany(filter);
+};
+
+/**
+ * Bước 1/3 của luồng quên mật khẩu: server sinh mã, lưu hash vào Redis, gửi mail.
+ *
+ * LUÔN trả 200 kể cả khi email không tồn tại (AD: chống dò tài khoản). Trước đây FE phải gọi
+ * `/validity-checks` rồi `/id-lookup` để biết email có thật và lấy `userId` — cả hai đều là
+ * endpoint công khai trả lời thẳng câu hỏi "tài khoản này có tồn tại không". Ở đây thì không.
+ */
+export const requestPasswordReset = async (req, res) => {
+  const { email } = req.body;
+  const user = await User.findOne({ email }, { _id: 1 }).lean();
+
+  if (user) {
+    const code = genRandomCode();
+    const expireMinutes = PW_RESET_TTL_SECONDS / 60;
+    const clientOrigin =
+      process.env.FE_BASE_URL || ALLOWED_ORIGINS[0] || "http://localhost:3000";
+    const url = `${clientOrigin}/reset-pw/${user._id}/${code}`;
+
+    await setCache(
+      pwResetCacheKey(String(user._id)),
+      { codeHash: hashResetCode(code), attempts: 0 } as PwResetEntry,
+      PW_RESET_TTL_SECONDS,
+    );
+    // `from`/`subject`/`url` do SERVER quyết định, không nhận từ body — endpoint cũ
+    // `POST /util/send-forgot-pw-mail` nhận cả 3 từ client nên biến SMTP của hệ thống thành
+    // công cụ gửi mail lừa đảo tới địa chỉ bất kỳ (probe V7).
+    await sendMailService({
+      from: undefined,
+      to: email,
+      subject: "Reset password",
+      html: forgotPWMailForm(email, code, url),
+    });
+    logger.info({ userId: String(user._id), expireMinutes }, "password reset code issued");
+  }
+
+  new OK({
+    message: "If the email exists, a reset code has been sent",
+    metadata: {},
+  }).send(res);
+};
+
+/**
+ * Bước 2/3: người dùng gõ mã trong popup. Trả `userId` để FE điều hướng sang trang đặt lại mật
+ * khẩu — an toàn vì chỉ ai cầm được mã (tức đọc được hộp thư) mới nhận được giá trị này.
+ *
+ * KHÔNG xoá mã ở bước này (`deleteOnSuccess: false`): người dùng còn phải nhập mật khẩu mới ở
+ * bước 3, xoá tại đây sẽ làm bước 3 luôn thất bại.
+ */
+export const verifyPasswordResetCode = async (req, res) => {
+  const { email, code } = req.body;
+  const user = await User.findOne({ email }, { _id: 1 }).lean();
+  const isValid =
+    !!user && (await consumeResetCode(String(user._id), code, { deleteOnSuccess: false }));
+
+  if (!isValid) {
+    throw new BadRequestError("Invalid or expired code");
+  }
+
+  new OK({
+    message: "Code verified",
+    metadata: { userId: String(user!._id) },
+  }).send(res);
+};
+
+/** Bước 3/3: đối chiếu mã lần cuối, đổi mật khẩu, tiêu huỷ mã và mọi phiên đăng nhập cũ. */
+export const confirmPasswordReset = async (req, res) => {
+  const { userId, code, newPW } = req.body;
+  const user = await User.findOne({ _id: ObjectId(userId) }, { _id: 1 }).lean();
+  if (!user) {
+    throw new BadRequestError("Invalid or expired code");
+  }
+
+  const isValid = await consumeResetCode(String(userId), code, { deleteOnSuccess: true });
+  if (!isValid) {
+    throw new BadRequestError("Invalid or expired code");
+  }
+
+  // Không giữ lại phiên nào: người đặt lại mật khẩu chưa đăng nhập, và nếu tài khoản từng bị
+  // chiếm thì mọi refresh token đang tồn tại đều phải chết.
+  await applyNewPassword(userId, newPW);
+  logger.info({ userId: String(userId) }, "password reset completed — all sessions revoked");
+
+  new OK({
+    message: "Password has been reset",
     metadata: {},
   }).send(res);
 };
@@ -672,46 +872,8 @@ export const getUsersToTag = async (req, res) => {
   }).send(res);
 };
 
-export const checkValidUser = async (req, res) => {
-  const payload = req.body;
-  const userId = payload?.userId;
-  const userEmail = payload?.userEmail;
-  if (!userId && !userEmail) {
-    throw new BadRequestError("Empty payload");
-  }
-  const emailRegex = /\S+@\S+\.\S+/;
-  if (!emailRegex.test(userEmail)) {
-    throw new BadRequestError("Invalid email type");
-  }
-  const userInfo = await User.findOne({
-    $or: [{ _id: ObjectId(userId) }, { email: userEmail }],
-  });
-  if (userInfo) {
-    new OK({
-      message: "User is valid",
-      metadata: true,
-    }).send(res);
-  } else {
-    new OK({
-      message: "User is not valid",
-      metadata: false,
-    }).send(res);
-  }
-};
-
-export const getUserIdFromEmail = async (req, res) => {
-  const { userEmail } = req.body;
-  if (!userEmail) {
-    throw new BadRequestError("Empty email");
-  }
-  const userInfo = await User.findOne({
-    email: userEmail,
-  });
-  new OK({
-    message: "Get user id from email successfully",
-    metadata: userInfo._id,
-  }).send(res);
-};
+// `checkValidUser` và `getUserIdFromEmail` ĐÃ XOÁ cùng route của chúng (bước 6) — xem lý do ở
+// comment tương ứng trong `user.route.ts`.
 
 export const getUsersPendingPost = async (req, res) => {
   // Task 009 (auth-gap fix): danh tính lấy từ `req.user._id` (gắn bởi `protectRoute`, đã qua jwt
@@ -754,18 +916,10 @@ export const getUsersPendingPost = async (req, res) => {
 };
 
 export const getUsersWithStatus = async (req, res) => {
-  const { userId, page, limit, searchValue, role, status, dateFrom, dateTo } =
-    req.query;
-  if (!userId) {
-    throw new BadRequestError("Empty userId");
-  }
-  const userInfo = await User.findOne({
-    _id: ObjectId(userId),
-  });
-  const isAdmin = userInfo.role === Constants.USER_ROLE.ADMIN;
-  if (!isAdmin) {
-    throw new AuthFailureError("You don't have access to this");
-  }
+  const { page, limit, searchValue, role, status, dateFrom, dateTo } = req.query;
+  // Bước 10: quyền xét trên `req.user` thay vì trên document tra theo `userId` client gửi.
+  // Lưu ý `userInfo.role` cũ còn có thể ném TypeError khi userId không tồn tại (`userInfo` là null).
+  assertRole(req.user, Constants.USER_ROLE.ADMIN);
 
   // Users module (Breads-Admin): gộp mọi filter tuỳ chọn vào 1 `$match` — role/status là zod
   // z.coerce.number() nên đã là number lúc tới đây, dateFrom/dateTo đã là Date (z.coerce.date()).

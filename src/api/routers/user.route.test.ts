@@ -34,9 +34,10 @@ import {
   getUsersToTagQuerySchema,
   getUsersWithStatusQuerySchema,
   getUsersPendingPostSchema,
-  checkValidUserSchema,
-  getUserIdFromEmailSchema,
   getSitemapEligibleUsersQuerySchema,
+  requestPasswordResetSchema,
+  verifyPasswordResetCodeSchema,
+  confirmPasswordResetSchema,
 } from "../validators/user.validator.ts";
 import userRouter from "./user.route.ts";
 import { VALIDATION_ERROR_MESSAGE, validate } from "../middlewares/validate.ts";
@@ -145,15 +146,18 @@ test("loginUserSchema: thiếu password fail", () => {
   );
 });
 
-test("followUserSchema: {userFlId, userId} hợp lệ (ObjectId thật) pass — giữ nguyên tên field", () => {
-  const result = followUserSchema.body.parse({
+// Bước 4 (access-control-hardening): `userId` KHÔNG còn là field hợp lệ — người follow luôn là
+// `req.user._id`. Kỳ vọng cũ ("thiếu userId -> fail") bị ĐẢO NGƯỢC: chính việc coi `userId` là
+// input hợp lệ đã cho phép ép user khác follow (probe V4).
+test("followUserSchema: chỉ {userFlId} là đủ — userId gửi kèm bị strip", () => {
+  assert.deepEqual(followUserSchema.body.parse({ userFlId: VALID_OBJECT_ID }), {
+    userFlId: VALID_OBJECT_ID,
+  });
+  const parsed: any = followUserSchema.body.parse({
     userFlId: VALID_OBJECT_ID,
     userId: VALID_OBJECT_ID_2,
   });
-  assert.deepEqual(result, {
-    userFlId: VALID_OBJECT_ID,
-    userId: VALID_OBJECT_ID_2,
-  });
+  assert.equal(parsed.userId, undefined, "userId do client gửi phải bị strip");
 });
 
 test("followUserSchema: thiếu userFlId fail", () => {
@@ -163,31 +167,9 @@ test("followUserSchema: thiếu userFlId fail", () => {
   );
 });
 
-test("followUserSchema: thiếu userId fail", () => {
-  assert.throws(
-    () => followUserSchema.body.parse({ userFlId: VALID_OBJECT_ID }),
-    z.ZodError
-  );
-});
-
 test("followUserSchema: userFlId không phải ObjectId fail", () => {
   assert.throws(
-    () =>
-      followUserSchema.body.parse({
-        userFlId: "not-an-id",
-        userId: VALID_OBJECT_ID_2,
-      }),
-    z.ZodError
-  );
-});
-
-test("followUserSchema: userId không phải ObjectId fail", () => {
-  assert.throws(
-    () =>
-      followUserSchema.body.parse({
-        userFlId: VALID_OBJECT_ID,
-        userId: "not-an-id",
-      }),
+    () => followUserSchema.body.parse({ userFlId: "not-an-id" }),
     z.ZodError
   );
 });
@@ -205,9 +187,53 @@ test("updateUserSchema: params.id hợp lệ pass", () => {
   );
 });
 
-test("changePasswordSchema: chỉ forgotPW: true (không currentPW/newPW) vẫn pass ở tầng schema", () => {
+// Bước 1 (access-control-hardening): ĐẢO NGƯỢC kỳ vọng cũ. Trước đây `{forgotPW: true}` trần được
+// coi là hợp lệ ở tầng schema (logic thật để controller quyết) — chính đó là đường chiếm tài khoản
+// (probe V1). Giờ `forgotPW` không còn trong schema và `currentPW`/`newPW` bắt buộc.
+test("changePasswordSchema: chỉ forgotPW: true (không currentPW/newPW) bị REJECT", () => {
+  assert.throws(() => changePasswordSchema.body.parse({ forgotPW: true }), z.ZodError);
+});
+
+test("changePasswordSchema: forgotPW bị strip khỏi payload hợp lệ (không tới được controller)", () => {
+  const parsed = changePasswordSchema.body.parse({
+    currentPW: "old-secret",
+    newPW: "new-secret",
+    forgotPW: true,
+  });
+  assert.deepEqual(parsed, { currentPW: "old-secret", newPW: "new-secret" });
+});
+
+test("changePasswordSchema: newPW ngắn hơn 6 ký tự bị REJECT", () => {
+  assert.throws(
+    () => changePasswordSchema.body.parse({ currentPW: "old-secret", newPW: "12345" }),
+    z.ZodError
+  );
+});
+
+/* ------------------------------------------- password-reset (bước 2, server-side OTP) */
+
+test("requestPasswordResetSchema: chỉ nhận email — userId client gửi kèm bị strip", () => {
+  const parsed = requestPasswordResetSchema.body.parse({
+    email: "duc@example.com",
+    userId: VALID_OBJECT_ID,
+  });
+  assert.deepEqual(parsed, { email: "duc@example.com" });
+});
+
+test("verifyPasswordResetCodeSchema: mã khác 6 ký tự bị REJECT", () => {
+  assert.throws(
+    () => verifyPasswordResetCodeSchema.body.parse({ email: "duc@example.com", code: "123" }),
+    z.ZodError
+  );
+});
+
+test("confirmPasswordResetSchema: {userId, code, newPW} hợp lệ pass", () => {
   assert.doesNotThrow(() =>
-    changePasswordSchema.body.parse({ forgotPW: true })
+    confirmPasswordResetSchema.body.parse({
+      userId: VALID_OBJECT_ID,
+      code: "A1b2C3",
+      newPW: "new-secret",
+    })
   );
 });
 
@@ -412,28 +438,10 @@ test("getUsersPendingPostSchema: page không phải số fail", () => {
   );
 });
 
-test("checkValidUserSchema: chỉ userId (không userEmail) vẫn pass ở tầng schema — either-or là business rule ở controller", () => {
-  assert.doesNotThrow(() =>
-    checkValidUserSchema.body.parse({ userId: VALID_OBJECT_ID })
-  );
-});
-
-test("checkValidUserSchema: cả userId lẫn userEmail đều thiếu vẫn pass ở tầng schema (xác nhận task này không dời business logic vào schema)", () => {
-  assert.doesNotThrow(() => checkValidUserSchema.body.parse({}));
-});
-
-test("getUserIdFromEmailSchema: thiếu userEmail fail", () => {
-  assert.throws(
-    () => getUserIdFromEmailSchema.body.parse({}),
-    z.ZodError
-  );
-});
-
-test("getUserIdFromEmailSchema: userEmail hợp lệ pass", () => {
-  assert.doesNotThrow(() =>
-    getUserIdFromEmailSchema.body.parse({ userEmail: "duc@example.com" })
-  );
-});
+// 4 test cho `checkValidUserSchema`/`getUserIdFromEmailSchema` ĐÃ XOÁ cùng schema + endpoint của
+// chúng (bước 6, access-control-hardening). Thay bằng test wiring "2 endpoint này không được quay
+// lại" ở cuối file — một schema đã xoá thì không còn gì để test, nhưng việc nó KHÔNG được khôi phục
+// thì vẫn cần canh.
 
 test("getUsersPendingPostSchema: limit=1000 KHÔNG bị chặn (cap .max(50) của getUsersFollow không leak sang route body này)", () => {
   assert.doesNotThrow(() =>
@@ -471,19 +479,6 @@ test("FR-4 (type enum): GET /users/follow-list?type=bogus -> 400 trước khi ge
   });
 });
 
-test("FR-4 (checkValidUser, body rỗng): POST /users/validity-checks với body {} -> KHÔNG phải lỗi validate (either-or vẫn là controller kiểm, throw sớm trước khi chạm DB)", async () => {
-  await withServer(mountUserRouter(), async (base) => {
-    const res = await fetch(`${base}/users/validity-checks`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    const json = (await res.json().catch(() => ({}))) as {
-      message?: string;
-    };
-    assert.notEqual(json.message, VALIDATION_ERROR_MESSAGE);
-  });
-});
 
 // ================================================================
 // Task 020 — positive path (NFR-4): payload HỢP LỆ vẫn đi lọt `validate()`
@@ -557,17 +552,6 @@ test("NFR-4 (positive, params): GET /users/:userId với ObjectId hợp lệ ch�
   );
 });
 
-test("FR-4 (getUserIdFromEmail): thiếu userEmail -> 400 trước khi controller chạy", async () => {
-  await withServer(mountUserRouter(), async (base) => {
-    const res = await fetch(`${base}/users/id-lookup`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    assert.equal(res.status, 400);
-    assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
-  });
-});
 
 // ================================================================
 // Task 010 — bảng redesign 19 endpoint (epic restful-api-redesign, D-1)
@@ -581,7 +565,7 @@ test("FR-4 (getUserIdFromEmail): thiếu userEmail -> 400 trước khi controlle
 // đúng thứ tự đăng ký — thứ tự QUAN TRỌNG vì PROFILE ("/:userId") và UPDATE ("/:id") là catch-all
 // 1-segment, phải đứng SAU các path literal cùng số segment (/me, /follow-list, /with-status,
 // /sitemap-eligible, /follow) để không "nuốt" chúng (xem comment trong user.route.ts).
-test("FR-2 (D-1): user.route.ts wiring khớp đúng 21 (method, path) mới, đúng thứ tự chống shadow route động", () => {
+test("FR-2 (D-1): user.route.ts wiring khớp đúng 22 (method, path) mới, đúng thứ tự chống shadow route động", () => {
   const routes = userRouter.stack
     .filter((layer: any) => layer.route)
     .map((layer: any) => ({
@@ -612,13 +596,17 @@ test("FR-2 (D-1): user.route.ts wiring khớp đúng 21 (method, path) mới, đ
     // requireSelfOrRole như UPDATE ở trên), tách khỏi self-edit để không tái mở lỗ mass-assignment.
     { method: "put", path: "/:id/admin-action" },
     { method: "put", path: "/:id/password" },
+    // MỚI (bước 2, access-control-hardening): luồng quên mật khẩu server-side, thay cho
+    // `POST /util/send-forgot-pw-mail` (đã xoá) + việc đối chiếu OTP ở client. Cả 3 đều 2-segment
+    // nên không bị `/:userId` hay `/:id` nuốt, vị trí đăng ký không ràng buộc.
+    { method: "post", path: "/password-reset/requests" },
+    { method: "post", path: "/password-reset/verify" },
+    { method: "post", path: "/password-reset/confirm" },
     { method: "post", path: "/crawl" },
-    { method: "post", path: "/validity-checks" },
-    { method: "post", path: "/id-lookup" },
     { method: "post", path: "/email-validations" },
   ];
 
-  assert.equal(routes.length, 21, "phải có đúng 21 route đăng ký trên router");
+  assert.equal(routes.length, 22, "phải có đúng 22 route đăng ký trên router");
   assert.deepEqual(
     routes,
     expected,
@@ -949,4 +937,23 @@ test("Task 009 (auth-gap fix): POST /users/pending-post-lookup không có JWT ->
 test("getUsersPendingPostSchema: body không còn nhận/yêu cầu userId", () => {
   const parsed: any = getUsersPendingPostSchema.body.parse({ page: 1, limit: 20 });
   assert.equal((parsed as any).userId, undefined, "userId phải bị strip/không tồn tại trong schema");
+});
+
+// Bước 6 (access-control-hardening): `/validity-checks` và `/id-lookup` là 2 oracle dò tài khoản
+// (email -> "có tồn tại không" / -> userId), và chính `/id-lookup` cấp userId cho bước ① của chuỗi
+// chiếm tài khoản V1. Chúng đã bị xoá cùng caller cuối cùng ở bước 2. Test này canh việc chúng
+// không lặng lẽ quay lại — kiểm CẢ router (đường HTTP) LẪN constant dùng chung (nguồn để Fe gọi).
+test("Bước 6: 2 endpoint dò tài khoản không được khôi phục", async () => {
+  const routeSrc = await readFile("src/api/routers/user.route.ts", "utf8");
+  const code = routeSrc.replace(/^\s*\/\/.*$/gm, "");
+  for (const gone of ["CHECK_VALID_USER", "GET_USER_ID_FROM_EMAIL"]) {
+    assert.ok(!code.includes(gone), `${gone} không được xuất hiện lại trong user.route.ts`);
+  }
+
+  const configSrc = await readFile("src/Breads-Shared/APIConfig.ts", "utf8");
+  const configCode = configSrc.replace(/^\s*\/\/.*$/gm, "");
+  assert.ok(
+    !configCode.includes("validity-checks") && !configCode.includes("id-lookup"),
+    "constant của 2 endpoint đã xoá không được còn trong APIConfig"
+  );
 });

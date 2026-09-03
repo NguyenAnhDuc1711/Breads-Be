@@ -31,6 +31,22 @@ export const generateAccessToken = (userId: string): string => {
 };
 
 /**
+ * `Secure` cookie: MẶC ĐỊNH BẬT, chỉ tắt được khi khai báo tường minh `COOKIE_SECURE=false`.
+ *
+ * Trước đây là `=== "true"`, tức mặc định TẮT — và `.env` không hề khai biến này, nên refresh token
+ * (sống 7 ngày) đi qua HTTP trần ở mọi môi trường. Đảo chiều mặc định là điểm mấu chốt: cấu hình
+ * an toàn phải là cái xảy ra khi người ta KHÔNG làm gì cả.
+ *
+ * Idiom `!== "false"` dùng lại đúng pattern của `FEED_FANOUT_ENABLED`/`FEED_DISCOVERY_ENABLED`
+ * (`services/feed/config.ts`) để cả repo thống nhất một cách đọc cờ boolean.
+ *
+ * Dev local KHÔNG bị ảnh hưởng: trình duyệt hiện đại coi `http://localhost` là secure context nên
+ * vẫn nhận `Secure` cookie. Chỉ khi test qua IP LAN trần (vd `http://192.168.x.x`) mới cần
+ * `COOKIE_SECURE=false`.
+ */
+const isSecureCookie = (): boolean => process.env.COOKIE_SECURE !== "false";
+
+/**
  * Create a new refresh token, persist its hash in MongoDB, and set it as
  * an httpOnly cookie on the response.
  *
@@ -56,7 +72,7 @@ export const generateRefreshToken = async (
     httpOnly: true,
     maxAge: REFRESH_TOKEN_EXPIRES_IN_MS,
     sameSite: "lax",
-    secure: process.env.COOKIE_SECURE === "true",
+    secure: isSecureCookie(),
     path: "/",
   });
 
@@ -84,7 +100,7 @@ export const clearRefreshTokenCookie = (res: any): void => {
     httpOnly: true,
     maxAge: 0,
     sameSite: "lax",
-    secure: process.env.COOKIE_SECURE === "true",
+    secure: isSecureCookie(),
     path: "/",
   });
   // Also clear the legacy jwt cookie for backward compatibility

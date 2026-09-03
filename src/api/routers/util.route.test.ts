@@ -14,7 +14,7 @@ import fsp from "node:fs/promises";
 import express from "express";
 import { validate, VALIDATION_ERROR_MESSAGE } from "../middlewares/validate.ts";
 import { upload } from "../middlewares/upload.js";
-import { sendForgotPWMailSchema, uploadSchema } from "../validators/util.validator.ts";
+import { uploadSchema } from "../validators/util.validator.ts";
 import logger from "../../core/logger.ts";
 
 const VALID_ID = "652f1b2c3d4e5f6071829304";
@@ -174,69 +174,19 @@ test("FR-8 (ordering): multipart thiếu filesName sau khi multer parse -> 400, 
   }
 });
 
-/* --------------------------------------------- sendForgotPWMailSchema */
-
-test("sendForgotPWMailSchema: from không phải email hợp lệ -> 400", async () => {
-  const app = express();
-  app.use(express.json());
-  app.post("/t", validate(sendForgotPWMailSchema), (_req, res) => {
-    res.json({ ok: true });
-  });
-  app.use(errorHandler);
-
-  await silenceWarn(() =>
-    withServer(app, async (base) => {
-      const res = await fetch(`${base}/t`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          from: "not-an-email",
-          to: "user@example.com",
-          subject: "hi",
-          code: "abc",
-          url: "http://x",
-        }),
-      });
-      assert.equal(res.status, 400);
-      assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
-    })
-  );
-});
-
-test("sendForgotPWMailSchema: payload hợp lệ đầy đủ -> 200", async () => {
-  const app = express();
-  app.use(express.json());
-  app.post("/t", validate(sendForgotPWMailSchema), (req, res) => {
-    res.json({ body: req.body });
-  });
-  app.use(errorHandler);
-
-  const payload = {
-    from: "from@example.com",
-    to: "to@example.com",
-    subject: "Forgot password",
-    code: "abc123",
-    url: "http://example.com/reset",
-  };
-
-  await withServer(app, async (base) => {
-    const res = await fetch(`${base}/t`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { body: payload });
-  });
-});
+// Test cho `sendForgotPWMailSchema` ĐÃ XOÁ cùng schema/endpoint của nó (epic
+// access-control-hardening, bước 2). Ràng buộc tương đương giờ nằm ở
+// `requestPasswordResetSchema`/`confirmPasswordResetSchema` (`user.validator.ts`), test trong
+// `user.route.test.ts`.
 
 /* ------------------------------------------------- wiring (đọc source, không import) */
 
-test("wiring: util.route.ts có đúng 2 validate(), upload.array đứng ngay trước validate(uploadSchema)", async () => {
+test("wiring: util.route.ts có đúng 1 validate(), upload.array đứng ngay trước validate(uploadSchema)", async () => {
   const src = await fsp.readFile("src/api/routers/util.route.ts", "utf8");
 
   const validateCount = (src.match(/validate\(/g) || []).length;
-  assert.equal(validateCount, 2, "phải có đúng 2 lời gọi validate() trong util.route.ts");
+  // 1 chứ không phải 2: route `send-forgot-pw-mail` (validate thứ hai) đã bị xoá ở bước 2.
+  assert.equal(validateCount, 1, "phải có đúng 1 lời gọi validate() trong util.route.ts");
 
   const uploadIdx = src.indexOf('upload.array("files")');
   const validateUploadIdx = src.indexOf("validate(uploadSchema)");

@@ -27,12 +27,4 @@ export const uploadSchema = {
   ]),
 };
 
-export const sendForgotPWMailSchema = {
-  body: z.object({
-    from: z.string().email().optional(),
-    to: z.string().email(),
-    subject: z.string().min(1).optional(),
-    code: z.string().min(1),
-    url: z.string().min(1),
-  }),
-};
+// `sendForgotPWMailSchema` ĐÃ XOÁ cùng endpoint của nó (bước 2) — xem comment cuối `util.route.ts`.

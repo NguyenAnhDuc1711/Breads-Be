@@ -96,3 +96,20 @@ export const getCountKeyAnalyticValue = ({
   });
   return result;
 };
+
+/**
+ * Escape mọi ký tự đặc biệt của regex trong chuỗi do NGƯỜI DÙNG nhập, trước khi đưa vào `$regex`.
+ *
+ * Vì sao bắt buộc (finding A5, `docs/architecture-review.md`, mở từ 2026-08-10):
+ *
+ *   1. **ReDoS** — input đi thẳng vào `$regex` nghĩa là người dùng viết được CHƯƠNG TRÌNH regex,
+ *      không chỉ từ khoá tìm kiếm. Một chuỗi như `(a+)+$` gây catastrophic backtracking: máy chủ
+ *      quay cuồng CPU trên MỘT request.
+ *   2. **Sai kết quả im lặng** — `.` `*` `?` `[` `(` trong câu tìm kiếm bình thường của người dùng
+ *      hiện đang được diễn giải là cú pháp regex, nên "a.b" khớp cả "axb".
+ *
+ * `[.*+?^${}()|[\]\\]` là tập ký tự đặc biệt đầy đủ của JS RegExp; `\\$&` chèn `\` trước ký tự
+ * khớp được.
+ */
+export const escapeRegex = (input: unknown): string =>
+  String(input ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

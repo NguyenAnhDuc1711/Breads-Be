@@ -111,9 +111,29 @@ router.get(
 // Task 011 (FR-10): `createPost` giờ `throw new {XxxError}` thay vì `res.json({error})`. Express 4
 // KHÔNG tự bắt rejection của async handler -> BẮT BUỘC bọc `asyncHandler`, nếu không nhánh chặn
 // repost (task 090) sẽ TREO request thay vì trả 400. Trước đây đây là route duy nhất không bọc.
-router.post(CREATE, validate(createPostSchema), asyncHandler(createPost));
-router.delete("/:id", validate(deletePostSchema), asyncHandler(deletePost));
-router.put(UPDATE, validate(updatePostSchema), asyncHandler(updatePost));
+// Bước 3 (access-control-hardening): 4 route ghi dưới đây TRƯỚC ĐÂY không có guard nào — danh tính
+// đọc thẳng từ `payload.authorId` / `payload.userId` / `req.query.userId`, tức là do client tự khai.
+// Probe xác nhận cả 4 đều khai thác được KHÔNG cần đăng nhập: đăng bài mạo danh (V2a), sửa (V2b) và
+// xoá (V2c) bài người khác, nhồi phiếu khảo sát (V5). `protectRoute` đứng TRƯỚC `validate` đúng
+// convention đã ghi ở đầu file.
+router.post(
+  CREATE,
+  protectRoute,
+  validate(createPostSchema),
+  asyncHandler(createPost),
+);
+router.delete(
+  "/:id",
+  protectRoute,
+  validate(deletePostSchema),
+  asyncHandler(deletePost),
+);
+router.put(
+  UPDATE,
+  protectRoute,
+  validate(updatePostSchema),
+  asyncHandler(updatePost),
+);
 router.post(
   LIKE_TOGGLE,
   protectRoute,
@@ -126,6 +146,7 @@ router.post(
 router.post(CRAWL_POST, authTierLimiter, asyncHandler(crawlPosts));
 router.post(
   TICK_SURVEY,
+  protectRoute,
   validate(tickPostSurveySchema),
   asyncHandler(tickPostSurvey),
 );
@@ -136,10 +157,12 @@ router.patch(
   validate(updatePostStatusSchema),
   asyncHandler(updatePostStatus),
 );
+// Khác `UPDATE_POST_STATUS` ngay trên: đổi quyền riêng tư là hành động của CHỦ SỞ HỮU (admin/mod
+// chỉ là cửa kiểm duyệt bổ sung), nên KHÔNG dùng `requireRole` ở route — nó sẽ khoá cửa chính.
+// Phân quyền nằm trong controller: `isOwner || isModerator`, cả hai xét trên `req.user`.
 router.patch(
   UPDATE_POST_VISIBILITY,
   protectRoute,
-  requireRole(Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR),
   validate(updatePostVisibilitySchema),
   asyncHandler(updatePostVisibility),
 );

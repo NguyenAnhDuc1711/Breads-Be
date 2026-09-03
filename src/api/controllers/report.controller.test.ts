@@ -31,27 +31,60 @@ import User from "../models/user.model";
 const ADMIN_USER_ID = "652f1b2c3d4e5f6071829304";
 const REPORT_ID = "652f1b2c3d4e5f6071829305";
 
+// #1 (rà soát bảo mật): `from`/`to` KHÔNG còn được nhận từ client — người nhận suy ra từ report.
+// Giữ chúng trong fixture CÓ CHỦ ĐÍCH: nếu controller quay lại đọc `req.body.to`, test
+// "gửi đúng người báo cáo" bên dưới sẽ bắt được ngay vì 2 địa chỉ khác nhau.
+const REPORTER_EMAIL = "reporter@example.com";
+
 const validBody = {
-  from: "admin@breads.dev",
-  to: "user@example.com",
+  from: "attacker@evil.test",
+  to: "victim@evil.test",
   subject: "Về báo cáo của bạn",
   html: "<p>hi</p>",
   userId: ADMIN_USER_ID,
 };
 
-/** Stub `User.findOne` (role-check trong `responseReport`) — không cần Mongo thật. */
-const withStubbedUserFindOne = async (
-  role: number | undefined,
-  fn: () => Promise<void>
-) => {
-  const original = (User as any).findOne;
-  (User as any).findOne = async () => (role === undefined ? null : { role });
+/** `responseReport` giờ đọc report -> user để lấy email người nhận. */
+const withStubbedReportLookup = async (fn: () => Promise<void>) => {
+  const origReportFind = (Report as any).findById;
+  const origUserFind = (User as any).findById;
+  (Report as any).findById = () => ({
+    lean: async () => ({ _id: REPORT_ID, userId: ADMIN_USER_ID }),
+  });
+  (User as any).findById = () => ({
+    lean: async () => ({ _id: ADMIN_USER_ID, email: REPORTER_EMAIL }),
+  });
   try {
     await fn();
   } finally {
-    (User as any).findOne = original;
+    (Report as any).findById = origReportFind;
+    (User as any).findById = origUserFind;
   }
 };
+
+/**
+ * Bước 10 (access-control-hardening): 3 controller trong file này KHÔNG còn tra role bằng
+ * `User.findOne({_id: req.body.userId})` — quyền giờ xét trên `req.user` do `protectRoute` gán.
+ *
+ * Helper vì vậy đổi từ "stub tầng model" sang "đặt role của NGƯỜI GỌI": mọi thân test giữ nguyên,
+ * chỉ đổi thứ được mô phỏng. `role === undefined` = không có `req.user` (ẩn danh), tương ứng đúng
+ * case "user không tồn tại" của bản cũ.
+ */
+let callerRole: number | undefined;
+
+const withCallerRole = async (role: number | undefined, fn: () => Promise<void>) => {
+  const prev = callerRole;
+  callerRole = role;
+  try {
+    await fn();
+  } finally {
+    callerRole = prev;
+  }
+};
+
+/** `req.user` mà `protectRoute` sẽ gán ở production — `undefined` khi mô phỏng người ẩn danh. */
+const reqUser = () =>
+  callerRole === undefined ? undefined : { _id: ADMIN_USER_ID, role: callerRole };
 
 /** Stub `Report.updateOne`, đếm số lần gọi + ghi lại args — đây là assertion chính của AC:
  * "Report.updateOne KHÔNG được gọi khi gửi mail thất bại". */
@@ -87,7 +120,7 @@ const withStubbedTransport = async (
 };
 
 const makeReqRes = () => {
-  const req: any = { body: validBody, params: { id: REPORT_ID } };
+  const req: any = { body: validBody, params: { id: REPORT_ID }, user: reqUser() };
   const res: any = {
     status(code: number) {
       res.statusCode = code;
@@ -102,7 +135,8 @@ const makeReqRes = () => {
 };
 
 test("responseReport: sendMailService thất bại (sendMail throw -> undefined) -> throw lỗi, KHÔNG update status", async () => {
-  await withStubbedUserFindOne(Constants.USER_ROLE.ADMIN, async () => {
+  await withStubbedReportLookup(async () => {
+  await withCallerRole(Constants.USER_ROLE.ADMIN, async () => {
     await withStubbedReportUpdateOne(async (calls) => {
       // `sendMailService` catch lỗi này và trả `undefined` — đúng bug gốc mô tả ở Context 018.md.
       await withStubbedTransport(
@@ -131,11 +165,13 @@ test("responseReport: sendMailService thất bại (sendMail throw -> undefined)
       );
     });
   });
+  });
 });
 
 test("responseReport: sendMailService thành công -> Report.updateOne(status=RESPONSED), response 200", async () => {
   const fakeInfo = { messageId: "abc123" }; // giả lập `info` thật từ nodemailer, chỉ cần truthy
-  await withStubbedUserFindOne(Constants.USER_ROLE.ADMIN, async () => {
+  await withStubbedReportLookup(async () => {
+  await withCallerRole(Constants.USER_ROLE.ADMIN, async () => {
     await withStubbedReportUpdateOne(async (calls) => {
       await withStubbedTransport(
         async () => fakeInfo,
@@ -154,6 +190,7 @@ test("responseReport: sendMailService thành công -> Report.updateOne(status=RE
         }
       );
     });
+  });
   });
 });
 
@@ -212,19 +249,83 @@ const readFacetSkipLimit = (pipeline: any[]) => {
 };
 
 const makeGetReportsReqRes = (query: Record<string, any>) => ({
-  req: { query },
+  req: { query, user: reqUser() },
   res: makeRes(),
 });
 
 const makeRejectReportReqRes = (userId: string | undefined, reportId: string) => ({
-  req: { body: { userId }, params: { id: reportId } },
+  // `userId` giữ trong body CÓ CHỦ ĐÍCH dù controller không còn đọc: nếu ai đó quay lại đọc
+  // `req.body.userId`, test role-matrix sẽ vẫn xanh một cách sai lệch nếu ta bỏ hẳn field này.
+  req: { body: { userId }, params: { id: reportId }, user: reqUser() },
   res: makeRes(),
+});
+
+/* ------------------ #1 (rà soát bảo mật): người nhận mail do SERVER quyết ---------------- */
+
+// Đây là assertion QUAN TRỌNG NHẤT của nhóm này: không kiểm status code, mà kiểm ĐỐI SỐ THẬT
+// truyền vào `sendMailService`. Một test chỉ nhìn 200 sẽ xanh y hệt kể cả khi controller quay lại
+// gửi tới `req.body.to` — tức là relay vẫn mở.
+test("#1: responseReport gửi tới email của NGƯỜI BÁO CÁO, bỏ qua `to` client gửi", async () => {
+  let sentOptions: any = null;
+  await withStubbedReportLookup(async () => {
+    await withCallerRole(Constants.USER_ROLE.ADMIN, async () => {
+      await withStubbedReportUpdateOne(async () => {
+        await withStubbedTransport(
+          async (options: any) => {
+            sentOptions = options;
+            return { messageId: "ok" };
+          },
+          async () => {
+            const { req, res } = makeReqRes();
+            await responseReport(req, res);
+            assert.equal(res.statusCode, 200);
+          }
+        );
+      });
+    });
+  });
+
+  assert.ok(sentOptions, "sendMail phải được gọi");
+  assert.equal(
+    sentOptions.to,
+    REPORTER_EMAIL,
+    "người nhận phải suy ra từ report, KHÔNG phải `req.body.to`"
+  );
+  assert.notEqual(sentOptions.to, validBody.to, "địa chỉ client gửi phải bị bỏ qua");
+  assert.notEqual(
+    sentOptions.from,
+    validBody.from,
+    "`from` client gửi phải bị bỏ qua (sendMailService tự dùng SEND_MAIL_USER)"
+  );
+});
+
+test("#1: responseReport với report không tồn tại -> lỗi, KHÔNG gửi mail", async () => {
+  const origReportFind = (Report as any).findById;
+  (Report as any).findById = () => ({ lean: async () => null });
+  let mailSent = false;
+  try {
+    await withCallerRole(Constants.USER_ROLE.ADMIN, async () => {
+      await withStubbedTransport(
+        async () => {
+          mailSent = true;
+          return { messageId: "should-not-happen" };
+        },
+        async () => {
+          const { req, res } = makeReqRes();
+          await assert.rejects(() => responseReport(req, res));
+          assert.equal(mailSent, false, "không được gửi mail khi report không tồn tại");
+        }
+      );
+    });
+  } finally {
+    (Report as any).findById = origReportFind;
+  }
 });
 
 /* ------------------------------- getReports: role-matrix ------------------------------- */
 
 test("getReports: ADMIN -> 200, không bị chặn quyền", async () => {
-  await withStubbedUserFindOne(Constants.USER_ROLE.ADMIN, async () => {
+  await withCallerRole(Constants.USER_ROLE.ADMIN, async () => {
     await withStubbedReportAggregate({ data: [], totalCountValue: 0 }, async () => {
       const { req, res } = makeGetReportsReqRes({ userId: ADMIN_USER_ID });
       await getReports(req, res);
@@ -234,7 +335,7 @@ test("getReports: ADMIN -> 200, không bị chặn quyền", async () => {
 });
 
 test("getReports: MODERATOR -> 200, không bị chặn quyền (giống ADMIN)", async () => {
-  await withStubbedUserFindOne(Constants.USER_ROLE.MODERATOR, async () => {
+  await withCallerRole(Constants.USER_ROLE.MODERATOR, async () => {
     await withStubbedReportAggregate({ data: [], totalCountValue: 0 }, async () => {
       const { req, res } = makeGetReportsReqRes({ userId: ADMIN_USER_ID });
       await getReports(req, res);
@@ -244,7 +345,7 @@ test("getReports: MODERATOR -> 200, không bị chặn quyền (giống ADMIN)",
 });
 
 test("getReports: USER thường -> ForbiddenError (403), không gọi Report.aggregate", async () => {
-  await withStubbedUserFindOne(Constants.USER_ROLE.USER, async () => {
+  await withCallerRole(Constants.USER_ROLE.USER, async () => {
     const { req, res } = makeGetReportsReqRes({ userId: ADMIN_USER_ID });
     await assert.rejects(
       () => getReports(req, res),
@@ -258,7 +359,7 @@ test("getReports: USER thường -> ForbiddenError (403), không gọi Report.ag
 });
 
 test("getReports: user không tồn tại (anonymous) -> ForbiddenError (403)", async () => {
-  await withStubbedUserFindOne(undefined, async () => {
+  await withCallerRole(undefined, async () => {
     const { req, res } = makeGetReportsReqRes({ userId: ADMIN_USER_ID });
     await assert.rejects(
       () => getReports(req, res),
@@ -270,7 +371,7 @@ test("getReports: user không tồn tại (anonymous) -> ForbiddenError (403)", 
 /* ---------------------------- getReports: pagination boundary -------------------------- */
 
 test("getReports: page=3&limit=5 -> $skip=10/$limit=5 đúng, data/totalCount pass-through đúng", async () => {
-  await withStubbedUserFindOne(Constants.USER_ROLE.ADMIN, async () => {
+  await withCallerRole(Constants.USER_ROLE.ADMIN, async () => {
     const fakeData = Array.from({ length: 5 }, (_, i) => ({ _id: `r${i}` }));
     await withStubbedReportAggregate(
       { data: fakeData, totalCountValue: 12 },
@@ -294,7 +395,7 @@ test("getReports: page=3&limit=5 -> $skip=10/$limit=5 đúng, data/totalCount pa
 });
 
 test("getReports: thiếu page/limit -> mặc định pageNum=1, limitNum=10 ($skip=0/$limit=10)", async () => {
-  await withStubbedUserFindOne(Constants.USER_ROLE.ADMIN, async () => {
+  await withCallerRole(Constants.USER_ROLE.ADMIN, async () => {
     await withStubbedReportAggregate({ data: [], totalCountValue: 0 }, async (pipelines) => {
       const { req, res } = makeGetReportsReqRes({ userId: ADMIN_USER_ID });
       await getReports(req, res);
@@ -308,11 +409,12 @@ test("getReports: thiếu page/limit -> mặc định pageNum=1, limitNum=10 ($s
 
 /* ----------------------------- responseReport: role-matrix ----------------------------- */
 // ADMIN đã được cover ở 2 test mail-fail/mail-success phía trên (dùng
-// `withStubbedUserFindOne(Constants.USER_ROLE.ADMIN, ...)`) — chỉ bổ sung MODERATOR/USER/anonymous.
+// `withCallerRole(Constants.USER_ROLE.ADMIN, ...)`) — chỉ bổ sung MODERATOR/USER/anonymous.
 
 test("responseReport: MODERATOR -> thành công giống ADMIN (Report.updateOne được gọi, response 200)", async () => {
   const fakeInfo = { messageId: "moderator-ok" };
-  await withStubbedUserFindOne(Constants.USER_ROLE.MODERATOR, async () => {
+  await withStubbedReportLookup(async () => {
+  await withCallerRole(Constants.USER_ROLE.MODERATOR, async () => {
     await withStubbedReportUpdateOne(async (calls) => {
       await withStubbedTransport(
         async () => fakeInfo,
@@ -325,10 +427,11 @@ test("responseReport: MODERATOR -> thành công giống ADMIN (Report.updateOne 
       );
     });
   });
+  });
 });
 
 test("responseReport: USER thường -> ForbiddenError, Report.updateOne KHÔNG được gọi", async () => {
-  await withStubbedUserFindOne(Constants.USER_ROLE.USER, async () => {
+  await withCallerRole(Constants.USER_ROLE.USER, async () => {
     await withStubbedReportUpdateOne(async (calls) => {
       const { req, res } = makeReqRes();
       await assert.rejects(
@@ -341,7 +444,7 @@ test("responseReport: USER thường -> ForbiddenError, Report.updateOne KHÔNG 
 });
 
 test("responseReport: user không tồn tại (anonymous) -> ForbiddenError, Report.updateOne KHÔNG được gọi", async () => {
-  await withStubbedUserFindOne(undefined, async () => {
+  await withCallerRole(undefined, async () => {
     await withStubbedReportUpdateOne(async (calls) => {
       const { req, res } = makeReqRes();
       await assert.rejects(
@@ -356,7 +459,7 @@ test("responseReport: user không tồn tại (anonymous) -> ForbiddenError, Rep
 /* ------------------------------- rejectReport: role-matrix ----------------------------- */
 
 test("rejectReport: ADMIN -> Report.updateOne(status=REJECT) được gọi, response 200", async () => {
-  await withStubbedUserFindOne(Constants.USER_ROLE.ADMIN, async () => {
+  await withCallerRole(Constants.USER_ROLE.ADMIN, async () => {
     await withStubbedReportUpdateOne(async (calls) => {
       const { req, res } = makeRejectReportReqRes(ADMIN_USER_ID, REPORT_ID);
       await rejectReport(req, res);
@@ -370,7 +473,7 @@ test("rejectReport: ADMIN -> Report.updateOne(status=REJECT) được gọi, res
 });
 
 test("rejectReport: MODERATOR -> thành công giống ADMIN", async () => {
-  await withStubbedUserFindOne(Constants.USER_ROLE.MODERATOR, async () => {
+  await withCallerRole(Constants.USER_ROLE.MODERATOR, async () => {
     await withStubbedReportUpdateOne(async (calls) => {
       const { req, res } = makeRejectReportReqRes(ADMIN_USER_ID, REPORT_ID);
       await rejectReport(req, res);
@@ -381,7 +484,7 @@ test("rejectReport: MODERATOR -> thành công giống ADMIN", async () => {
 });
 
 test("rejectReport: USER thường -> ForbiddenError, Report.updateOne KHÔNG được gọi", async () => {
-  await withStubbedUserFindOne(Constants.USER_ROLE.USER, async () => {
+  await withCallerRole(Constants.USER_ROLE.USER, async () => {
     await withStubbedReportUpdateOne(async (calls) => {
       const { req, res } = makeRejectReportReqRes(ADMIN_USER_ID, REPORT_ID);
       await assert.rejects(
@@ -394,7 +497,7 @@ test("rejectReport: USER thường -> ForbiddenError, Report.updateOne KHÔNG đ
 });
 
 test("rejectReport: user không tồn tại (anonymous) -> ForbiddenError, Report.updateOne KHÔNG được gọi", async () => {
-  await withStubbedUserFindOne(undefined, async () => {
+  await withCallerRole(undefined, async () => {
     await withStubbedReportUpdateOne(async (calls) => {
       const { req, res } = makeRejectReportReqRes(ADMIN_USER_ID, REPORT_ID);
       await assert.rejects(

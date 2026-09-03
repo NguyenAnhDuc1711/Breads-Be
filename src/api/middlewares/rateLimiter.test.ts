@@ -187,13 +187,22 @@ test("FR-1: CRAWL_POST trong post.route.ts có authTierLimiter (AD-3 — không 
   );
 });
 
-test("FR-1: sendForgotPWMail trong util.route.ts có authTierLimiter", async () => {
-  const src = await readSrc("src/api/routers/util.route.ts");
+// Bước 2 (access-control-hardening): `POST /util/send-forgot-pw-mail` đã bị xoá, luồng quên mật
+// khẩu chuyển sang 3 route `password-reset/*` trong `user.route.ts`. Cùng lý do auth-tier như cũ
+// (spam gửi mail) và thêm một lý do mới: brute-force mã OTP 6 ký tự.
+test("FR-1: 3 route password-reset trong user.route.ts đều có authTierLimiter trước validate", async () => {
+  const src = await readSrc("src/api/routers/user.route.ts");
   const code = src.replace(/^\s*\/\/.*$/gm, "");
-  assert.ok(
-    code.includes("authTierLimiter,\n  validate(sendForgotPWMailSchema)"),
-    "sendForgotPWMail phải có authTierLimiter trước validate"
-  );
+  for (const schema of [
+    "requestPasswordResetSchema",
+    "verifyPasswordResetCodeSchema",
+    "confirmPasswordResetSchema",
+  ]) {
+    assert.ok(
+      code.includes(`authTierLimiter,\n  validate(${schema})`),
+      `${schema} phải có authTierLimiter đứng ngay trước validate`
+    );
+  }
 });
 
 test("FR-1: cron job (updateUsersCatesCron) không đụng rate-limit", async () => {

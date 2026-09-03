@@ -72,11 +72,13 @@ test("getConversationByUsersIdSchema: body hợp lệ -> 200", async () => {
     const res = await fetch(`${base}/t`, {
       method: "POST",
       headers: { "content-type": "application/json" },
+      // Bước 9: `userId` gửi kèm vẫn đi lọt tầng validate nhưng bị STRIP — participant thứ nhất
+      // luôn là `req.user._id` ở controller, không phải giá trị client khai.
       body: JSON.stringify({ userId: VALID_ID_1, anotherId: VALID_ID_2 }),
     });
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), {
-      body: { userId: VALID_ID_1, anotherId: VALID_ID_2 },
+      body: { anotherId: VALID_ID_2 },
     });
   });
 });

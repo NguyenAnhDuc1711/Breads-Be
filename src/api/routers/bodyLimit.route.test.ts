@@ -24,7 +24,7 @@ import { validate } from "../middlewares/validate.ts";
 import { createEventSchema } from "../validators/analytics.validator.ts";
 import { searchMsgSchema } from "../validators/message.validator.ts";
 import { createPostSchema } from "../validators/post.validator.ts";
-import { sendForgotPWMailSchema } from "../validators/util.validator.ts";
+import { requestPasswordResetSchema } from "../validators/user.validator.ts";
 
 const VALID_ID = "652f1b2c3d4e5f6071829304";
 const OTHER_ID = "652f1b2c3d4e5f6071829305";
@@ -109,17 +109,19 @@ test("FR-2 (đối chứng): cùng payload 3MB qua router limit 1mb -> 413, khô
   });
 });
 
-/* --------------------------------------------------------------- util router: 100kb */
+/* ------------------------------------------------- user router: password-reset 100kb */
 
-// AC FR-2: `sendForgotPWMail` chỉ nhận vài field text -> body > 100kb phải bị chặn TRƯỚC
-// `validate()`/controller.
-test("FR-2 (util router 100kb): sendForgotPWMail body > 100kb -> 413 trước validate/controller", async () => {
+// AC FR-2: endpoint quên-mật-khẩu chỉ nhận vài field text -> body > 100kb phải bị chặn TRƯỚC
+// `validate()`/controller. Bước 2 (access-control-hardening) chuyển endpoint này từ
+// `POST /util/send-forgot-pw-mail` (đã xoá) sang `POST /users/password-reset/requests`; giới hạn
+// 100kb và thứ tự "413 trước validate" không đổi, nên test giữ nguyên ý nghĩa, chỉ đổi schema.
+test("FR-2 (user router 100kb): password-reset body > 100kb -> 413 trước validate/controller", async () => {
   const app = express();
   let controllerRan = false;
   app.use(express.json({ limit: "100kb" }));
   app.post(
     "/util/forgot-pw",
-    validate(sendForgotPWMailSchema),
+    validate(requestPasswordResetSchema),
     (_req, res) => {
       controllerRan = true;
       res.json({ reached: true });
@@ -130,8 +132,7 @@ test("FR-2 (util router 100kb): sendForgotPWMail body > 100kb -> 413 trước va
   await silenceWarn(() =>
     withServer(app, async (base) => {
       const res = await postJson(base, "/util/forgot-pw", {
-        from: "a@b.com",
-        to: "c@d.com",
+        email: "c@d.com",
         padding: "x".repeat(150 * 1024), // đệm cho vượt 100kb
       });
 
@@ -142,20 +143,14 @@ test("FR-2 (util router 100kb): sendForgotPWMail body > 100kb -> 413 trước va
   );
 });
 
-test("FR-2 (util router 100kb, regression): body forgot-pw bình thường vẫn qua được", async () => {
+test("FR-2 (user router 100kb, regression): body password-reset bình thường vẫn qua được", async () => {
   const app = express();
   app.use(express.json({ limit: "100kb" }));
-  app.post("/util/forgot-pw", validate(sendForgotPWMailSchema), reachedController);
+  app.post("/util/forgot-pw", validate(requestPasswordResetSchema), reachedController);
   app.use(errorHandler);
 
   await withServer(app, async (base) => {
-    const res = await postJson(base, "/util/forgot-pw", {
-      from: "a@b.com",
-      to: "c@d.com",
-      subject: "reset",
-      code: "123456",
-      url: "https://example.com/reset",
-    });
+    const res = await postJson(base, "/util/forgot-pw", { email: "c@d.com" });
     assert.equal(res.status, 200);
   });
 });

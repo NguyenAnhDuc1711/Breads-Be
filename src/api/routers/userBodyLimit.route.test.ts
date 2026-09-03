@@ -115,8 +115,11 @@ const EXPECTED_LIMITS: Record<string, string | null> = {
   LOGIN: "100kb",
   FOLLOW: "100kb",
   CHANGE_PW: "100kb",
-  CHECK_VALID_USER: "100kb",
-  GET_USER_ID_FROM_EMAIL: "100kb",
+  // Bước 6 (access-control-hardening): CHECK_VALID_USER / GET_USER_ID_FROM_EMAIL đã bị XOÁ
+  // (oracle dò tài khoản). Bước 2 thêm 3 route password-reset, đều đọc `.body` -> cùng nhóm 100kb.
+  PW_RESET_REQUEST: "100kb",
+  PW_RESET_VERIFY: "100kb",
+  PW_RESET_CONFIRM: "100kb",
   VALIDATE_USER_EMAIL: "100kb",
   GET_USERS_PENDING_POST: "100kb",
   // 1 route nhóm 50mb (avatar base64)
@@ -162,10 +165,11 @@ const REQUESTS: Record<string, { query?: string; body?: unknown }> = {
   LOGOUT: {},
   FOLLOW: { body: { userFlId: OTHER_ID, userId: VALID_ID } },
   UPDATE: { body: { name: "An", avatar: "data:image/png;base64,aaaa" } },
-  CHANGE_PW: { body: { currentPW: "old1", newPW: "new1" } },
+  CHANGE_PW: { body: { currentPW: "old-secret", newPW: "new-secret" } },
   CRAWL_USER: {},
-  CHECK_VALID_USER: { body: { userEmail: "an@example.com" } },
-  GET_USER_ID_FROM_EMAIL: { body: { userEmail: "an@example.com" } },
+  PW_RESET_REQUEST: { body: { email: "an@example.com" } },
+  PW_RESET_VERIFY: { body: { email: "an@example.com", code: "A1b2C3" } },
+  PW_RESET_CONFIRM: { body: { userId: VALID_ID, code: "A1b2C3", newPW: "new-secret" } },
   VALIDATE_USER_EMAIL: { body: { email: "an@example.com", code: "123456" } },
   REFRESH_TOKEN: {},
   SITEMAP_ELIGIBLE: {},
@@ -245,8 +249,9 @@ const send = (base: string, route: ParsedRoute, body?: unknown) =>
 
 /* ------------------------------------------------------- 1. wiring: đủ 18 route, đúng limit */
 
-test("FR-2: user.route.ts có ĐÚNG 21 route, không thiếu không thừa so với bảng 011.md + SITEMAP_ELIGIBLE task 003 + ADMIN_DETAIL/ADMIN_ACTION (Users module)", () => {
-  assert.equal(parsedRoutes.length, 21, "phải parse ra đúng 21 route");
+// Bước 2 thêm 3 route `password-reset/*`, bước 6 xoá 2 route dò tài khoản -> 21 + 3 - 2 = 22.
+test("FR-2: user.route.ts có ĐÚNG 22 route, không thiếu không thừa so với bảng 011.md + SITEMAP_ELIGIBLE task 003 + ADMIN_DETAIL/ADMIN_ACTION (Users module) + password-reset (bước 2)", () => {
+  assert.equal(parsedRoutes.length, 22, "phải parse ra đúng 22 route");
   assert.deepEqual(
     parsedRoutes.map((r) => r.key).sort(),
     Object.keys(EXPECTED_LIMITS).sort(),
@@ -256,7 +261,7 @@ test("FR-2: user.route.ts có ĐÚNG 21 route, không thiếu không thừa so v
 
 // Bắt trực tiếp failure mode #1 khi soạn PRD: quên `UPDATE` (avatar) cần 50mb -> avatar vài MB
 // sẽ bị limit 100kb của nhóm auth chặn.
-test("FR-2: mỗi route mount ĐÚNG limit của nó (9×100kb + 1×50mb + 11×không mount)", () => {
+test("FR-2: mỗi route mount ĐÚNG limit của nó (10×100kb + 1×50mb + 11×không mount)", () => {
   for (const route of parsedRoutes) {
     assert.equal(
       route.jsonLimit,
@@ -267,14 +272,14 @@ test("FR-2: mỗi route mount ĐÚNG limit của nó (9×100kb + 1×50mb + 11×k
 
   const at = (limit: string | null) =>
     parsedRoutes.filter((r) => r.jsonLimit === limit).length;
-  assert.equal(at("100kb"), 9);
+  assert.equal(at("100kb"), 10);
   assert.equal(at("50mb"), 1);
   assert.equal(
     at(null),
     11,
     "9 route gốc (ADMIN đã gỡ) + SITEMAP_ELIGIBLE (task 003) + ADMIN_DETAIL (Users module)"
   );
-  assert.equal(at("100kb") + at("50mb") + at(null), 21);
+  assert.equal(at("100kb") + at("50mb") + at(null), 22);
 });
 
 // Bắt trực tiếp failure mode #2: quên mount cho 6 route có `.body` ngoài SIGN_UP/LOGIN. Kỳ vọng
@@ -291,7 +296,7 @@ test("FR-2: mọi route có `.body` trong user.validator.ts đều PHẢI có ex
         : `route ${route.key} không đọc .body nhưng lại mount express.json thừa`
     );
   }
-  assert.equal(parsedRoutes.filter((r) => r.jsonLimit).length, 10);
+  assert.equal(parsedRoutes.filter((r) => r.jsonLimit).length, 11);
 });
 
 // Không được quay lại `router.use(express.json(...))` cấp file: sẽ áp CÙNG 1 limit cho cả nhóm
@@ -309,7 +314,7 @@ test("FR-2: user.route.ts KHÔNG mount express.json ở cấp router", async () 
 // vị trí an toàn và nhất quán nhất — cũng là mốc để T012 chèn rate-limiter mà không phá thứ tự này.
 test("FR-2: express.json luôn là middleware ĐẦU TIÊN (trước protectRoute/validate)", () => {
   const mounted = parsedRoutes.filter((r) => r.jsonLimit);
-  assert.equal(mounted.length, 10, "phải kiểm tra đủ 10 route có express.json");
+  assert.equal(mounted.length, 11, "phải kiểm tra đủ 11 route có express.json");
 
   for (const route of mounted) {
     assert.equal(
@@ -325,7 +330,7 @@ test("FR-2: express.json luôn là middleware ĐẦU TIÊN (trước protectRout
 // AC quan trọng nhất của 011.md: gọi CẢ 18 route với payload hợp lệ tối thiểu, không route nào
 // được lỗi vì `req.body` rỗng/undefined. Nếu bất kỳ route body nào thiếu `express.json`, Zod
 // `.parse(undefined)` -> 400 và test này fail ngay tại route đó.
-test("FR-2 (SMOKE 21/21): mọi route xử lý bình thường, không route nào lỗi do req.body undefined", async () => {
+test("FR-2 (SMOKE 22/22): mọi route xử lý bình thường, không route nào lỗi do req.body undefined", async () => {
   const app = buildAppFromSource();
   const failures: string[] = [];
 
@@ -408,13 +413,16 @@ test("FR-2: UPDATE với avatar base64 ~3MB vẫn 200, không bị áp nhầm li
 
 // Regression: 6 route "bị quên" ở lần soạn PRD thứ 2 — kiểm riêng, tách khỏi smoke test để khi
 // fail thì thông báo chỉ thẳng vào đúng nhóm route đó.
-test("FR-2: 6 route từng bị quên (FOLLOW/CHANGE_PW/CHECK_VALID_USER/...) parse body bình thường", async () => {
+test("FR-2: nhóm route từng bị quên (FOLLOW/CHANGE_PW/password-reset/...) parse body bình thường", async () => {
   const app = buildAppFromSource();
   const keys = [
     "FOLLOW",
     "CHANGE_PW",
-    "CHECK_VALID_USER",
-    "GET_USER_ID_FROM_EMAIL",
+    // 2 key cũ (CHECK_VALID_USER/GET_USER_ID_FROM_EMAIL) đã xoá ở bước 6; 3 route
+    // password-reset của bước 2 thế chỗ, cùng nhóm "đọc body, limit 100kb".
+    "PW_RESET_REQUEST",
+    "PW_RESET_VERIFY",
+    "PW_RESET_CONFIRM",
     "VALIDATE_USER_EMAIL",
     "GET_USERS_PENDING_POST",
   ];

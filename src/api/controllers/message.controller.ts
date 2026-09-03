@@ -1,4 +1,4 @@
-import { ObjectId, destructObjectId } from "../../utils/index.js";
+import { ObjectId, destructObjectId, escapeRegex } from "../../utils/index.js";
 import { genConversations, genMsgsInConversations } from "../crawl.js";
 import Conversation from "../models/conversation.model.js";
 import Link from "../models/link.model.js";
@@ -8,8 +8,13 @@ import { BadRequestError, NotFoundError } from "../../core/error.response.js";
 import { CREATED, OK } from "../../core/success.response.js";
 
 export const getConversationByUsersId = async (req, res) => {
-  const { userId, anotherId } = req.body;
-  if (!userId || !anotherId) {
+  const { anotherId } = req.body;
+  // Bước 9 (access-control-hardening): TRƯỚC ĐÂY cả 2 id đều lấy từ body, nên
+  // `participants: {$all: [userId, anotherId]}` tra được hội thoại riêng tư của 2 người BẤT KỲ —
+  // chỉ cần đăng nhập bằng một tài khoản nào đó rồi truyền id của 2 người khác. Một trong hai
+  // participant giờ LUÔN là người gọi, nên kết quả không thể là hội thoại mà họ không tham gia.
+  const userId = String(req.user._id);
+  if (!anotherId) {
     throw new BadRequestError("Empty payload");
   }
   const data = await Conversation.findOne({
@@ -50,7 +55,11 @@ export const getConversationByUsersId = async (req, res) => {
 };
 
 export const getConversationById = async (req, res) => {
-  const { conversationId, userId } = req.query;
+  const { conversationId } = req.query;
+  // Quyền truy cập do `requireConversationMember` ở tầng route bảo đảm. `userId` ở đây chỉ dùng để
+  // chọn "người còn lại" khi dựng response, nhưng vẫn phải lấy từ JWT: nhận từ query sẽ khiến
+  // response trả nhầm participant nếu client gửi id lạ — sai dữ liệu một cách im lặng.
+  const userId = String(req.user._id);
   if (!conversationId) {
     throw new BadRequestError("Empty conversationId");
   }
@@ -219,20 +228,32 @@ export const searchMsg = async (req, res) => {
 
   // Create search terms
   const searchTerms = value.trim().toLowerCase().split(/\s+/);
-  const searchTermRegexes = searchTerms.map((term) => new RegExp(term, "i"));
 
-  // Create an array of search criteria to improve matching
+  // MỌI mảnh input đều phải qua `escapeRegex` trước khi vào `$regex` (A5 — ReDoS). Biến
+  // `searchTermRegexes` cũ (`new RegExp(term, "i")`) đã bỏ: nó không được dùng ở đâu cả, nhưng vẫn
+  // COMPILE regex từ input thô nên tự nó đã là một vector ReDoS ngay tại dòng khai báo.
   const searchQuery = {
     conversationId: ObjectId(conversationId),
     isRetrieve: false,
     $or: [
-      { content: { $regex: value, $options: "i" } }, // Exact phrase match
-      { content: { $regex: searchTerms.join("|"), $options: "i" } }, // Any word match
-      // Add substring matching patterns for each search term
+      { content: { $regex: escapeRegex(value), $options: "i" } }, // Exact phrase match
+      {
+        content: {
+          // Escape TỪNG term rồi mới nối bằng `|`: nối trước rồi escape sau sẽ escape luôn dấu `|`
+          // và biến alternation thành một chuỗi literal.
+          $regex: searchTerms.map(escapeRegex).join("|"),
+          $options: "i",
+        },
+      }, // Any word match
+      // Flexible spacing match: escape từng KÝ TỰ rồi chèn `\s*` giữa chúng — giữ nguyên ý đồ
+      // "cho phép khoảng trắng xen giữa" mà không để ký tự đặc biệt của người dùng lọt vào pattern.
       ...searchTerms
         .filter((term) => term.length > 2)
         .map((term) => ({
-          content: { $regex: term.split("").join("\\s*"), $options: "i" }, // Flexible spacing match
+          content: {
+            $regex: term.split("").map(escapeRegex).join("\\s*"),
+            $options: "i",
+          },
         })),
     ],
   };

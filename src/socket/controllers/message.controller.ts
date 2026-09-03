@@ -11,7 +11,7 @@ import { MESSAGE_PATH, Route } from "../../Breads-Shared/APIConfig.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
 import { isMediaLegacyFallbackEnabled } from "../../api/services/mediaConvention.js";
 import { validateMediaUrl } from "../../api/validators/validateMediaUrl.js";
-import { ObjectId, destructObjectId } from "../../utils/index.js";
+import { ObjectId, destructObjectId, escapeRegex } from "../../utils/index.js";
 import { sendToSpecificUser } from "../services/message.js";
 import {
   recomputeUnreadCount,
@@ -469,7 +469,8 @@ export default class MessageController {
         {
           $match: {
             "participant.username": {
-              $regex: searchValue || "",
+              // A5: `searchValue` là input người dùng -> phải escape trước khi vào `$regex`.
+              $regex: escapeRegex(searchValue),
               $options: "i",
             },
           },

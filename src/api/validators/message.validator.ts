@@ -6,17 +6,18 @@ import { z } from "zod";
 import { sanitizeText } from "../middlewares/sanitize.js";
 import { objectIdSchema } from "./common.ts";
 
+// Bước 9 (access-control-hardening): `userId` ĐÃ BỎ — một trong hai participant luôn là người gọi
+// (`req.user._id`). Khai báo nó ở đây chính là thứ cho phép tra hội thoại riêng tư của 2 người bất kỳ.
 export const getConversationByUsersIdSchema = {
   body: z.object({
-    userId: objectIdSchema,
     anotherId: objectIdSchema,
   }),
 };
 
+// Bước 9: `userId` ĐÃ BỎ — chỉ dùng để chọn "người còn lại" khi dựng response, giờ lấy từ JWT.
 export const getConversationByIdQuerySchema = {
   query: z.object({
     conversationId: objectIdSchema,
-    userId: objectIdSchema.optional(),
   }),
 };
 

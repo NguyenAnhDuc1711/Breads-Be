@@ -9,7 +9,6 @@ import { OK } from "../../core/success.response.js";
 import logger from "../../core/logger.js";
 import asyncHandler from "../../helpers/asyncHandler.js";
 import { ObjectId } from "../../utils/index.js";
-import { sendForgotPWMail } from "../controllers/util.controller.js";
 import protectRoute from "../middlewares/protectRoute.js";
 import { generatePublicId } from "../services/mediaConvention.js";
 import {
@@ -17,10 +16,9 @@ import {
   upload,
   validateUploadUserId,
 } from "../middlewares/upload.js";
-import { authTierLimiter } from "../middlewares/rateLimiter.js";
 import { validate } from "../middlewares/validate.js";
 import File from "../models/file.model.js";
-import { sendForgotPWMailSchema, uploadSchema } from "../validators/util.validator.js";
+import { uploadSchema } from "../validators/util.validator.js";
 
 const getFileType = (inputType) => {
   let fileType = "";
@@ -99,12 +97,10 @@ router.post(
     }).send(res);
   })
 );
-// FR-1 (task 012): forgot-password thuộc auth-tier (5 req/phút) — chống spam gửi mail/brute-force.
-router.post(
-  UTIL_PATH.SEND_FORGOT_PW_MAIL,
-  authTierLimiter,
-  validate(sendForgotPWMailSchema),
-  sendForgotPWMail
-);
+// `POST /util/send-forgot-pw-mail` ĐÃ XOÁ (epic access-control-hardening, bước 2): endpoint nhận
+// `from`/`subject`/`url` thẳng từ body client -> biến SMTP của hệ thống thành công cụ gửi mail lừa
+// đảo tới địa chỉ bất kỳ (probe V7), và mã OTP kèm theo cũng do client sinh nên không có giá trị
+// xác thực. Thay bằng `POST /users/password-reset/requests` (user.route.ts), nơi server tự sinh mã,
+// tự dựng URL và tự quyết định người gửi.
 
 export default router;

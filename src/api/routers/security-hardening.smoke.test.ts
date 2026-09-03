@@ -147,10 +147,11 @@ const REQUESTS: Record<string, { query?: string; body?: unknown }> = {
   LOGOUT: {},
   FOLLOW: { body: { userFlId: OTHER_ID, userId: VALID_ID } },
   UPDATE: { body: { name: "An", avatar: "data:image/png;base64,aaaa" } },
-  CHANGE_PW: { body: { currentPW: "old1", newPW: "new1" } },
+  CHANGE_PW: { body: { currentPW: "old-secret", newPW: "new-secret" } },
   CRAWL_USER: {},
-  CHECK_VALID_USER: { body: { userEmail: "an@example.com" } },
-  GET_USER_ID_FROM_EMAIL: { body: { userEmail: "an@example.com" } },
+  PW_RESET_REQUEST: { body: { email: "an@example.com" } },
+  PW_RESET_VERIFY: { body: { email: "an@example.com", code: "A1b2C3" } },
+  PW_RESET_CONFIRM: { body: { userId: VALID_ID, code: "A1b2C3", newPW: "new-secret" } },
   VALIDATE_USER_EMAIL: { body: { email: "an@example.com", code: "123456" } },
   REFRESH_TOKEN: {},
   ADMIN_DETAIL: {},
@@ -193,11 +194,12 @@ const send = (base: string, route: ParsedRoute) =>
         }),
   });
 
-test("NFR-2 (SMOKE 21/21): mọi route user.route.ts hoạt động bình thường với TOÀN BỘ middleware Phase 2 (express.json+mongoSanitize+hpp+validate) cùng lúc", async () => {
+// 21 + 3 route password-reset (bước 2) - 2 route dò tài khoản đã xoá (bước 6) = 22.
+test("NFR-2 (SMOKE 22/22): mọi route user.route.ts hoạt động bình thường với TOÀN BỘ middleware Phase 2 (express.json+mongoSanitize+hpp+validate) cùng lúc", async () => {
   // Task 003 (epic seo-sitemap-schema): 19 -> 20 route sau khi thêm SITEMAP_ELIGIBLE; sau đó
   // security-hardening gỡ backdoor GET /admin (không xác thực) -> 20 -> 19. Users module
   // (Breads-Admin): +ADMIN_DETAIL/+ADMIN_ACTION -> 19 -> 21.
-  assert.equal(parsedUserRoutes.length, 21, "phải parse đủ 21 route");
+  assert.equal(parsedUserRoutes.length, 22, "phải parse đủ 22 route");
   const app = buildFullUserApp();
   const failures: string[] = [];
 
@@ -217,7 +219,7 @@ test("NFR-2 (SMOKE 21/21): mọi route user.route.ts hoạt động bình thư�
     })
   );
 
-  assert.deepEqual(failures, [], `21 route phải pass hết:\n${failures.join("\n")}`);
+  assert.deepEqual(failures, [], `22 route phải pass hết:\n${failures.join("\n")}`);
 });
 
 /* ============================================================================================

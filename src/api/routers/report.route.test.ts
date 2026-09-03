@@ -106,49 +106,48 @@ test("AD-5: getReportsSchema: page query string \"2\" -> coerce thành number 2"
   });
 });
 
-test("FR-7: getReportsSchema: thiếu userId -> 400", async () => {
-  await silenceWarn(() =>
-    withServer(makeQueryApp(getReportsSchema), async (base) => {
-      const res = await fetch(`${base}/t?page=2`);
-      assert.equal(res.status, 400);
-      assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
-    })
-  );
+// Bước 10 (access-control-hardening): ĐẢO NGƯỢC kỳ vọng cũ. `userId` không còn là field hợp lệ —
+// quyền xét trên `req.user.role`, không trên userId client gửi.
+test("Bước 10: getReportsSchema không còn nhận userId — vắng thì pass, gửi kèm thì bị strip", async () => {
+  await withServer(makeQueryApp(getReportsSchema), async (base) => {
+    const noUser = await fetch(`${base}/t?page=2`);
+    assert.equal(noUser.status, 200);
+
+    const withUser = await fetch(`${base}/t?userId=${VALID_ID_1}&page=2`);
+    assert.equal(withUser.status, 200);
+    const { query } = (await withUser.json()) as { query: Record<string, unknown> };
+    assert.equal(query.userId, undefined, "userId client gửi phải bị strip");
+  });
 });
 
 test("getReportsSchema: page/limit vắng mặt vẫn pass (optional)", async () => {
   await withServer(makeQueryApp(getReportsSchema), async (base) => {
     const res = await fetch(`${base}/t?userId=${VALID_ID_1}`);
     assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { query: { userId: VALID_ID_1 } });
+    assert.deepEqual(await res.json(), { query: {} }, "userId bị strip (bước 10)");
   });
 });
 
 /* ---------------------------------------------------------- sendReportSchema (body) */
 
-test("sendReportSchema: chỉ có userId vẫn pass (content/media optional)", async () => {
+// Bước 9 (access-control-hardening): ĐẢO NGƯỢC kỳ vọng cũ. `userId` (người báo cáo) không còn là
+// field hợp lệ — nhận nó từ client nghĩa là ai cũng gửi report mạo danh người khác được.
+test("Bước 9: sendReportSchema không còn nhận userId — body rỗng pass, userId gửi kèm bị strip", async () => {
   await withServer(makeBodyApp(sendReportSchema, true), async (base) => {
-    const res = await postBody(base, { userId: VALID_ID_1 });
+    const res = await postBody(base, { userId: VALID_ID_1, content: "spam" });
     assert.equal(res.status, 200);
-    assert.deepEqual(await res.json(), { body: { userId: VALID_ID_1 } });
+    assert.deepEqual(await res.json(), { body: { content: "spam" } });
   });
 });
 
-test("FR-7: sendReportSchema: thiếu userId -> 400", async () => {
-  await silenceWarn(() =>
-    withServer(makeBodyApp(sendReportSchema), async (base) => {
-      const res = await postBody(base, { content: "spam" });
-      assert.equal(res.status, 400);
-      assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
-    })
-  );
-});
 
 /* ---------------------------------------------- responseReportSchema (params.id + body, task 014) */
 
+// #1 + Bước 10: `from`/`to`/`userId` đều đã bỏ khỏi schema. 2 test "from/to không phải email -> 400"
+// đã XOÁ cùng field của chúng — validate một field không tồn tại là kiểm thứ không có thật. Ràng buộc
+// thay thế (người nhận đúng là người báo cáo) được kiểm ở `report.controller.test.ts`, nơi có thể
+// quan sát được đối số thật truyền vào `sendMailService`.
 const validResponseBody = {
-  from: "admin@breads.dev",
-  to: "user@example.com",
   subject: "Về báo cáo của bạn",
   html: "<p>hi</p>",
   userId: VALID_ID_1,
@@ -158,9 +157,11 @@ test("Task 014: responseReportSchema: id (path) + body đầy đủ hợp lệ -
   await withServer(makePatchIdApp(responseReportSchema, true), async (base) => {
     const res = await patchWithId(base, VALID_ID_2, validResponseBody);
     assert.equal(res.status, 200);
+    // Bước 10: `userId` trong `validResponseBody` bị strip, các field mail giữ nguyên.
+    const { userId: _stripped, ...expectedBody } = validResponseBody as any;
     assert.deepEqual(await res.json(), {
       params: { id: VALID_ID_2 },
-      body: validResponseBody,
+      body: expectedBody,
     });
   });
 });
@@ -177,28 +178,7 @@ test("Task 014: responseReportSchema: id (path) không phải ObjectId -> 400", 
 
 // `from` đi thẳng vào `sendMailService` — payload dị dạng phải bị chặn TRƯỚC khi tới lệnh gửi
 // mail thật (controller chỉ check truthy nên "not-an-email" vẫn lọt).
-test("FR-7: responseReportSchema: from không phải email -> 400 (chặn trước sendMailService)", async () => {
-  await silenceWarn(() =>
-    withServer(makePatchIdApp(responseReportSchema), async (base) => {
-      const res = await patchWithId(base, VALID_ID_2, {
-        ...validResponseBody,
-        from: "not-an-email",
-      });
-      assert.equal(res.status, 400);
-      assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
-    })
-  );
-});
 
-test("responseReportSchema: to không phải email -> 400", async () => {
-  await silenceWarn(() =>
-    withServer(makePatchIdApp(responseReportSchema), async (base) => {
-      const res = await patchWithId(base, VALID_ID_2, { ...validResponseBody, to: "user@" });
-      assert.equal(res.status, 400);
-      assert.deepEqual(await res.json(), { message: VALIDATION_ERROR_MESSAGE });
-    })
-  );
-});
 
 test("responseReportSchema: subject rỗng -> 400", async () => {
   await silenceWarn(() =>
@@ -222,13 +202,14 @@ test("FR-7: rejectReportSchema: id (path) không phải ObjectId -> 400", async 
   );
 });
 
-test("Task 014: rejectReportSchema: id (path) + userId (body) hợp lệ -> 200", async () => {
+// Bước 10: `rejectReport` không còn nhận field nào trong body — id nằm ở path, quyền ở `req.user`.
+test("Bước 10: rejectReportSchema: id (path) hợp lệ -> 200, userId gửi kèm bị strip", async () => {
   await withServer(makePatchIdApp(rejectReportSchema, true), async (base) => {
     const res = await patchWithId(base, VALID_ID_2, { userId: VALID_ID_1 });
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), {
       params: { id: VALID_ID_2 },
-      body: { userId: VALID_ID_1 },
+      body: {},
     });
   });
 });

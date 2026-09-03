@@ -10,9 +10,9 @@ import { objectIdSchema } from "./common.ts";
 // Route duy nhất trong file này dùng query. `searchValue`/`page`/`limit` optional — controller
 // chuyển thẳng xuống pipeline có nhánh xử lý khi vắng mặt, không đặt default ở schema để giữ
 // nguyên hành vi (NFR-4).
+// Bước 10: `userId` ĐÃ BỎ — quyền xét trên `req.user.role` (protectRoute đã nạp), không phải trên userId client gửi.
 export const getReportsSchema = {
   query: z.object({
-    userId: objectIdSchema,
     searchValue: z.string().optional(),
     page: z.coerce.number().int().min(1).optional(),
     limit: z.coerce.number().int().min(1).optional(),
@@ -21,9 +21,9 @@ export const getReportsSchema = {
 
 // `media` là mảng file base64 (`{url, ...}`) được `uploadFileFromBase64` xử lý từng phần tử;
 // giữ `z.any()` cho phần tử để không siết shape mà tầng upload hiện chưa ràng buộc (NFR-4).
+// Bước 9: `userId` (người báo cáo) ĐÃ BỎ — lấy từ `req.user._id`, không nhận từ client.
 export const sendReportSchema = {
   body: z.object({
-    userId: objectIdSchema,
     content: z.string().optional(),
     media: z.array(z.any()).optional(),
   }),
@@ -33,26 +33,26 @@ export const sendReportSchema = {
 // không phải text hiển thị cho người dùng. Validate `.email()` ở đây chặn payload dị dạng TRƯỚC
 // khi chạm tới lệnh gửi mail thật — controller chỉ check truthy nên "abc" vẫn lọt qua được.
 // Task 014 (D-1): reportId chuyển từ body vào path (PATCH /:id/response).
+// Bước 10: `userId` ĐÃ BỎ — quyền xét trên `req.user.role` (protectRoute đã nạp), không phải trên userId client gửi.
+// #1 (rà soát bảo mật): `from`/`to` ĐÃ BỎ — người gửi do `sendMailService` quyết, người nhận
+// suy ra từ report đang trả lời. Nhận 2 field này từ client là biến endpoint thành mail relay.
 export const responseReportSchema = {
   params: z.object({
     id: objectIdSchema,
   }),
   body: z.object({
-    from: z.string().email().optional(),
-    to: z.string().email(),
     subject: z.string().min(1),
     html: z.string().optional(),
-    userId: objectIdSchema,
   }),
 };
 
 // Task 014 (D-1): reportId chuyển từ body vào path (PATCH /:id/reject).
+// Bước 10: `userId` ĐÃ BỎ — quyền xét trên `req.user.role` (protectRoute đã nạp), không phải trên userId client gửi.
 export const rejectReportSchema = {
   params: z.object({
     id: objectIdSchema,
   }),
   body: z.object({
-    userId: objectIdSchema,
   }),
 };
 

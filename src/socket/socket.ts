@@ -10,6 +10,7 @@ import UserListener from "./listeners/user.listener.js";
 import AnalyticsListener from "./listeners/admin.listener.js";
 import ALLOWED_ORIGINS from "../utils/allowedOrigins.js";
 import User from "../api/models/user.model.js";
+import { isAccountRestricted } from "../utils/accountStatus.js";
 import logger from "../core/logger.js";
 
 const parseCookieString = (cookieHeader?: string): Record<string, string> => {
@@ -50,15 +51,34 @@ export const initSocket = (server: HttpServer, app: Application): void => {
       }
     }
 
-    io.use((socket: Socket, next) => {
+    io.use(async (socket: Socket, next) => {
       try {
         // Primary: access token passed explicitly via handshake auth
         // Fallback: legacy jwt cookie (backward compat during transition)
         const cookies = parseCookieString(socket.handshake.headers.cookie);
         const token = socket.handshake.auth?.token || cookies.jwt;
         if (token && process.env.JWT_SECRET) {
-          const decoded = jwt.verify(token, process.env.JWT_SECRET);
-          (socket as any).user = decoded;
+          const decoded: any = jwt.verify(token, process.env.JWT_SECRET);
+
+          // Bước 6 (V9): tầng socket là đường thứ HAI vào hệ thống, không đi qua `protectRoute`.
+          // Chặn ban chỉ ở REST là để nguyên cửa nhắn tin/thông báo real-time cho tài khoản đã bị
+          // cấm. 1 query cho mỗi lần KẾT NỐI (không phải mỗi event) — connection thưa hơn event
+          // nhiều bậc, và `connection` handler bên dưới vốn đã chạm DB (`lastActiveAt`).
+          //
+          // Tài khoản bị hạn chế -> KHÔNG gắn `socket.user`, tức socket rơi về trạng thái ẩn danh:
+          // mọi listener lấy danh tính từ `socket.user.userId` (message/notification/analytics) tự
+          // fail-closed mà không cần sửa từng cái.
+          const account: any = await User.findById(decoded?.userId, {
+            status: 1,
+          }).lean();
+          if (account && isAccountRestricted(account.status)) {
+            logger.warn(
+              { userId: String(decoded?.userId), status: account.status },
+              "[socket] handshake của tài khoản bị hạn chế — không gắn danh tính"
+            );
+          } else {
+            (socket as any).user = decoded;
+          }
         }
         next();
       } catch (err) {

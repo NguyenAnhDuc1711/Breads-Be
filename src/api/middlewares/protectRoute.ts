@@ -4,6 +4,10 @@ import logger from "../../core/logger.js";
 import User from "../models/user.model.js";
 import RefreshToken from "../models/refreshToken.model.js";
 import { hashToken } from "../utils/generateTokens.js";
+import {
+  ACCOUNT_RESTRICTED_CODE,
+  isAccountRestricted,
+} from "../../utils/accountStatus.js";
 
 // Avoid writing to the DB on every single request; only refresh the
 // timestamp once it's gone stale.
@@ -42,6 +46,19 @@ const protectRoute = async (req, res, next) => {
     }
 
     const user = await User.findById(userId).select("-password");
+
+    // Bước 6 (V9): chặn tài khoản LOCK/BANNED ở ĐÂY, không chỉ ở `loginUser`. Access token sống 30
+    // phút và refresh token 7 ngày, nên chặn-lúc-đăng-nhập một mình để lọt cả một cửa sổ dài user
+    // vừa bị cấm vẫn thao tác bình thường bằng token đã cấp trước đó. Trước bước này, "ban" chỉ có
+    // tác dụng trên UI (`BannedPage.tsx`) — probe V9 xác nhận tài khoản BANNED vẫn login và gọi
+    // `GET /users/me` thành công.
+    if (user && isAccountRestricted(user.status)) {
+      return res.status(HTTPStatus.FORBIDDEN).json({
+        message: "Tài khoản đang bị hạn chế",
+        code: ACCOUNT_RESTRICTED_CODE,
+      });
+    }
+
     req.user = user;
 
     if (

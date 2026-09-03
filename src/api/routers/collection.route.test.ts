@@ -218,3 +218,27 @@ test("collection.route.ts: validate() wired vào đúng 3 route", async () => {
   const validateCalls = src.match(/validate\(/g) || [];
   assert.equal(validateCalls.length, 3, "phải có đúng 3 lần gọi validate(...)");
 });
+
+// Bước 4 (access-control-hardening): dòng `import protectRoute` trong file này TỪNG BỊ COMMENT,
+// nên cả 3 route phục vụ collection của userId bất kỳ mà không cần đăng nhập (probe V3a/V3b).
+// Test đọc source (không import router thật — controller cần Mongo) và đòi CẢ HAI guard trên CẢ BA
+// route: `protectRoute` chặn người ẩn danh, `requireSelfOnParam("userId")` chặn người đã đăng nhập
+// đọc/xoá collection của người khác. Thiếu một trong hai là lỗ hổng quay lại.
+test("Bước 4 (wiring): cả 3 route collection đều có protectRoute + requireSelfOnParam", async () => {
+  const src = await fs.readFile("src/api/routers/collection.route.ts", "utf8");
+
+  assert.ok(
+    !/^\s*\/\/\s*import protectRoute/m.test(src),
+    "import protectRoute không được ở trạng thái bị comment"
+  );
+  assert.equal(
+    (src.match(/protectRoute,/g) || []).length,
+    3,
+    "cả 3 route phải mount protectRoute"
+  );
+  assert.equal(
+    (src.match(/requireSelfOnParam\("userId"\),/g) || []).length,
+    3,
+    "cả 3 route phải mount requireSelfOnParam(\"userId\")"
+  );
+});

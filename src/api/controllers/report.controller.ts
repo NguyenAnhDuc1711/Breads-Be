@@ -1,9 +1,8 @@
 import { Constants } from "../../Breads-Shared/Constants";
 import {
-  AuthFailureError,
+  NotFoundError,
   BadRequestError,
   ErrorResponse,
-  ForbiddenError,
 } from "../../core/error.response";
 import HTTPStatus from "../../utils/httpStatus.ts";
 import { OK } from "../../core/success.response";
@@ -12,12 +11,13 @@ import Report from "../models/report.model";
 import User from "../models/user.model";
 import { sendMailService } from "../services/util";
 import { uploadFileFromBase64 } from "../utils";
+import { assertRole } from "../middlewares/requireRole.js";
 
 export const sendReport = async (req, res) => {
-  const { userId, content, media } = req.body;
-  if (!userId) {
-    throw new AuthFailureError("Unauthorized");
-  }
+  const { content, media } = req.body;
+  // Bước 9: `userId` là NGƯỜI BÁO CÁO. Lấy từ body nghĩa là ai cũng gửi report mạo danh người khác
+  // được (route đã có `protectRoute`, nhưng guard đó không nói gì về việc report thuộc về ai).
+  const userId = String(req.user._id);
   const userInfo = await User.findOne(
     {
       _id: ObjectId(userId),
@@ -54,17 +54,10 @@ export const sendReport = async (req, res) => {
 };
 
 export const getReports = async (req, res) => {
-  const { userId, searchValue, page, limit } = req.query;
-  if (!userId) {
-    throw new BadRequestError("Empty userId");
-  }
-  const userInfo = await User.findOne({
-    _id: ObjectId(userId),
-  });
-  const allowedRoles = [Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR];
-  if (!allowedRoles.includes(userInfo?.role)) {
-    throw new ForbiddenError();
-  }
+  const { searchValue, page, limit } = req.query;
+  // Bước 10: quyền xét trên `req.user` (protectRoute đã nạp sẵn, có `role`), không phải trên
+  // document tra theo `userId` client gửi. Bỏ luôn 1 query DB thừa mỗi request.
+  assertRole(req.user, Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR);
   const pageNum = Number(page) || 1;
   const limitNum = Number(limit) || 10;
   const agg = [
@@ -161,21 +154,31 @@ export const getReportsByUser = async (req, res) => {
 };
 
 export const responseReport = async (req, res) => {
-  const { from, to, subject, html, userId } = req.body;
+  const { subject, html } = req.body;
   const { id: reportId } = req.params;
-  if (!userId || !to || !subject) {
+  if (!subject) {
     throw new BadRequestError("Invalid input");
   }
-  const userInfo = await User.findOne({
-    _id: ObjectId(userId),
-  });
-  const allowedRoles = [Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR];
-  if (!allowedRoles.includes(userInfo?.role)) {
-    throw new ForbiddenError();
+  assertRole(req.user, Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR);
+
+  // NGƯỜI NHẬN do SERVER quyết, suy ra từ chính report đang được trả lời — không nhận `to` từ body.
+  // Trước đây `to` (và cả `from`) lấy thẳng từ client: một tài khoản ADMIN/MODERATOR bị chiếm là đủ
+  // để gửi HTML tuỳ ý tới ĐỊA CHỈ BẤT KỲ qua SMTP thật của hệ thống — cùng lớp lỗi với endpoint
+  // `POST /util/send-forgot-pw-mail` đã xoá ở bước 2, chỉ khác là có role-gate nên hẹp hơn.
+  // Ràng buộc mới: chỉ gửi được cho đúng người đã gửi report đó, không ai khác.
+  const report: any = await Report.findById(reportId, { userId: 1 }).lean();
+  if (!report) {
+    throw new NotFoundError("Report not found");
   }
+  const reporter: any = await User.findById(report.userId, { email: 1 }).lean();
+  if (!reporter?.email) {
+    throw new BadRequestError("Reporter has no email");
+  }
+
   const result = await sendMailService({
-    from,
-    to,
+    // `from` KHÔNG nhận từ client — `sendMailService` tự dùng `SEND_MAIL_USER` khi vắng.
+    from: undefined,
+    to: reporter.email,
     subject,
     html,
   });
@@ -197,18 +200,11 @@ export const responseReport = async (req, res) => {
 };
 
 export const rejectReport = async (req, res) => {
-  const { userId } = req.body;
   const { id: reportId } = req.params;
-  if (!userId || !reportId) {
+  if (!reportId) {
     throw new BadRequestError("Invalid input");
   }
-  const userInfo = await User.findOne({
-    _id: ObjectId(userId),
-  });
-  const allowedRoles = [Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR];
-  if (!allowedRoles.includes(userInfo?.role)) {
-    throw new ForbiddenError();
-  }
+  assertRole(req.user, Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR);
   await Report.updateOne(
     {
       _id: ObjectId(reportId),

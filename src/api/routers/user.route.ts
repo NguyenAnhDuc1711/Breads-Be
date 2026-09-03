@@ -3,10 +3,8 @@ import mongoSanitize from "express-mongo-sanitize";
 import hpp from "hpp";
 import {
   changePassword,
-  checkValidUser,
   followUser,
   getMe,
-  getUserIdFromEmail,
   getUserProfile,
   getUsersFollow,
   getUsersToTag,
@@ -23,6 +21,9 @@ import {
   refreshTokenHandler,
   getUserAdminDetail,
   adminUpdateUser,
+  requestPasswordReset,
+  verifyPasswordResetCode,
+  confirmPasswordReset,
 } from "../controllers/user.controller.js";
 import { USER_PATH } from "../../Breads-Shared/APIConfig.js";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
@@ -45,11 +46,12 @@ import {
   getUsersToTagQuerySchema,
   getUsersWithStatusQuerySchema,
   getUsersPendingPostSchema,
-  checkValidUserSchema,
-  getUserIdFromEmailSchema,
   getSitemapEligibleUsersQuerySchema,
   getUserAdminDetailSchema,
   adminUpdateUserSchema,
+  requestPasswordResetSchema,
+  verifyPasswordResetCodeSchema,
+  confirmPasswordResetSchema,
 } from "../validators/user.validator.js";
 
 // FR-2 (Task 011): router DUY NHẤT lẫn 2 nhóm payload trong cùng 1 file — nhóm auth/text nhỏ
@@ -79,8 +81,6 @@ const {
   CRAWL_USER,
   USERS_FOLLOW,
   USERS_TO_TAG,
-  CHECK_VALID_USER,
-  GET_USER_ID_FROM_EMAIL,
   GET_USERS_PENDING_POST,
   GET_USERS_WITH_STATUS,
   VALIDATE_USER_EMAIL,
@@ -88,6 +88,9 @@ const {
   SITEMAP_ELIGIBLE,
   ADMIN_DETAIL,
   ADMIN_ACTION,
+  PW_RESET_REQUEST,
+  PW_RESET_VERIFY,
+  PW_RESET_CONFIRM,
 } = USER_PATH;
 
 // FR-2 (Task 010, D-1): GET literal 1-segment paths (/me, /follow-list, /with-status)
@@ -212,33 +215,58 @@ router.put(
   validate(adminUpdateUserSchema),
   asyncHandler(adminUpdateUser),
 );
+// Task bước 1 (epic access-control-hardening): route này TRƯỚC ĐÂY không có guard nào, và
+// controller có nhánh `forgotPW` do client tự gửi bỏ qua kiểm tra mật khẩu cũ -> bất kỳ ai cũng
+// đổi được mật khẩu của bất kỳ userId nào rồi đăng nhập (probe V1, xác nhận 200 + chiếm được
+// tài khoản). `requireSelfOrRole(ADMIN)` dùng chung pattern với `UPDATE` ("/:id") ở trên — cả hai
+// đều là hành động trên tài nguyên của chính mình, có cửa admin override.
 router.put(
   CHANGE_PW,
   express.json({ limit: "100kb" }),
   mongoSanitize(),
   hpp(),
+  protectRoute,
+  requireSelfOrRole(Constants.USER_ROLE.ADMIN),
   validate(changePasswordSchema),
   asyncHandler(changePassword),
+);
+// Luồng quên mật khẩu server-side (bước 2) — thay cho `POST /util/send-forgot-pw-mail` (đã xoá)
+// cộng với việc đối chiếu mã ở client. Cả 3 đều thuộc auth-tier: đây là bề mặt brute-force mã 6
+// ký tự và spam gửi mail, cùng nhóm rủi ro với LOGIN/SIGN_UP.
+router.post(
+  PW_RESET_REQUEST,
+  express.json({ limit: "100kb" }),
+  mongoSanitize(),
+  hpp(),
+  authTierLimiter,
+  validate(requestPasswordResetSchema),
+  asyncHandler(requestPasswordReset),
+);
+router.post(
+  PW_RESET_VERIFY,
+  express.json({ limit: "100kb" }),
+  mongoSanitize(),
+  hpp(),
+  authTierLimiter,
+  validate(verifyPasswordResetCodeSchema),
+  asyncHandler(verifyPasswordResetCode),
+);
+router.post(
+  PW_RESET_CONFIRM,
+  express.json({ limit: "100kb" }),
+  mongoSanitize(),
+  hpp(),
+  authTierLimiter,
+  validate(confirmPasswordResetSchema),
+  asyncHandler(confirmPasswordReset),
 );
 // AD-3 (task 012): CRAWL_USER thiếu auth guard (PRD C-4) -> áp auth-tier nghiêm ngặt thay vì loại
 // trừ khỏi rate-limit, vì đây là endpoint tốn tài nguyên (trigger seed).
 router.post(CRAWL_USER, authTierLimiter, asyncHandler(handleCrawlFakeUsers));
-router.post(
-  CHECK_VALID_USER,
-  express.json({ limit: "100kb" }),
-  mongoSanitize(),
-  hpp(),
-  validate(checkValidUserSchema),
-  asyncHandler(checkValidUser),
-);
-router.post(
-  GET_USER_ID_FROM_EMAIL,
-  express.json({ limit: "100kb" }),
-  mongoSanitize(),
-  hpp(),
-  validate(getUserIdFromEmailSchema),
-  asyncHandler(getUserIdFromEmail),
-);
+// `POST /validity-checks` và `POST /id-lookup` ĐÃ XOÁ (bước 6, access-control-hardening): 2
+// endpoint công khai này là oracle dò tài khoản (email -> "có tồn tại không" / -> userId), và
+// chính `/id-lookup` cung cấp userId cho bước ① của chuỗi chiếm tài khoản V1. Sau bước 2 chúng
+// không còn caller nào — xem `Login.tsx`, nơi luồng quên mật khẩu giờ đi qua `password-reset/*`.
 router.post(
   VALIDATE_USER_EMAIL,
   express.json({ limit: "100kb" }),

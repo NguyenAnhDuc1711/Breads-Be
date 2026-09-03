@@ -34,6 +34,21 @@ jobs:
         continue-on-error: true
         run: npx tsc --noEmit
 
+      # Bước 7 (epic access-control-hardening) — CỔNG CHẶN THẬT, không `continue-on-error`.
+      #
+      # Tách thành step RIÊNG thay vì để lẫn trong lượt test lớn bên dưới vì 2 lý do:
+      #   1. Khi đỏ, tên step nói thẳng nguyên nhân ("route mới thiếu guard") thay vì bắt người đọc
+      #      lục trong output của ~40 file test.
+      #   2. Nó KHÔNG cần Redis/mongod (chỉ đọc source + import validator thuần), nên chạy được cả
+      #      khi lượt test lớn phải loại trừ file này file kia vì thiếu hạ tầng.
+      #
+      # Step này đỏ nghĩa là: có route mới không có guard danh tính và không được khai báo công khai
+      # kèm lý do trong PUBLIC_ROUTES, HOẶC một schema của route đã xác thực lại nhận `userId`/
+      # `authorId` từ client. Cả hai đều là lớp lỗi đã từng gây ra lỗ hổng chiếm tài khoản trong
+      # repo này — xem `src/api/routers/guard-matrix.test.ts`.
+      - name: Access-control guard matrix (blocking)
+        run: npm run security:guards
+
       # Excludes test files that need a real Redis (feed/queue.ts connects eagerly at
       # import time, or dbs/redis.ts's initRedis() in a before() hook) or spawn their own
       # `mongod` binary — neither is available on this runner. See CI setup discussion for
