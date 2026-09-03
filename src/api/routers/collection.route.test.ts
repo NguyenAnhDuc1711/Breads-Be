@@ -1,13 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 014 — 3 schema của router `collection`; cập nhật ở task 013 (redesign RESTful):
-// ADD -> PATCH /:userId/items (userId path, postId body), REMOVE -> DELETE /:userId/items/:postId
-// (cả 2 id path, không còn body).
-//
-// Pattern (task 001, AD-7): mount `validate(schema)` trần trên 1 `express()` mới, không import
-// `app.ts`/`collection.route.ts` thật — không cần Mongo/Redis, vẫn kiểm đúng mã lỗi HTTP THẬT.
-// Riêng test 404 (deletedCount===0) gọi thẳng controller với model stub (pattern
-// `notification.route.test.ts`), vì đây là logic điều khiển ở controller, không phải schema.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
@@ -53,7 +43,6 @@ const withServer = async (app, fn: (base: string) => Promise<void>) => {
   }
 };
 
-// Task 013 (D-1): PATCH /:userId/items — userId trong path, postId trong body.
 const makeAddApp = (schema, echo = false) => {
   const app = express();
   app.use(express.json());
@@ -64,7 +53,6 @@ const makeAddApp = (schema, echo = false) => {
   return app;
 };
 
-// Task 013 (D-1): DELETE /:userId/items/:postId — cả 2 id trong path, không còn body.
 const makeRemoveApp = (schema) => {
   const app = express();
   app.use(express.json());
@@ -84,8 +72,6 @@ const patchAdd = (base: string, userId: string, body: unknown) =>
 
 const deleteRemove = (base: string, userId: string, postId: string) =>
   fetch(`${base}/t/${userId}/items/${postId}`, { method: "DELETE" });
-
-/* --------------------------------------------------- getUserCollectionSchema (params) */
 
 test("FR-7: getUserCollectionSchema: userId param không phải ObjectId -> 400", async () => {
   const app = express();
@@ -116,8 +102,6 @@ test("getUserCollectionSchema: userId param hợp lệ -> 200", async () => {
     assert.deepEqual(await res.json(), { params: { userId: VALID_ID_1 } });
   });
 });
-
-/* ------------------------------------------- addPostToCollectionSchema (params + body) */
 
 test("Task 013: addPostToCollectionSchema: userId (path) + postId (body) hợp lệ -> 200", async () => {
   await withServer(makeAddApp(addPostToCollectionSchema, true), async (base) => {
@@ -150,8 +134,6 @@ test("Task 013: addPostToCollectionSchema: userId (path) không phải ObjectId 
   );
 });
 
-/* -------------------------------------------- removePostFromCollectionSchema (params only) */
-
 test("Task 013: removePostFromCollectionSchema: userId + postId (path) hợp lệ -> 200", async () => {
   await withServer(makeRemoveApp(removePostFromCollectionSchema), async (base) => {
     const res = await deleteRemove(base, VALID_ID_1, VALID_ID_2);
@@ -178,8 +160,6 @@ test("removePostFromCollectionSchema: postId (path) không phải ObjectId -> 40
     })
   );
 });
-
-/* --------------------------------------- removePostFromCollection controller (plan-review edge case) */
 
 const fakeRes = () => {
   const res: any = {};
@@ -211,19 +191,12 @@ test("Task 013 (plan-review edge case): postId không tồn tại trong collecti
   }
 });
 
-/* --------------------------------------------------------------- wiring/structure */
-
 test("collection.route.ts: validate() wired vào đúng 3 route", async () => {
   const src = await fs.readFile("src/api/routers/collection.route.ts", "utf8");
   const validateCalls = src.match(/validate\(/g) || [];
   assert.equal(validateCalls.length, 3, "phải có đúng 3 lần gọi validate(...)");
 });
 
-// Bước 4 (access-control-hardening): dòng `import protectRoute` trong file này TỪNG BỊ COMMENT,
-// nên cả 3 route phục vụ collection của userId bất kỳ mà không cần đăng nhập (probe V3a/V3b).
-// Test đọc source (không import router thật — controller cần Mongo) và đòi CẢ HAI guard trên CẢ BA
-// route: `protectRoute` chặn người ẩn danh, `requireSelfOnParam("userId")` chặn người đã đăng nhập
-// đọc/xoá collection của người khác. Thiếu một trong hai là lỗ hổng quay lại.
 test("Bước 4 (wiring): cả 3 route collection đều có protectRoute + requireSelfOnParam", async () => {
   const src = await fs.readFile("src/api/routers/collection.route.ts", "utf8");
 

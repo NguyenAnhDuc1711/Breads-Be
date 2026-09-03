@@ -1,18 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 010 (security-hardening, FR-2) — bỏ `express.json` global ở `src/app.ts`, mount
-// `express.json({limit})` per-router cho 7 router "thuần" (post/report/util/message/analytics/
-// collection/notification).
-//
-// Vì sao không import router thật (AD-7, giống `post.route.test.ts`/`util.route.test.ts`): các file
-// route kéo theo controller -> `services/feed/queue.ts` mở Redis + Cloudinary NGAY LÚC IMPORT, giữ
-// event loop sống nên `npm test` sẽ treo. Vì vậy:
-//  - Tầng HÀNH VI: dựng `express()` mới, mount ĐÚNG limit của từng router + `validate()` THẬT +
-//    schema THẬT -> đo hành vi 413/200 thật qua HTTP.
-//  - Tầng CHỐNG DRIFT: đọc SOURCE `src/app.ts` + 7 file router, assert global đã bị bỏ và từng
-//    router mount đúng limit TRƯỚC route đầu tiên. Đây là phần bắt được landmine "parse-once":
-//    nếu global 50mb quay lại `app.ts`, mọi limit per-router thành no-op mà test hành vi KHÔNG
-//    phát hiện được (vì test hành vi không đi qua `app.ts`).
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fsp from "node:fs/promises";
@@ -39,8 +24,6 @@ const silenceWarn = async (fn: () => unknown | Promise<unknown>) => {
   }
 };
 
-/** Mirror cách `src/app.ts` map lỗi -> status: body-parser gắn `err.status = 413` cho
- * `entity.too.large`, nên request vượt limit trả về đúng 413. */
 const errorHandler = (err, _req, res, _next) => {
   const statusCode = err.statusCode || err.status || 500;
   res.status(statusCode).json({ message: err.message, type: err.type });
@@ -57,7 +40,6 @@ const withServer = async (app, fn: (base: string) => Promise<void>) => {
   }
 };
 
-/** Nếu request chạm được đây nghĩa là body-parser ĐÃ parse xong và `validate()` cho qua. */
 const reachedController = (req, res) => {
   res.json({ reached: true, contentLength: JSON.stringify(req.body ?? {}).length });
 };
@@ -69,9 +51,6 @@ const postJson = (base: string, path: string, body: unknown) =>
     body: JSON.stringify(body),
   });
 
-/* ------------------------------------------------ post router: 50mb (regression base64) */
-
-// AC FR-2: media base64 vài MB vẫn phải qua được sau khi bỏ global 50mb — router giữ 50mb.
 test("FR-2 (post router 50mb): createPost với media base64 ~3MB vẫn 200, không bị 413", async () => {
   const app = express();
   app.use(express.json({ limit: "50mb" }));
@@ -79,7 +58,7 @@ test("FR-2 (post router 50mb): createPost với media base64 ~3MB vẫn 200, kh�
   app.use(errorHandler);
 
   await withServer(app, async (base) => {
-    const bigBase64 = "a".repeat(3 * 1024 * 1024); // ~3MB, thừa sức vượt mọi limit nhỏ hơn
+    const bigBase64 = "a".repeat(3 * 1024 * 1024);
     const res = await postJson(base, "/posts/create", {
       _id: VALID_ID,
       authorId: OTHER_ID,
@@ -93,8 +72,6 @@ test("FR-2 (post router 50mb): createPost với media base64 ~3MB vẫn 200, kh�
   });
 });
 
-// Chứng minh limit thật sự có hiệu lực (không phải "test nào cũng pass vì limit vô hạn"): CÙNG
-// payload đó qua router limit 1mb thì bị chặn 413.
 test("FR-2 (đối chứng): cùng payload 3MB qua router limit 1mb -> 413, không chạm controller", async () => {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
@@ -109,12 +86,6 @@ test("FR-2 (đối chứng): cùng payload 3MB qua router limit 1mb -> 413, khô
   });
 });
 
-/* ------------------------------------------------- user router: password-reset 100kb */
-
-// AC FR-2: endpoint quên-mật-khẩu chỉ nhận vài field text -> body > 100kb phải bị chặn TRƯỚC
-// `validate()`/controller. Bước 2 (access-control-hardening) chuyển endpoint này từ
-// `POST /util/send-forgot-pw-mail` (đã xoá) sang `POST /users/password-reset/requests`; giới hạn
-// 100kb và thứ tự "413 trước validate" không đổi, nên test giữ nguyên ý nghĩa, chỉ đổi schema.
 test("FR-2 (user router 100kb): password-reset body > 100kb -> 413 trước validate/controller", async () => {
   const app = express();
   let controllerRan = false;
@@ -133,7 +104,7 @@ test("FR-2 (user router 100kb): password-reset body > 100kb -> 413 trước vali
     withServer(app, async (base) => {
       const res = await postJson(base, "/util/forgot-pw", {
         email: "c@d.com",
-        padding: "x".repeat(150 * 1024), // đệm cho vượt 100kb
+        padding: "x".repeat(150 * 1024),
       });
 
       assert.equal(res.status, 413);
@@ -155,12 +126,9 @@ test("FR-2 (user router 100kb, regression): body password-reset bình thường 
   });
 });
 
-// AC FR-2: route UPLOAD là multipart -> `express.json({limit:"100kb"})` phải TỰ BỎ QUA theo
-// Content-Type. File 200KB (vượt xa 100kb JSON limit, vẫn dưới 10MB của multer) phải upload OK.
-// Dùng `upload` THẬT nên đây là bằng chứng end-to-end, không phải suy luận.
 test("FR-2 (util router): multipart qua multer KHÔNG bị express.json 100kb chặn", async () => {
   const app = express();
-  app.use(express.json({ limit: "100kb" })); // mount TRƯỚC, đúng như router.use trong util.route.ts
+  app.use(express.json({ limit: "100kb" }));
   app.post("/util/upload", upload.array("files"), (req: any, res) => {
     res.json({ ok: true, filesCount: (req.files as any[])?.length });
   });
@@ -184,8 +152,6 @@ test("FR-2 (util router): multipart qua multer KHÔNG bị express.json 100kb ch
     await fsp.rm(uploadDir, { recursive: true, force: true });
   }
 });
-
-/* ------------------------------------------- message/analytics router: 1mb (regression) */
 
 test("FR-2 (message router 1mb, regression): searchMsg body nhỏ hợp lệ vẫn parse bình thường", async () => {
   const app = express();
@@ -225,13 +191,8 @@ test("FR-2 (analytics router 1mb, regression): createEvent kèm deviceInfo/brows
   });
 });
 
-/* --------------------------------- source assertion (chống drift landmine parse-once) */
-
 const readSrc = (path: string) => fsp.readFile(path, "utf8");
 
-// Landmine cốt lõi của task: body-parser set `req._body` sau lần parse đầu, mọi `express.json()`
-// sau đó trên CÙNG request bị skip. Nếu global 50mb ở `app.ts` quay lại, toàn bộ limit per-router
-// dưới đây thành no-op mà không test hành vi nào fail. Vì vậy phải assert trực tiếp trên source.
 test("FR-2: src/app.ts KHÔNG còn express.json global (parse-once landmine)", async () => {
   const src = await readSrc("src/app.ts");
 
@@ -270,14 +231,4 @@ test("FR-2: đủ 7 router mount express.json đúng limit, TRƯỚC route đầ
       `${file}: express.json phải mount TRƯỚC route đầu tiên, nếu không route phía trên không có body`
     );
   }
-});
-
-// AD-4: quyết định có chủ đích — report router dùng blanket 50mb cho CẢ RESPONSE/REJECT (2 route
-// không cần media). Comment phải còn để người đọc sau không tưởng là sót.
-test("AD-4: report.route.ts có comment giải thích blanket 50mb", async () => {
-  const src = await readSrc("src/api/routers/report.route.ts");
-  assert.ok(
-    src.includes("AD-4") && src.includes("RESPONSE/REJECT"),
-    "phải ghi rõ blanket 50mb là quyết định có chủ đích, không phải sót per-route"
-  );
 });

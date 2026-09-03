@@ -42,8 +42,6 @@ services:
       redis:
         condition: service_healthy
 
-  # [A3] BullMQ Worker (dispatch/batch) chạy container riêng, không share process với `app`
-  # (HTTP server) — scale độc lập theo queue depth bằng `docker compose up --scale worker=N`.
   worker:
     build: .
     command: ["npx", "tsx", "src/worker.ts"]
@@ -97,9 +95,6 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
-      # Snapshots stay on this Grafana instance only — no "publish to
-      # snapshot.raintank.io" (public third-party server) option in the
-      # Share > Snapshot dialog.
       GF_SNAPSHOTS_EXTERNAL_ENABLED: "false"
     volumes:
       - ./docker/grafana/provisioning:/etc/grafana/provisioning

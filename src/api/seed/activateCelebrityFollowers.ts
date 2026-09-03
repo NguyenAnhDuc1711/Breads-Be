@@ -1,15 +1,3 @@
-// One-off maintenance script: bump `lastActiveAt` to "now" for every
-// follower of a given followee, so fanout.ts's getActiveFollowerIds() (which
-// filters followers by `lastActiveAt >= now - activeWindowDays days`, see
-// src/api/services/feed/fanout.ts) doesn't silently drop most of them.
-//
-// Without this, followers seeded by seedCelebrityFollows.ts /
-// seedOrdinaryFollows.ts have no lastActiveAt at all (field is unset by
-// default, see user.model.ts), so the active-follower query would filter
-// nearly everyone out — making a fan-out load test look like it does almost
-// no work even though the raw follower count is high.
-//
-// Usage: npx tsx src/api/seed/activateCelebrityFollowers.ts [--followeeId=671ee34db863a9a7301732af]
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import Follow from "../models/follow.model.js";

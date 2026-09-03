@@ -1,20 +1,3 @@
-// One-off seed: give ordinary (non-celebrity) users a realistic peer-to-peer
-// follow graph, including deliberate mutual pairs. seedCelebrityFollows.ts
-// only models the "many people follow one star" side of the network — without
-// this, every non-celebrity user would have a near-empty follows list, which
-// isn't how a real social graph looks.
-//
-// Strategy: two passes over the `users` collection.
-//   1. Build an in-memory pool (ObjectIdPool) of ordinary user ids — celebrities
-//      excluded on both sides, since their edges are celebrity-specific and
-//      already seeded separately.
-//   2. For each ordinary user, sample an out-degree from an exponential
-//      distribution (mean = --avgFollows) so most users follow a modest
-//      number of peers and a long tail follows many more. For each edge, flip
-//      a coin (--mutualRatio) to also create the reverse edge — a real "we
-//      follow each other" pair — instead of leaving it one-sided.
-//
-// Usage: npx tsx src/api/seed/seedOrdinaryFollows.ts [--avgFollows=40] [--mutualRatio=0.35] [--poolCapacity=500000]
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import Follow from "../models/follow.model.js";
@@ -22,8 +5,6 @@ import { ObjectIdPool } from "./idPool.js";
 
 dotenv.config();
 
-// Keep in sync with CELEBRITY_TARGETS in seedCelebrityFollows.ts — those
-// accounts' follow edges are modeled by that script, not this one.
 const CELEBRITY_IDS = new Set([
   "66fa65b4775c617545634c99",
   "671ee34db863a9a7301732af",
@@ -48,9 +29,6 @@ const parseArgs = () => {
   return args;
 };
 
-// Inverse-CDF sample from an exponential distribution with the given mean —
-// most draws land near/under `mean`, with a long tail of much higher values
-// (a handful of "socially active" users following far more than average).
 const sampleDegree = (mean) =>
   Math.max(1, Math.round(-mean * Math.log(1 - Math.random())));
 

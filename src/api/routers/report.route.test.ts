@@ -1,10 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 014 — 4 schema của router `report`.
-//
-// Pattern (task 001, AD-7): mount `validate(schema)` trần trên 1 `express()` mới, không import
-// `app.ts`/`report.route.ts` thật (route CREATE còn `protectRoute` cần Mongo/JWT) — không cần
-// Mongo/Redis, vẫn kiểm đúng mã lỗi HTTP THẬT trả về client.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
@@ -74,7 +67,6 @@ const makeQueryApp = (schema) => {
   return app;
 };
 
-// Task 014 (D-1): PATCH /:id/response|reject — id trong path, phần còn lại trong body.
 const makePatchIdApp = (schema, echo = false) => {
   const app = express();
   app.use(express.json());
@@ -92,10 +84,6 @@ const patchWithId = (base: string, id: string, body: unknown) =>
     body: JSON.stringify(body),
   });
 
-/* ------------------------------------------------------- getReportsSchema (query) */
-
-// AD-5: route này đọc `req.query` -> `z.coerce.number()`. Nửa đối chứng (body KHÔNG coerce) nằm
-// ở `notification.route.test.ts`.
 test("AD-5: getReportsSchema: page query string \"2\" -> coerce thành number 2", async () => {
   await withServer(makeQueryApp(getReportsSchema), async (base) => {
     const res = await fetch(`${base}/t?userId=${VALID_ID_1}&page=2`);
@@ -106,8 +94,6 @@ test("AD-5: getReportsSchema: page query string \"2\" -> coerce thành number 2"
   });
 });
 
-// Bước 10 (access-control-hardening): ĐẢO NGƯỢC kỳ vọng cũ. `userId` không còn là field hợp lệ —
-// quyền xét trên `req.user.role`, không trên userId client gửi.
 test("Bước 10: getReportsSchema không còn nhận userId — vắng thì pass, gửi kèm thì bị strip", async () => {
   await withServer(makeQueryApp(getReportsSchema), async (base) => {
     const noUser = await fetch(`${base}/t?page=2`);
@@ -128,10 +114,6 @@ test("getReportsSchema: page/limit vắng mặt vẫn pass (optional)", async ()
   });
 });
 
-/* ---------------------------------------------------------- sendReportSchema (body) */
-
-// Bước 9 (access-control-hardening): ĐẢO NGƯỢC kỳ vọng cũ. `userId` (người báo cáo) không còn là
-// field hợp lệ — nhận nó từ client nghĩa là ai cũng gửi report mạo danh người khác được.
 test("Bước 9: sendReportSchema không còn nhận userId — body rỗng pass, userId gửi kèm bị strip", async () => {
   await withServer(makeBodyApp(sendReportSchema, true), async (base) => {
     const res = await postBody(base, { userId: VALID_ID_1, content: "spam" });
@@ -141,12 +123,6 @@ test("Bước 9: sendReportSchema không còn nhận userId — body rỗng pass
 });
 
 
-/* ---------------------------------------------- responseReportSchema (params.id + body, task 014) */
-
-// #1 + Bước 10: `from`/`to`/`userId` đều đã bỏ khỏi schema. 2 test "from/to không phải email -> 400"
-// đã XOÁ cùng field của chúng — validate một field không tồn tại là kiểm thứ không có thật. Ràng buộc
-// thay thế (người nhận đúng là người báo cáo) được kiểm ở `report.controller.test.ts`, nơi có thể
-// quan sát được đối số thật truyền vào `sendMailService`.
 const validResponseBody = {
   subject: "Về báo cáo của bạn",
   html: "<p>hi</p>",
@@ -157,7 +133,6 @@ test("Task 014: responseReportSchema: id (path) + body đầy đủ hợp lệ -
   await withServer(makePatchIdApp(responseReportSchema, true), async (base) => {
     const res = await patchWithId(base, VALID_ID_2, validResponseBody);
     assert.equal(res.status, 200);
-    // Bước 10: `userId` trong `validResponseBody` bị strip, các field mail giữ nguyên.
     const { userId: _stripped, ...expectedBody } = validResponseBody as any;
     assert.deepEqual(await res.json(), {
       params: { id: VALID_ID_2 },
@@ -176,9 +151,6 @@ test("Task 014: responseReportSchema: id (path) không phải ObjectId -> 400", 
   );
 });
 
-// `from` đi thẳng vào `sendMailService` — payload dị dạng phải bị chặn TRƯỚC khi tới lệnh gửi
-// mail thật (controller chỉ check truthy nên "not-an-email" vẫn lọt).
-
 
 test("responseReportSchema: subject rỗng -> 400", async () => {
   await silenceWarn(() =>
@@ -190,8 +162,6 @@ test("responseReportSchema: subject rỗng -> 400", async () => {
   );
 });
 
-/* ------------------------------------------------ rejectReportSchema (params.id + body, task 014) */
-
 test("FR-7: rejectReportSchema: id (path) không phải ObjectId -> 400", async () => {
   await silenceWarn(() =>
     withServer(makePatchIdApp(rejectReportSchema), async (base) => {
@@ -202,7 +172,6 @@ test("FR-7: rejectReportSchema: id (path) không phải ObjectId -> 400", async 
   );
 });
 
-// Bước 10: `rejectReport` không còn nhận field nào trong body — id nằm ở path, quyền ở `req.user`.
 test("Bước 10: rejectReportSchema: id (path) hợp lệ -> 200, userId gửi kèm bị strip", async () => {
   await withServer(makePatchIdApp(rejectReportSchema, true), async (base) => {
     const res = await patchWithId(base, VALID_ID_2, { userId: VALID_ID_1 });
@@ -214,8 +183,6 @@ test("Bước 10: rejectReportSchema: id (path) hợp lệ -> 200, userId gửi 
   });
 });
 
-/* --------------------------------------------------------------- wiring/structure */
-
 test("report.route.ts: validate() wired vào đúng 5 route", async () => {
   const src = await fs.readFile("src/api/routers/report.route.ts", "utf8");
   const validateCalls = src.match(/validate\(/g) || [];
@@ -226,7 +193,6 @@ test("report.route.ts: validate() wired vào đúng 5 route", async () => {
   );
 });
 
-// AD-1: validate() phải đứng SAU protectRoute ở route CREATE (route duy nhất có auth trong file).
 test("report.route.ts: validate() đứng sau protectRoute ở REPORT_PATH.CREATE", async () => {
   const src = await fs.readFile("src/api/routers/report.route.ts", "utf8");
   const createCall = src.slice(src.indexOf("REPORT_PATH.CREATE"));

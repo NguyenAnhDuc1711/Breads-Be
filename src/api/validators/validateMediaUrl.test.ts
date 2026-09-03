@@ -1,8 +1,3 @@
-// Run with Node's built-in test runner: `npm test` (glob `src/api/validators/*.test.ts`).
-//
-// Test riêng biệt cho namespace="message" và namespace="post" (không dùng chung bộ test case) —
-// đúng khuyến nghị "single point of failure" ở epic.md Risk table: bug ở namespace này không được
-// lẫn với namespace kia.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { validateMediaUrl } from "./validateMediaUrl.ts";
@@ -17,10 +12,6 @@ const withCloudName = (fn: () => void) => {
     delete process.env.CLOUDINARY_CLOUD_NAME;
   }
 };
-
-// ---------------------------------------------------------------------------
-// namespace="message"
-// ---------------------------------------------------------------------------
 
 test("validateMediaUrl:message/strict: domain + public_id + expectedKey (sortedPairId) đều khớp -> true", () => {
   withCloudName(() => {
@@ -79,10 +70,6 @@ test("validateMediaUrl:message/loose: không truyền expectedKey -> chỉ cần
   });
 });
 
-// ---------------------------------------------------------------------------
-// namespace="post"
-// ---------------------------------------------------------------------------
-
 test("validateMediaUrl:post/strict: domain + public_id + expectedKey (authorId) đều khớp -> true", () => {
   withCloudName(() => {
     const url = `https://res.cloudinary.com/${CLOUD_NAME}/image/upload/v1700000000/post/U1/507f1f77bcf86cd799439011.jpg`;
@@ -140,11 +127,6 @@ test("validateMediaUrl:post/loose: không truyền expectedKey -> chỉ cần đ
   });
 });
 
-// ---------------------------------------------------------------------------
-// Không phải URL Cloudinary chút nào (dùng chung cho cả 2 namespace, không phải logic riêng theo
-// namespace nên không cần tách đôi bộ test này)
-// ---------------------------------------------------------------------------
-
 test("validateMediaUrl:data: base64 URI -> false (không throw)", () => {
   withCloudName(() => {
     const url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA";
@@ -163,16 +145,10 @@ test("validateMediaUrl:URL host ngoài (Unsplash/GIF-host) -> false (không thro
   });
 });
 
-// ---------------------------------------------------------------------------
-// Edge cases chung
-// ---------------------------------------------------------------------------
-
 test("validateMediaUrl:url rỗng/null/undefined -> false, không throw", () => {
   withCloudName(() => {
     assert.doesNotThrow(() => {
       assert.equal(validateMediaUrl("", { namespace: "message" }), false);
-      // tsconfig không bật strictNullChecks -> null/undefined gán hợp lệ cho tham số `string` lúc
-      // biên dịch; test này xác nhận hành vi RUNTIME khi caller (JS/không qua type-check) truyền chúng.
       assert.equal(validateMediaUrl(null, { namespace: "message" }), false);
       assert.equal(validateMediaUrl(undefined, { namespace: "post" }), false);
     });
@@ -186,7 +162,6 @@ test("validateMediaUrl:url cực dài (giả lập tấn công) -> vẫn xử l�
       assert.equal(validateMediaUrl(longGarbage, { namespace: "message" }), false);
     });
 
-    // Cùng độ dài lớn nhưng vẫn đúng shape hợp lệ ở cuối -> vẫn phải nhận diện được, không timeout.
     const longButValid =
       `https://res.cloudinary.com/${CLOUD_NAME}/image/upload/v1700000000/` +
       "x".repeat(100_000) +

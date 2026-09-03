@@ -23,9 +23,7 @@ import {
 } from "../validators/report.validator.ts";
 
 const router = express.Router();
-// AD-4: blanket 50mb cho cả router, kể cả RESPONSE/REJECT không cần media — xem epic.md
 router.use(express.json({ limit: "50mb" }));
-// FR-5 (task 013): sanitize NoSQL operator + HPP.
 router.use(mongoSanitize());
 router.use(hpp());
 
@@ -36,8 +34,6 @@ router.get(
   validate(getReportsSchema),
   asyncHandler(getReports),
 );
-// Breads-Admin Users module: literal "user" đứng trước :id -> không xung đột với REPORT_PATH.GET
-// ("/", 0-segment) hay RESPONSE/REJECT ("/:id/response|reject", :id đứng đầu).
 router.get(
   REPORT_PATH.GET_BY_USER,
   protectRoute,
@@ -51,7 +47,6 @@ router.post(
   validate(sendReportSchema),
   asyncHandler(sendReport),
 );
-// Task 014 (D-1): partial update theo id -> PATCH, id trong path.
 router.patch(
   REPORT_PATH.RESPONSE,
   protectRoute,

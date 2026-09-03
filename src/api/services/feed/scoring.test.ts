@@ -1,6 +1,3 @@
-// Run with Node's built-in test runner: `npm test` (== `node --test`). No new
-// dependency (C-1). Node 22.23.1 in this repo strips TypeScript types natively,
-// so `.ts` test files run directly without `--experimental-strip-types`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { bucketedNow, hotScore, relevanceScore, finalScore, rankCandidates } from "./scoring.ts";
@@ -53,14 +50,12 @@ test("rankCandidates survives mixed undefined/negative/valid engagementScore (FA
 });
 
 test("finalScore respects alpha/beta blend from FEED_CONFIG", async () => {
-  // FEED_CONFIG.alpha/beta default to 1/1 when env vars are unset (config.ts).
   const { FEED_CONFIG } = await import("./config.ts");
   const post = { categories: [], engagementScore: undefined, createdAt: T };
-  // relevance = 0, hot = 0 (no engagement) -> exercise blend arithmetic directly instead.
   const relevance = 0;
   const hot = 10;
   const expected = FEED_CONFIG.alpha * relevance + FEED_CONFIG.beta * hot;
-  const engagementForHot10 = hot; // hotScore(x, T, T) === x when no decay has elapsed
+  const engagementForHot10 = hot;
   const score = finalScore({ ...post, engagementScore: engagementForHot10 }, [], T);
   assert.equal(score, expected);
 });
@@ -76,7 +71,6 @@ test("rankCandidates is a total order (shuffle-invariant tie-break)", () => {
   const order1 = rankCandidates(base, [], T).map((p) => p._id);
   const order2 = rankCandidates(shuffled, [], T).map((p) => p._id);
   assert.deepEqual(order1, order2);
-  // Total order tie-break falls back to _id asc when score & createdAt are equal.
   assert.deepEqual(order1, ["x1", "x2", "x3"]);
 });
 

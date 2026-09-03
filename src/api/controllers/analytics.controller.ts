@@ -42,9 +42,6 @@ export const createEvent = async (req: CreateEventRequest, res: Response) => {
 };
 
 export const getEvents = async (_req: any, res: any) => {
-  // No read/aggregate logic yet — no confirmed consumer (see
-  // .ccpm/prds/.rethink-analytics-tracking-strategy.md open question #2). This just stops the
-  // request from hanging forever.
   new OK({
     message: "No events to return yet",
     metadata: { events: [] },

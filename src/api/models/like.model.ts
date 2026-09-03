@@ -21,7 +21,6 @@ const likeSchema = new mongoose.Schema(
 );
 
 likeSchema.index({ postId: 1, userId: 1 }, { unique: true });
-// Covers the "Liked" tab: paginate/sort by like time (not post creation time).
 likeSchema.index({ userId: 1, createdAt: -1 });
 
 const Like = mongoose.model("Like", likeSchema);

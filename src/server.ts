@@ -25,11 +25,6 @@ server.on("error", (err: NodeJS.ErrnoException) => {
 
 initSocket(server, app);
 
-// [fanout-queue A3] BullMQ Worker (dispatch/batch) không còn chạy in-process ở đây — chạy
-// riêng bằng `npm run worker` (src/worker.ts) để tách CPU/event-loop khỏi HTTP server và scale
-// độc lập theo queue depth. Process này chỉ còn giữ `dispatchQueue`/`batchQueue` (Queue producer,
-// dùng để enqueue job và đọc job count cho /metrics) — xem src/api/services/feed/queue.ts.
-
 process.on("uncaughtException", (err) => {
   logger.fatal({ err }, "uncaughtException");
   process.exit(1);
@@ -39,9 +34,6 @@ process.on("unhandledRejection", (reason) => {
   logger.fatal({ err: reason }, "unhandledRejection");
 });
 
-// [S4] `server.close()` là async — exit phải đợi callback của nó chạy xong, nếu không tiến
-// trình chết trước khi bất kỳ connection nào kịp đóng. Force-exit timeout đề phòng callback
-// không bao giờ chạy (vd connection keep-alive treo mãi không đóng).
 const shutdown = (signal: string) => {
   logger.info(`${signal} received — starting graceful shutdown`);
 

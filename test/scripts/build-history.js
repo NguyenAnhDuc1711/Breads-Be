@@ -1,6 +1,3 @@
-// Rebuilds test/results/history.csv from every *.json summary produced by
-// k6's handleSummary(). Run after one or more test runs:
-//   node test/scripts/build-history.js
 
 import fs from 'fs';
 import path from 'path';

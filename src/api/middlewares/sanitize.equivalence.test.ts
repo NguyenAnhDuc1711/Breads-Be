@@ -1,12 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 011 (unified-payload-sanitize, FR-2/NFR-1) — xác nhận HTTP API
-// (`express-mongo-sanitize`, dùng ở 8 router) và socket layer (`sanitizeNoSqlPayload`
-// từ Task 001) strip CÙNG một tập key nguy hiểm, cho ra CÙNG kết quả. Đây KHÔNG phải
-// test hành vi bên trong 2 hàm (đã có test riêng: sanitize.test.ts cho mongoSanitize,
-// và test của Task 001 cho sanitizeNoSqlPayload) mà là test tương đương giữa 2 hàm,
-// theo AD-2 (epic context): HTTP router giữ nguyên express-mongo-sanitize, không thay
-// bằng hàm dùng chung — "hợp nhất" được verify bằng test hành vi, không phải code sharing.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import mongoSanitize from "express-mongo-sanitize";

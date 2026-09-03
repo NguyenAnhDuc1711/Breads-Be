@@ -1,17 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 010 — schema cho 9 route auth/profile của `user.route.ts` (getMe, getUserProfile,
-// signupUser, loginUser, logoutUser, followUser, updateUser, changePassword,
-// validateEmailByCode). Task 011 sẽ append test cho 9 route listing/admin còn lại vào CHÍNH file
-// này — không xoá/định dạng lại test có sẵn khi merge.
-//
-// 2 tầng test theo pattern AD-7 (task 001, `validate.test.ts`):
-//  - Tầng schema (gọi `.parse()`/`.body.parse()` trực tiếp): kiểm hình dạng field, độc lập với
-//    HTTP/DB.
-//  - Tầng HTTP (mount ROUTER THẬT `user.route.ts` trần trên 1 `express()` mới, không import
-//    `app.ts`, không cần Mongo/Redis): chỉ dùng cho các path mà `validate()` chặn TRƯỚC khi chạm
-//    controller (negative path, hoặc route không có schema) — path nào chạm DB thật (vd
-//    `followUser` gọi `User.findOne`) KHÔNG được test qua tầng này.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
@@ -75,8 +61,6 @@ const mountUserRouter = () => {
   app.use(errorHandler);
   return app;
 };
-
-/* -------------------------------------------------------------- tầng schema */
 
 test("signupUserSchema: body hợp lệ pass", () => {
   assert.doesNotThrow(() =>
@@ -146,9 +130,6 @@ test("loginUserSchema: thiếu password fail", () => {
   );
 });
 
-// Bước 4 (access-control-hardening): `userId` KHÔNG còn là field hợp lệ — người follow luôn là
-// `req.user._id`. Kỳ vọng cũ ("thiếu userId -> fail") bị ĐẢO NGƯỢC: chính việc coi `userId` là
-// input hợp lệ đã cho phép ép user khác follow (probe V4).
 test("followUserSchema: chỉ {userFlId} là đủ — userId gửi kèm bị strip", () => {
   assert.deepEqual(followUserSchema.body.parse({ userFlId: VALID_OBJECT_ID }), {
     userFlId: VALID_OBJECT_ID,
@@ -187,9 +168,6 @@ test("updateUserSchema: params.id hợp lệ pass", () => {
   );
 });
 
-// Bước 1 (access-control-hardening): ĐẢO NGƯỢC kỳ vọng cũ. Trước đây `{forgotPW: true}` trần được
-// coi là hợp lệ ở tầng schema (logic thật để controller quyết) — chính đó là đường chiếm tài khoản
-// (probe V1). Giờ `forgotPW` không còn trong schema và `currentPW`/`newPW` bắt buộc.
 test("changePasswordSchema: chỉ forgotPW: true (không currentPW/newPW) bị REJECT", () => {
   assert.throws(() => changePasswordSchema.body.parse({ forgotPW: true }), z.ZodError);
 });
@@ -209,8 +187,6 @@ test("changePasswordSchema: newPW ngắn hơn 6 ký tự bị REJECT", () => {
     z.ZodError
   );
 });
-
-/* ------------------------------------------- password-reset (bước 2, server-side OTP) */
 
 test("requestPasswordResetSchema: chỉ nhận email — userId client gửi kèm bị strip", () => {
   const parsed = requestPasswordResetSchema.body.parse({
@@ -252,8 +228,6 @@ test("validateEmailByCodeSchema: {email, code} hợp lệ pass", () => {
     })
   );
 });
-
-/* ---------------------------------------------------------------- tầng HTTP */
 
 test("FR-4 (signup): thiếu email -> 400, signupUser không được gọi (không có lỗi liên quan DB nào xảy ra)", async () => {
   await withServer(mountUserRouter(), async (base) => {
@@ -310,12 +284,6 @@ test("FR-4 (no-schema route): GET /users/me không có validate() chen vào — 
     assert.notEqual(json.message, VALIDATION_ERROR_MESSAGE);
   });
 });
-
-// ================================================================
-// Task 011 — 9 route listing/admin còn lại của `user.route.ts`
-// ================================================================
-
-/* -------------------------------------------------------------- tầng schema */
 
 test("getUsersFollowQuerySchema: limit=50 (boundary) pass", () => {
   assert.doesNotThrow(() =>
@@ -438,11 +406,6 @@ test("getUsersPendingPostSchema: page không phải số fail", () => {
   );
 });
 
-// 4 test cho `checkValidUserSchema`/`getUserIdFromEmailSchema` ĐÃ XOÁ cùng schema + endpoint của
-// chúng (bước 6, access-control-hardening). Thay bằng test wiring "2 endpoint này không được quay
-// lại" ở cuối file — một schema đã xoá thì không còn gì để test, nhưng việc nó KHÔNG được khôi phục
-// thì vẫn cần canh.
-
 test("getUsersPendingPostSchema: limit=1000 KHÔNG bị chặn (cap .max(50) của getUsersFollow không leak sang route body này)", () => {
   assert.doesNotThrow(() =>
     getUsersPendingPostSchema.body.parse({
@@ -452,12 +415,6 @@ test("getUsersPendingPostSchema: limit=1000 KHÔNG bị chặn (cap .max(50) c�
     })
   );
 });
-
-/* ---------------------------------------------------------------- tầng HTTP */
-// Lưu ý: `handleCrawlFakeUsers` (crawlUser) chạm DB/mạng thật ngay cả khi input hợp lệ (route
-// không có schema nên validate() không chặn được gì trước đó) — theo đúng rule ở đầu file, KHÔNG
-// test route này qua tầng HTTP; "không có validate() chen vào" được xác nhận qua code review +
-// checklist `grep -c "validate("` thủ công.
 
 test("FR-4 (pagination cap, local): GET /users/follow-list?limit=1000 -> 400 (vượt cap .max(50))", async () => {
   await withServer(mountUserRouter(), async (base) => {
@@ -480,19 +437,6 @@ test("FR-4 (type enum): GET /users/follow-list?type=bogus -> 400 trước khi ge
 });
 
 
-// ================================================================
-// Task 020 — positive path (NFR-4): payload HỢP LỆ vẫn đi lọt `validate()`
-// ================================================================
-//
-// Mọi test HTTP ở trên đều là negative (400) hoặc route không có schema. Nếu `validate()` lỡ chặn
-// nhầm payload đúng, hoặc `req.body`/`req.query`/`req.params` bị reassignment (AD-6) làm rơi field,
-// KHÔNG test nào ở trên fail.
-//
-// `user.route.ts` là router DUY NHẤT dùng cả 3 mặt reassignment, nhưng mọi route có schema của nó
-// đều đi thẳng vào controller chạm DB (`User.findOne`...), nên không mount router thật được (rule ở
-// đầu file). Dùng pattern của `post.route.test.ts`: SCHEMA THẬT + `validate()` THẬT + handler stub —
-// chạm được stub nghĩa là validate() đã cho qua. Wiring "schema nào gắn route nào" đã được các test
-// negative phía trên (chạy qua router THẬT) và checklist `grep -c "validate("` bảo chứng.
 const mountEcho = (method: "get" | "post", path: string, schema) => {
   const app = express();
   app.use(express.json());
@@ -553,18 +497,6 @@ test("NFR-4 (positive, params): GET /users/:userId với ObjectId hợp lệ ch�
 });
 
 
-// ================================================================
-// Task 010 — bảng redesign 19 endpoint (epic restful-api-redesign, D-1)
-// ================================================================
-//
-// Route như CRAWL_USER/REFRESH_TOKEN chạm DB/mạng thật ngay cả với input hợp lệ và không có
-// validate() chặn trước (đúng rule ở đầu file — KHÔNG test qua tầng HTTP round-trip). "Happy-path
-// qua route/method mới" cho ĐỦ 19 endpoint (18 gốc + `SITEMAP_ELIGIBLE` task 003, sau khi bỏ route
-// backdoor GET /admin không xác thực — security-hardening) được đảm bảo ở đây bằng cách đọc trực
-// tiếp `userRouter.stack` (router THẬT, KHÔNG parse lại source) và so khớp 1-1 (method, path) với
-// đúng thứ tự đăng ký — thứ tự QUAN TRỌNG vì PROFILE ("/:userId") và UPDATE ("/:id") là catch-all
-// 1-segment, phải đứng SAU các path literal cùng số segment (/me, /follow-list, /with-status,
-// /sitemap-eligible, /follow) để không "nuốt" chúng (xem comment trong user.route.ts).
 test("FR-2 (D-1): user.route.ts wiring khớp đúng 22 (method, path) mới, đúng thứ tự chống shadow route động", () => {
   const routes = userRouter.stack
     .filter((layer: any) => layer.route)
@@ -579,11 +511,8 @@ test("FR-2 (D-1): user.route.ts wiring khớp đúng 22 (method, path) mới, đ
     { method: "get", path: "/suggestions/to-follow" },
     { method: "get", path: "/suggestions/to-tag" },
     { method: "get", path: "/with-status" },
-    // MỚI: admin-only detail (Breads-Admin Users module) — 2-segment, guard requireRole(ADMIN),
-    // đăng ký ngay sau GET_USERS_WITH_STATUS (cùng nhóm admin), không cần đứng trước /:userId vì
-    // khác số segment nên không bị nuốt.
     { method: "get", path: "/:id/admin-detail" },
-    { method: "get", path: "/sitemap-eligible" }, // MỚI (task 003): user đủ điều kiện sitemap, literal -> trước /:userId
+    { method: "get", path: "/sitemap-eligible" },
     { method: "get", path: "/:userId" },
     { method: "post", path: "/pending-post-lookup" },
     { method: "post", path: "/" },
@@ -592,13 +521,8 @@ test("FR-2 (D-1): user.route.ts wiring khớp đúng 22 (method, path) mới, đ
     { method: "post", path: "/sessions/refresh" },
     { method: "put", path: "/follow" },
     { method: "put", path: "/:id" },
-    // MỚI: admin-only role/status/lý do — guard requireRole(ADMIN) only (không phải
-    // requireSelfOrRole như UPDATE ở trên), tách khỏi self-edit để không tái mở lỗ mass-assignment.
     { method: "put", path: "/:id/admin-action" },
     { method: "put", path: "/:id/password" },
-    // MỚI (bước 2, access-control-hardening): luồng quên mật khẩu server-side, thay cho
-    // `POST /util/send-forgot-pw-mail` (đã xoá) + việc đối chiếu OTP ở client. Cả 3 đều 2-segment
-    // nên không bị `/:userId` hay `/:id` nuốt, vị trí đăng ký không ràng buộc.
     { method: "post", path: "/password-reset/requests" },
     { method: "post", path: "/password-reset/verify" },
     { method: "post", path: "/password-reset/confirm" },
@@ -614,18 +538,6 @@ test("FR-2 (D-1): user.route.ts wiring khớp đúng 22 (method, path) mới, đ
   );
 });
 
-// ================================================================
-// Task 003 (epic seo-sitemap-schema, FR-2): GET /users/sitemap-eligible — sibling của
-// /posts/sitemap-eligible (task 002, post.route.test.ts). CỐ Ý KHÔNG mount `sitemapListLimiter`
-// thật khi 1 test gọi lặp lại nhiều lần trong CÙNG file (singleton module-level, dùng chung state
-// cả process test — mount nó vào 1 route bị gọi nhiều lần có thể tự trip giữa chừng, che mất
-// assertion thật đang test, đúng lý do post.route.test.ts:868 đã né tương tự) — dùng app tối giản
-// mirror đúng wiring (trừ rate limiter) cho auth-gate/phân trang; sự có mặt của `sitemapListLimiter`
-// trên route thật được xác nhận riêng bằng test đọc SOURCE bên dưới. Test route-shadowing regression
-// (khác biệt so với task 002: user.route.ts có route dynamic `/:userId` SIBLING thật sự, nên phải
-// dùng `userRouter` THẬT — không phải app tối giản — mới bắt được bug lớp này) mount `userRouter`.
-// ================================================================
-
 const SITEMAP_SECRET = "test-sitemap-secret";
 
 const withSitemapSecret = async (fn: () => Promise<void> | void) => {
@@ -637,8 +549,6 @@ const withSitemapSecret = async (fn: () => Promise<void> | void) => {
   }
 };
 
-/** Mirror ĐÚNG wiring thật của `SITEMAP_ELIGIBLE` trong `user.route.ts` (trừ `sitemapListLimiter`,
- * lý do xem comment ngay trên): `sitemapAuthGate` -> `validate(...)` -> controller thật. */
 const sitemapEligibleUsersApp = () => {
   const app = express();
   const router = express.Router();
@@ -673,16 +583,12 @@ test("FR-2 (auth gate): sai header secret -> 401", async () => {
   });
 });
 
-// 25 doc giả lập kết quả ĐÃ QUA filter status/followersCount (đúng field controller select), _id
-// hex 24 ký tự tăng dần để so sánh chuỗi `>` tương đương thứ tự ObjectId thật.
 const FAKE_ELIGIBLE_USER_DOCS = Array.from({ length: 25 }, (_, i) => ({
   _id: String(i + 1).padStart(24, "0"),
   updatedAt: new Date(2024, 0, i + 1),
   followersCount: 10 + i,
 }));
 
-// Mock giả lập ĐÚNG hành vi query thật (top-N ưu tiên, fix sau epic seo-sitemap-schema): sort
-// (followersCount giảm dần, _id giảm dần) + cursor $or "followersCount:id" — KHÔNG còn thuần `_id`.
 const withStubbedUserFind = async (
   docs: typeof FAKE_ELIGIBLE_USER_DOCS,
   fn: () => Promise<void> | void,
@@ -690,7 +596,6 @@ const withStubbedUserFind = async (
   const originalFind = (User as any).find;
   const originalCountDocuments = (User as any).countDocuments;
 
-  // "Backend thật" luôn trả theo (followersCount giảm dần, _id giảm dần).
   const ranked = [...docs].sort((a, b) =>
     a.followersCount !== b.followersCount
       ? b.followersCount - a.followersCount
@@ -784,7 +689,6 @@ test("FR-2 (phân trang, end-to-end): 3 trang liên tiếp qua nextCursor -> kh�
         assert.equal(seenIds.length, totalCountFromFirstPage, "không được thiếu record nào so với totalCount");
         assert.deepEqual(
           seenIds,
-          // followersCount giảm dần -> thứ tự NGƯỢC LẠI với mảng tạo sẵn (vốn tăng dần theo index).
           [...FAKE_ELIGIBLE_USER_DOCS].reverse().map((d) => d._id),
           "thứ tự + tập hợp record phải khớp chính xác, không trùng không thiếu",
         );
@@ -793,10 +697,6 @@ test("FR-2 (phân trang, end-to-end): 3 trang liên tiếp qua nextCursor -> kh�
   });
 });
 
-// Rủi ro cụ thể ghi trong Key risk của epic + Technical Details task 003: nếu SITEMAP_ELIGIBLE lỡ
-// đăng ký SAU PROFILE ("/:userId"), Express sẽ match PROFILE trước (cùng 1 segment) -> route này
-// biến mất, luôn bị coi là 1 lookup userId. Test này dùng `userRouter` THẬT (có cả PROFILE) để bắt
-// đúng lớp bug đó — app tối giản ở trên không có PROFILE nên không test được rủi ro này.
 test("FR-2 (route-shadowing regression): GET /users/sitemap-eligible qua router THẬT không bị PROFILE ('/:userId') nuốt", async () => {
   await withSitemapSecret(async () => {
     await withStubbedUserFind(FAKE_ELIGIBLE_USER_DOCS, async () => {
@@ -825,9 +725,6 @@ test("FR-2 (wiring, source): SITEMAP_ELIGIBLE có sitemapAuthGate + validate(get
   const src = await readFile("src/api/routers/user.route.ts", "utf8");
   const noComments = src.replace(/^\s*\/\/.*$/gm, "");
 
-  // KHÔNG rate limiter — xem lý do đầy đủ ở post.route.test.ts (sibling route task 002) /
-  // rateLimiter.ts: mọi ngưỡng theo-phút đều fail khi Next.js's static export gọi getChunk() đồng
-  // thời cho nhiều chunk lúc build.
   assert.ok(
     noComments.includes(
       "router.get(\n  SITEMAP_ELIGIBLE,\n  sitemapAuthGate,\n  validate(getSitemapEligibleUsersQuerySchema),\n  asyncHandler(getSitemapEligibleUsers),\n);",
@@ -844,12 +741,6 @@ test("FR-2 (wiring, source): SITEMAP_ELIGIBLE có sitemapAuthGate + validate(get
   );
 });
 
-/* --------------------------- Task 009: auth-gap fix — POST /users/pending-post-lookup --------
-   Route trước đây KHÔNG có `protectRoute` — danh tính đọc thẳng từ `req.body.userId`, ai cũng
-   giả mạo được nếu biết ID của 1 admin/moderator thật. Giờ `protectRoute` đứng TRƯỚC `validate`
-   (đúng convention đầu file), danh tính lấy từ jwt (`req.user._id`), schema không còn nhận
-   `userId` trong body. Router THẬT (`userRouter`) đã mount sẵn ở `mountUserRouter()` phía trên. */
-
 process.env.JWT_SECRET = process.env.JWT_SECRET || "user-route-test-secret";
 
 const PENDING_POST_VIEWER_ID = "652f1b2c3d4e5f6071829310";
@@ -858,9 +749,6 @@ const pendingPostAuthToken = jwt.sign(
   process.env.JWT_SECRET,
 );
 
-/** Stub `User.findById` (đọc bởi `protectRoute`) + `User.findOne` (role-check trong controller) +
- * `Post.find`/`User.find` (query chính) — không cần Mongo thật. `lastActiveAt` để "mới" nên
- * `protectRoute` không kích hoạt nhánh `User.updateOne` (cùng pattern `media.route.test.ts`). */
 const withStubbedPendingPostModels = async (
   role: number,
   fn: () => Promise<void>,
@@ -919,8 +807,6 @@ test("Task 009: POST /users/pending-post-lookup role=MODERATOR (jwt) -> 200, kh�
   });
 });
 
-// Auth-gap fix / scenario: KHÔNG có JWT hợp lệ, dù kèm `userId` giả mạo của 1 admin thật trong
-// body cũ -> 401 (protectRoute), không còn đường vòng qua `req.body.userId`.
 test("Task 009 (auth-gap fix): POST /users/pending-post-lookup không có JWT -> 401, kể cả gửi userId giả mạo trong body", async () => {
   await withStubbedPendingPostModels(Constants.USER_ROLE.ADMIN, async () => {
     await withServer(mountUserRouter(), async (base) => {
@@ -939,10 +825,6 @@ test("getUsersPendingPostSchema: body không còn nhận/yêu cầu userId", () 
   assert.equal((parsed as any).userId, undefined, "userId phải bị strip/không tồn tại trong schema");
 });
 
-// Bước 6 (access-control-hardening): `/validity-checks` và `/id-lookup` là 2 oracle dò tài khoản
-// (email -> "có tồn tại không" / -> userId), và chính `/id-lookup` cấp userId cho bước ① của chuỗi
-// chiếm tài khoản V1. Chúng đã bị xoá cùng caller cuối cùng ở bước 2. Test này canh việc chúng
-// không lặng lẽ quay lại — kiểm CẢ router (đường HTTP) LẪN constant dùng chung (nguồn để Fe gọi).
 test("Bước 6: 2 endpoint dò tài khoản không được khôi phục", async () => {
   const routeSrc = await readFile("src/api/routers/user.route.ts", "utf8");
   const code = routeSrc.replace(/^\s*\/\/.*$/gm, "");

@@ -2,12 +2,7 @@ import jwt from "jsonwebtoken";
 import RefreshToken from "../models/refreshToken.model.js";
 import { hashToken } from "../utils/generateTokens.js";
 
-// Like protectRoute, but never blocks the request: routes that serve both
-// logged-in and anonymous viewers (e.g. public post pages) use this to know
-// who's asking, without requiring a session.
 const optionalAuth = async (req, res, next) => {
-  // Primary: Authorization header (access token)
-  // Fallback: legacy cookie (backward compat during transition)
   const token =
     (req.headers.authorization?.startsWith("Bearer ")
       ? req.headers.authorization.split(" ")[1]

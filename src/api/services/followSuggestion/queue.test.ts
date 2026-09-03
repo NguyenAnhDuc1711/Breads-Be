@@ -1,14 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Task 010 (epic follow-suggestions) — `processBatchJob` (idempotent upsert, FR-6) và hạ tầng
-// BullMQ queue/worker (FR-1). `processBatchJob` mutate `FollowSuggestion` thật (đây chính là hành
-// vi cần verify: hợp đồng upsert của Mongo), nên spawn 1 `mongod` tạm riêng cho file này — cùng
-// pattern `followSuggestion.test.ts` (task 001) / `message.controller.sendnext.test.ts`, port
-// riêng để không đụng các file test khác chạy song song trong cùng `node --test` run.
-//
-// `computeSuggestionsForUser` được inject qua `deps.compute` (mirror `processDispatchJob`'s
-// `deps` ở `feed/fanout.ts` + `feed/fanout.dispatch.test.ts`) — test không cần seed đồ thị Follow
-// thật, chỉ cần verify hành vi ghi/upsert của `processBatchJob`.
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -78,7 +67,6 @@ after(async () => {
   mongod?.kill("SIGTERM");
   await new Promise((r) => setTimeout(r, 500));
   if (dbPath) rmSync(dbPath, { recursive: true, force: true });
-  // Đóng Queue/Worker/connection BullMQ mở trong các test bên dưới — tránh treo `node --test`.
   await closeFollowSuggestionQueue();
 });
 
@@ -91,7 +79,6 @@ const fakeCandidate = () => [
   },
 ];
 
-// --- Test 1: FR-1 — enqueue/process batch, mỗi user có đúng 1 document ------------------------
 test("FR-1: processBatchJob xử lý batch 3 userId -> cả 3 có document trong FollowSuggestion", async () => {
   const userIds = [
     new mongoose.Types.ObjectId().toString(),
@@ -112,13 +99,10 @@ test("FR-1: processBatchJob xử lý batch 3 userId -> cả 3 có document trong
   }
 });
 
-// --- Test 2: FR-6 (chaos/idempotency) ----------------------------------------------------------
 test("FR-6 (chaos test): job throw giữa batch rồi retry -> mỗi user ĐÚNG 1 document, không trùng", async () => {
   const userIds = Array.from({ length: 5 }, () => new mongoose.Types.ObjectId().toString());
   const callCountByUser = new Map<string, number>();
 
-  // Lần chạy đầu: throw ngay khi xử lý tới user thứ 3 (index 2) — mô phỏng job bị kill/crash giữa
-  // batch (010.md AC: kill ở user 250/500). 2 user đầu ĐÃ upsert xong trước khi throw.
   const throwingCompute = async (userId: string) => {
     callCountByUser.set(userId, (callCountByUser.get(userId) ?? 0) + 1);
     if (userId === userIds[2]) {
@@ -132,16 +116,12 @@ test("FR-6 (chaos test): job throw giữa batch rồi retry -> mỗi user ĐÚNG
   const afterCrash = await FollowSuggestion.countDocuments({ userId: { $in: userIds } });
   assert.equal(afterCrash, 2, "2 user trước điểm crash phải đã được upsert");
 
-  // BullMQ retry: gọi lại processBatchJob với CÙNG job.data (toàn bộ 5 userId, không phải phần
-  // còn lại) — đúng hành vi thật của BullMQ (retry nguyên job, không resume giữa chừng).
   const succeedingCompute = async (userId: string) => {
     callCountByUser.set(userId, (callCountByUser.get(userId) ?? 0) + 1);
     return fakeCandidate();
   };
   await processBatchJob({ userIds }, { compute: succeedingCompute });
 
-  // 2 user đầu được compute() gọi 2 lần (lần đầu + retry) — xác nhận retry chạy lại từ đầu, không
-  // phải resume; nhưng upsert theo {userId} khiến kết quả cuối vẫn không trùng lặp.
   assert.equal(callCountByUser.get(userIds[0]), 2);
   assert.equal(callCountByUser.get(userIds[1]), 2);
 
@@ -154,10 +134,7 @@ test("FR-6 (chaos test): job throw giữa batch rồi retry -> mỗi user ĐÚNG
   assert.equal(finalCount, distinctUserIds.length);
 });
 
-// --- Test 3: FR-1 (worker isolation) ------------------------------------------------------------
 test("FR-1 (isolation): initFollowSuggestionWorker throw không được thoát ra ngoài try/catch — sibling init vẫn chạy", () => {
-  // Mô phỏng đúng pattern bắt buộc ở call site (`src/worker.ts`): 2 khối try/catch RIÊNG BIỆT,
-  // lỗi ở suggestion worker (khối 2) không được ngăn/undone khối 1 (fanout) đã chạy xong.
   const throwingInitFollowSuggestionWorker = () => {
     throw new Error("Worker init failed: Redis down");
   };
@@ -170,14 +147,12 @@ test("FR-1 (isolation): initFollowSuggestionWorker throw không được thoát 
   };
 
   assert.doesNotThrow(() => {
-    // Khối 1 (fanout) — giả lập, PHẢI chạy xong trước.
     try {
       fanoutSideEffectRan = true;
     } catch {
       /* n/a */
     }
 
-    // Khối 2 (suggestion) — throw, PHẢI bị bắt riêng, không ảnh hưởng khối 1 đã chạy.
     try {
       throwingInitFollowSuggestionWorker();
     } catch (err) {

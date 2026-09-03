@@ -1,24 +1,3 @@
-// One-off seed: realistic conversations + messages so messaging features
-// (list, search, "jump to message" via Conversation.msgIds) have data to
-// run against instead of the current near-empty collections (36
-// conversations / 436 messages as of this writing).
-//
-// Strategy: two phases.
-//   1. Insert `--conversations` Conversation docs — participants sampled
-//      from a random user pool, mostly 1:1 DMs with a `--groupRatio` slice
-//      of small group chats (3..maxGroupSize people).
-//   2. For each conversation, sample a message count from an exponential
-//      distribution (mean = --avgMsgsPerConversation, long tail like real
-//      chat activity — a handful of very active threads, most modest).
-//      Messages get client-side `_id`s (so we know them without a
-//      round-trip) and timestamps sorted within the conversation's
-//      lifetime. `Conversation.msgIds`/`lastMsgId` are filled in afterwards
-//      — those fields are actually read by production code
-//      (`socket/controllers/message.controller.ts` jump-to-message
-//      pagination), so leaving them empty would make the seed data silently
-//      wrong for that feature, not just "less realistic".
-//
-// Usage: npx tsx src/api/seed/seedConversations.ts [--conversations=20000] [--avgMsgsPerConversation=40] [--groupRatio=0.15] [--maxGroupSize=6] [--mediaRate=0.1] [--batchSize=5000] [--participantPoolCapacity=300000]
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { faker } from "@faker-js/faker";
@@ -38,10 +17,6 @@ const parseArgs = () => {
   return args;
 };
 
-// Same inverse-CDF exponential sampler as seedOrdinaryFollows.ts's
-// sampleDegree — most conversations get a modest number of messages, a long
-// tail gets a lot more. Floor of 1 so every conversation has at least one
-// message (an empty conversation with no lastMsgId would be unrealistic).
 const sampleMessageCount = (mean) =>
   Math.max(1, Math.round(-mean * Math.log(1 - Math.random())));
 
@@ -52,9 +27,6 @@ const randomMedia = () => [
   },
 ];
 
-// Distinct participant ids for one conversation. Small `size` (2-6) against
-// a large pool makes collisions rare; a Set + retry loop is simpler than a
-// dedicated sampling-without-replacement structure and cheap at this scale.
 const samplePartners = (pool, size) => {
   const ids = new Set();
   let guard = size * 20;
@@ -99,9 +71,6 @@ const run = async () => {
     throw new Error("Need at least 2 users to seed conversations");
   }
 
-  // Phase 1: conversations. Kept in memory afterwards (id + participants +
-  // createdAt only, a few hundred bytes each) to drive phase 2 — safe at
-  // tens of thousands of conversations.
   console.log(`Creating ${conversationCount} conversations...`);
   const conversations = [];
   {
@@ -141,8 +110,6 @@ const run = async () => {
   }
   console.log(`\nConversations created: ${conversations.length}`);
 
-  // Phase 2: messages, streamed conversation by conversation so memory stays
-  // bounded regardless of --conversations.
   console.log(`Generating messages (avg ${avgMsgsPerConversation}/conversation)...`);
   let messageBatch = [];
   let conversationUpdates = [];
@@ -179,8 +146,6 @@ const run = async () => {
     const windowStart = conversation.createdAt.getTime();
     const windowEnd = Date.now();
 
-    // Timestamps sampled uniformly across the conversation's lifetime, then
-    // sorted, so `createdAt` order matches send order like a real chat.
     const timestamps = Array.from(
       { length: count },
       () => windowStart + Math.random() * Math.max(windowEnd - windowStart, 1),

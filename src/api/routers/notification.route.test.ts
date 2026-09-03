@@ -1,18 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 014 — schema của router `notification`; + task 001 của epic notification-fixes
-// (FR-1 auth guard, FR-6 filter `action`, FR-3 field `isRead` trong `$project`).
-//
-// Hai pattern song song trong file này:
-//  1. (task 014, AD-7) mount `validate(schema)` TRẦN trên 1 `express()` mới — kiểm mã lỗi HTTP thật
-//     của tầng schema, không cần Mongo/Redis.
-//  2. (task 001 epic notification-fixes, TEST-5) import ROUTER THẬT + `cookieParser` + `jwt.sign` +
-//     stub `User.findById().select()` và `Notification.aggregate` — cách duy nhất chạm được nhánh
-//     "đã đăng nhập" và quan sát pipeline thực sự gửi xuống Mongo. Stub gán đè PROPERTY của object
-//     đã import rồi restore trong `finally` (pattern `post.route.test.ts:249-267`).
-//
-// ⚠️ TEST-4: mọi assert về `$match`/`$project` phải nằm trên OBJECT TRUYỀN VÀO stub, không phải trên
-// giá trị stub trả về — `aggregate` bị stub thì pipeline không bao giờ được MongoDB thực thi.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
@@ -74,7 +59,6 @@ const withServer = async (app, fn: (base: string) => Promise<void>) => {
   }
 };
 
-// Task 013 (D-1): route đổi POST /get -> GET /, page/limit/action nay đọc từ req.query.
 const makeApp = (echo = false) => {
   const app = express();
   app.use(express.json());
@@ -85,7 +69,6 @@ const makeApp = (echo = false) => {
   return app;
 };
 
-// FR-3: harness trần cho schema `readNotificationsSchema` (XOR notificationId/markAll).
 const makeReadApp = (echo = false) => {
   const app = express();
   app.use(express.json());
@@ -96,9 +79,6 @@ const makeReadApp = (echo = false) => {
   return app;
 };
 
-// Pattern task 002 (`socket/controllers/notification.controller.test.ts`): stub property của
-// object đã import, restore trong `finally`. Gán đè named export không có tác dụng dưới
-// `npx tsx --test` — module gọi vẫn resolve về binding gốc.
 const withStubbedModel = async (
   stubs: Array<[any, string, any]>,
   fn: () => Promise<void> | void
@@ -135,19 +115,14 @@ const fakeRes = () => {
   return res;
 };
 
-/* ------------------------------------------- harness router THẬT (TEST-5, task 001 epic) */
-
 const makeRouterApp = () => {
   const app = express();
-  // `protectRoute.ts:12-13` đọc `req.cookies?.jwt`.
   app.use(cookieParser());
   app.use("/api/notifications", notificationRouter);
   app.use(errorHandler);
   return app;
 };
 
-// Stub `User.findById(...).select(...)` — không stub thì Mongoose buffer 10s rồi timeout vì test
-// không có connection. `lastActiveAt` mới tinh để `protectRoute` không gọi `User.updateOne`.
 const stubUser = (userId: string) => {
   const original = (User as any).findById;
   (User as any).findById = () => ({
@@ -176,8 +151,6 @@ const stubAggregate = () => {
   };
 };
 
-// TEST-6: đếm lần gọi `Notification.updateOne`/`updateMany` qua router thật — dùng cho test 401
-// (chứng minh controller `readNotifications` không chạy khi thiếu token).
 const stubNotificationWrites = () => {
   const originalUpdateOne = (Notification as any).updateOne;
   const originalUpdateMany = (Notification as any).updateMany;
@@ -211,8 +184,6 @@ const stageOf = (pipeline: any[], name: string) => {
 const tokenFor = (userId: string) =>
   jwt.sign({ userId }, process.env.JWT_SECRET as string);
 
-// Task 013 (D-1): route đổi POST /get -> GET /. Gửi 1 request GET /api/notifications qua router
-// THẬT với stub sẵn, params đi qua query string.
 const postGet = async (
   { userId, cookie, query }: { userId?: string; cookie?: string; query: Record<string, string> },
   assertFn: (ctx: { res: any; agg: ReturnType<typeof stubAggregate> }) => void | Promise<void>
@@ -236,8 +207,6 @@ const postGet = async (
   }
 };
 
-/* ------------------------------------------------ getNotificationsSchema (query, task 013) */
-
 test("getNotificationsSchema: query hợp lệ -> 200", async () => {
   await withServer(makeApp(true), async (base) => {
     const res = await fetch(`${base}/t?page=1&limit=10`);
@@ -246,7 +215,6 @@ test("getNotificationsSchema: query hợp lệ -> 200", async () => {
   });
 });
 
-// FR-1: `userId` đã bị XOÁ khỏi schema — query không có nó nay là hợp đồng ĐÚNG, không còn là 400.
 test("getNotificationsSchema: không có userId -> 200 (userId đã rời schema)", async () => {
   await withServer(makeApp(true), async (base) => {
     const res = await fetch(`${base}/t?page=1&limit=10`);
@@ -255,9 +223,6 @@ test("getNotificationsSchema: không có userId -> 200 (userId đã rời schema
   });
 });
 
-// NFR-1 (backward compat): FE cũ chưa deploy vẫn gửi `userId`. `z.object()` STRIP key không khai
-// báo -> 200, và key biến mất khỏi `req.query` trước khi tới controller. Đây là bằng chứng cho lựa
-// chọn "xoá key khỏi schema" thay vì "đối chiếu với req.user._id" (AD-2/R-2).
 test("FR-1: query thừa userId -> 200 và userId bị strip khỏi req.query", async () => {
   await withServer(makeApp(true), async (base) => {
     const res = await fetch(`${base}/t?userId=${VALID_ID}&page=1&limit=10`);
@@ -271,8 +236,6 @@ test("FR-1: query thừa userId -> 200 và userId bị strip khỏi req.query", 
   });
 });
 
-// Task 013: route đổi sang GET -> page/limit PHẢI coerce từ query string, khác hành vi body cũ
-// (AD-5 cho body vẫn áp dụng ở các route khác, VD sendReportSchema).
 test("Task 013: getNotificationsSchema: query string \"2\" coerce thành number 2", async () => {
   await withServer(makeApp(true), async (base) => {
     const res = await fetch(`${base}/t?page=2&limit=10`);
@@ -313,8 +276,6 @@ test("FR-6: action='123' (chuỗi số) -> 400 (không thuộc enum)", async () 
   );
 });
 
-/* ----------------------------------------------------- FR-1: auth guard (SC-1, SC-2) */
-
 test("FR-1: GET /notifications không token -> 401, aggregate 0 lần", async () => {
   await postGet({ query: { page: "1", limit: "10" } }, async ({ res, agg }) => {
     assert.equal(res.status, 401);
@@ -322,8 +283,6 @@ test("FR-1: GET /notifications không token -> 401, aggregate 0 lần", async ()
   });
 });
 
-// Bất biến phải assert là "controller không chạy", KHÔNG phải con số status: `protectRoute` hiện
-// trả 500 cho token hỏng (Out of Scope PRD, epic khác lo).
 test("FR-1: token sai chữ ký -> non-2xx, aggregate 0 lần", async () => {
   const bad = jwt.sign({ userId: USER_X }, "sai-secret");
   await silenceError(() =>
@@ -360,8 +319,6 @@ test("FR-1: query kèm userId của Y -> $match.toUsers là ObjectId(X), 0 lần
     }
   );
 });
-
-/* -------------------------------------------------- FR-6: filter theo action (SC-14) */
 
 test("FR-6: action='like' -> $match có action và đứng trước $skip", async () => {
   await postGet(
@@ -412,8 +369,6 @@ test("FR-6: action='all' -> $match không có key action (sentinel tab Tất c�
   );
 });
 
-/* ------------------------------------------- FR-3: isRead trong $project (SC-12/SC-15b) */
-
 test("FR-3: $project chứa $ifNull cho isRead (không phải isRead: 1)", async () => {
   await postGet(
     { userId: USER_X, cookie: `jwt=${tokenFor(USER_X)}`, query: { page: "1", limit: "10" } },
@@ -428,8 +383,6 @@ test("FR-3: $project chứa $ifNull cho isRead (không phải isRead: 1)", async
     }
   );
 });
-
-/* -------------------------------------------- FR-3: readNotificationsSchema (XOR, TEST) */
 
 test("FR-3: XOR cả notificationId lẫn markAll -> 400", async () => {
   await silenceWarn(() =>
@@ -472,8 +425,6 @@ test("FR-3: markAll: false -> 400 (z.literal(true), không phải z.boolean())",
     })
   );
 });
-
-/* ---------------------------------------------- FR-3: readNotifications controller (ARCH-1) */
 
 test("FR-3: markAll -> updateMany filter có isRead: {$ne: true} (không phải false)", async () => {
   let updateManyArgs: any;
@@ -660,8 +611,6 @@ test("FR-3: matchedCount === 0 -> NotFoundError (404, không 403), User.updateOn
   );
 });
 
-/* ------------------------------------------------------- FR-3/TEST-6: auth guard route mới */
-
 test("FR-3/TEST-6: PATCH /notifications/read không token -> 401, updateOne/updateMany 0 lần", async () => {
   const writes = stubNotificationWrites();
   try {
@@ -684,7 +633,6 @@ test("FR-3/TEST-6: router.use(protectRoute) đứng trước mọi router.get(/r
   const src = await fs.readFile("src/api/routers/notification.route.ts", "utf8");
   const protectIdx = src.indexOf("router.use(protectRoute)");
   assert.notEqual(protectIdx, -1, "phải mount protectRoute ở router level");
-  // Task 013 (D-1): GET /get -> GET / (đổi từ POST). Regex cập nhật theo method mới.
   const routeRegex = /router\.(get|patch)\(/g;
   const routeIndices: number[] = [];
   let m: RegExpExecArray | null;
@@ -702,8 +650,6 @@ test("FR-3/TEST-6: router.use(protectRoute) đứng trước mọi router.get(/r
     );
   }
 });
-
-/* --------------------------------------------------------------- wiring/structure */
 
 test("notification.route.ts: validate() wired vào đúng 2 route", async () => {
   const src = await fs.readFile("src/api/routers/notification.route.ts", "utf8");

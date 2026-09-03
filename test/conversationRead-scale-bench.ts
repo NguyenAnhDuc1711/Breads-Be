@@ -1,17 +1,3 @@
-// Benchmark thủ công cho SC-5 (unread-message-count, task 021): p95 write latency của
-// `markConversationRead` khi group có 10 vs 200 thành viên (mỗi thành viên = 1 document
-// `ConversationRead` riêng, theo AD-1 — mục tiêu là chứng minh KHÔNG có hot-document contention
-// tăng theo group size).
-//
-// KHÁC quy ước benchmark hiện có trong `test/` (các file `*-stress.js`, `media-upload-bench.js`
-// dùng k6 + cần server thật + docker): đây đo latency ghi MongoDB thuần tuý, không phải HTTP/socket
-// layer — dùng Node/tsx script đơn giản kết nối thẳng MongoDB (cùng kỹ thuật ephemeral `mongod`
-// với `src/socket/controllers/message.controller.sendnext.test.ts`) thay vì k6, vì k6 không đo
-// được đúng thứ cần đo ở đây (write latency thuần, không phải network round-trip).
-//
-// Chạy thủ công: npx tsx test/conversationRead-scale-bench.ts
-// KHÔNG chạy qua "npm test" — không khớp glob trong package.json, và bench chạy khá lâu
-// (seed 200 document + 50 sample mỗi quy mô).
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,8 +19,6 @@ const benchmarkGroupSize = async (participantCount: number, iterations = 50) => 
   const conversationId = new mongoose.Types.ObjectId();
   const targetUserId = new mongoose.Types.ObjectId();
 
-  // Seed participantCount ConversationRead docs cho CÙNG 1 conversation — mô phỏng group đông
-  // thành viên (AD-1: mỗi participant = 1 document riêng, không phải 1 field trong Conversation).
   const docs = [{ conversationId, userId: targetUserId, lastReadAt: new Date(0), unreadCount: 5 }];
   for (let i = 1; i < participantCount; i++) {
     docs.push({
@@ -89,18 +73,12 @@ const benchmarkGroupSize = async (participantCount: number, iterations = 50) => 
         `Không kết nối được MongoDB tạm ở ${uri}. Cần \`mongod\` trên PATH (brew install mongodb-community).`
       );
     }
-    // Model không dùng nhưng import để đảm bảo schema Message được đăng ký (không cần seed message
-    // thật cho benchmark này — markConversationRead chỉ cần đếm, không cần message thật tồn tại).
     void Message;
 
     const p95At10 = await benchmarkGroupSize(10);
     const p95At200 = await benchmarkGroupSize(200);
     const deltaPct = ((p95At200 - p95At10) / p95At10) * 100;
 
-    // SC-5's intent (PRD: "Không suy giảm theo group size") là 1 chiều — chỉ quan tâm group đông
-    // hơn có bị CHẬM ĐI hay không (NFR-2: mỗi ghi là 1 document độc lập, không tranh chấp).
-    // Nhanh hơn (delta âm) không phải vấn đề, dù PRD viết ngưỡng "±10%" — > +10% (chậm đi) mới
-    // là điều cần REVIEW.
     const verdict =
       deltaPct <= 10
         ? "PASS (no degradation as group size grows — NFR-2 holds)"

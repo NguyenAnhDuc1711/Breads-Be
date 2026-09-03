@@ -1,14 +1,8 @@
-// Shared k6 handleSummary() formatter: writes a timestamped JSON + text
-// report per run into RESULTS_DIR (default "./results", relative to CWD).
 
 function fmtMs(v) {
   return v === undefined || v === null ? 'n/a' : `${v.toFixed(2)}ms`;
 }
 
-// k6 auto-splits every http_* metric by tag value into keys like
-// "http_reqs{vu_level:150}". Pulls those apart into a per-level table so
-// throughput/error-rate can be read off per concurrency tier instead of as
-// one number pooled across the whole run.
 function buildLevelBreakdown(metrics) {
   const levels = new Map();
   const pattern = /^(\w+)\{vu_level:([^}]+)\}$/;
@@ -104,11 +98,6 @@ function formatText(data, testName, timestamp) {
   ].join('\n');
 }
 
-// open() only works during k6's init phase, so the Docker-mount ("/test")
-// detection must happen here at module load time (init context), not
-// inside buildSummaryFiles() (called during the end-of-test summary phase,
-// where open() would throw). This makes saving work regardless of the
-// container's WORKDIR, without requiring `docker run -w /test`.
 let defaultResultsDir = './results';
 try {
   open('/test/lib/handle-summary.js', 'r');
@@ -118,8 +107,6 @@ try {
   // CWD-relative default (e.g. local `k6 run` from the repo root).
 }
 
-// Returns the file map for k6's handleSummary(data). Import and call from
-// each k6 script's own `export function handleSummary(data)`.
 export function buildSummaryFiles(data, testName) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const resultsDir = (__ENV.RESULTS_DIR || defaultResultsDir).replace(/\/$/, '');

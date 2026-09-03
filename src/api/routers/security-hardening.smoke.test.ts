@@ -1,17 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 020 (security-hardening, NFR-2) — smoke test TỔNG HỢP xác nhận toàn bộ Phase 2
-// (T010 express.json per-router, T011 express.json per-route user.route.ts, T012 rate-limit,
-// T013 sanitize/HPP) cộng lại KHÔNG phá behavior cũ, đặc biệt trên `user.route.ts` (18 route, nơi
-// đã có tiền lệ lỗi "quên route" 2 lần khi soạn PRD) và các route/flow PRD gọi tên tường minh phải
-// giữ nguyên: CRAWL_POST, CRAWL_USER, cron job, Socket.IO handshake.
-//
-// KHÔNG test lại chi tiết hành vi MỚI của từng task (đã có ở bodyLimit/userBodyLimit/rateLimiter/
-// sanitize .test.ts riêng) — chỉ xác nhận KHÔNG REGRESSION khi TẤT CẢ middleware chạy CÙNG LÚC.
-//
-// AD-7: không import route file / cronjob/index.ts / socket.ts's listener chain trực tiếp nếu có
-// nguy cơ mở Mongo/Redis lúc import và giữ event loop sống (đã tự kiểm chứng: import
-// `src/cronjob/index.ts` treo process — xem "Test 3" bên dưới dùng source-check thay vì import).
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import http from "node:http";
@@ -52,11 +38,6 @@ const silence = async (fn: () => unknown | Promise<unknown>) => {
     (loggerMod.default as any).warn = original;
   }
 };
-
-/* ============================================================================================
-   Test 1 — 18/18 route user.route.ts, chain ĐẦY ĐỦ (express.json + mongoSanitize + hpp +
-   authTierLimiter khi có + validate), không chỉ express.json+validate như userBodyLimit test.
-   ============================================================================================ */
 
 type ParsedRoute = {
   method: "get" | "post" | "put";
@@ -164,10 +145,6 @@ const buildFullUserApp = () => {
     const chain: any[] = [];
     if (route.jsonLimit) chain.push(express.json({ limit: route.jsonLimit }));
     if (route.hasSanitize) chain.push(mongoSanitize(), hpp());
-    // authTierLimiter cố ý KHÔNG chèn ở đây: dùng chung 1 instance sẽ làm smoke test (18 route,
-    // gọi 1 lần/route) tự đụng ngưỡng 5/phút của chính nó ở 3 route SIGN_UP/LOGIN/CRAWL_USER nếu
-    // test file khác cũng đã gọi cùng route trước đó trong cùng lần chạy `npm test` (singleton
-    // module-level). Test 2 riêng verify authTierLimiter có mặt qua wiring (rateLimiter.test.ts).
     if (route.schemaName) chain.push(validate(userValidators[route.schemaName]));
     app[route.method](route.path, ...chain, (req, res) =>
       res.json({ reached: true, bodyKeys: Object.keys(req.body ?? {}).length })
@@ -194,11 +171,7 @@ const send = (base: string, route: ParsedRoute) =>
         }),
   });
 
-// 21 + 3 route password-reset (bước 2) - 2 route dò tài khoản đã xoá (bước 6) = 22.
 test("NFR-2 (SMOKE 22/22): mọi route user.route.ts hoạt động bình thường với TOÀN BỘ middleware Phase 2 (express.json+mongoSanitize+hpp+validate) cùng lúc", async () => {
-  // Task 003 (epic seo-sitemap-schema): 19 -> 20 route sau khi thêm SITEMAP_ELIGIBLE; sau đó
-  // security-hardening gỡ backdoor GET /admin (không xác thực) -> 20 -> 19. Users module
-  // (Breads-Admin): +ADMIN_DETAIL/+ADMIN_ACTION -> 19 -> 21.
   assert.equal(parsedUserRoutes.length, 22, "phải parse đủ 22 route");
   const app = buildFullUserApp();
   const failures: string[] = [];
@@ -221,11 +194,6 @@ test("NFR-2 (SMOKE 22/22): mọi route user.route.ts hoạt động bình thư�
 
   assert.deepEqual(failures, [], `22 route phải pass hết:\n${failures.join("\n")}`);
 });
-
-/* ============================================================================================
-   Test 2 — CRAWL_POST / CRAWL_USER: KHÔNG bị loại trừ khỏi rate-limit (AD-3), nhưng lần gọi ĐẦU
-   TIÊN vẫn phải qua được (không 429 ngay, không lỗi body-parser).
-   ============================================================================================ */
 
 test("NFR-2: CRAWL_POST/CRAWL_USER vẫn hoạt động bình thường ở lần gọi đầu (có authTierLimiter nhưng chưa vượt ngưỡng)", async () => {
   const app = express();
@@ -254,14 +222,6 @@ test("NFR-2 (wiring): CRAWL_POST/CRAWL_USER thật sự có authTierLimiter tron
   );
 });
 
-/* ============================================================================================
-   Test 3 — cron job: KHÔNG import trực tiếp `src/cronjob/index.ts` (đã tự kiểm chứng: import file
-   này giữ event loop sống >10s do kéo theo feed services mở Redis lúc import — treo `npm test`).
-   Thay vào đó xác nhận qua SOURCE: 2 hàm export dùng `cron.schedule` (chỉ ĐĂNG KÝ job, không có
-   side-effect đồng bộ lúc gọi) và KHÔNG đụng gì tới rate-limiter/HTTP (cron không qua HTTP nên
-   không thể bị rate-limit ảnh hưởng — đúng ý NFR-2's scenario).
-   ============================================================================================ */
-
 test("NFR-2: cron job (updateUsersCatesCron) không đụng rate-limit, chỉ đăng ký cron.schedule", async () => {
   const src = await fsp.readFile("src/cronjob/index.ts", "utf8");
   assert.ok(src.includes("export const updateUsersCatesCron"));
@@ -272,17 +232,6 @@ test("NFR-2: cron job (updateUsersCatesCron) không đụng rate-limit, chỉ đ
   const scheduleCount = (src.match(/cron\.schedule\(/g) || []).length;
   assert.equal(scheduleCount, 1, "updateUsersCatesCron phải dùng cron.schedule (đăng ký job, không side-effect đồng bộ lúc gọi)");
 });
-
-/* ============================================================================================
-   Test 4 — Socket.IO handshake: gọi initSocket() thật trên 1 http.Server thật, xác nhận request
-   polling handshake (engine.io) vẫn trả về response hợp lệ sau khi ALLOWED_ORIGINS đổi nguồn ở
-   T001. KHÔNG thêm dependency `socket.io-client` mới (đúng gợi ý trong 020.md) — dùng `fetch` thô
-   tới endpoint polling, đủ để xác nhận `initSocket`/`ALLOWED_ORIGINS` wiring không bị vỡ.
-   Không assert CORS-reject ở đây (đã tự kiểm chứng: engine.io polling GET không trả
-   Access-Control-Allow-Origin cho request không có preflight, kể cả origin hợp lệ lẫn origin lạ —
-   hành vi này của engine.io/socket.io, không phải lỗi do epic; CORS-reject cho socket đã nằm ngoài
-   khả năng verify an toàn bằng fetch thô, cần test thủ công với client thật/browser).
-   ============================================================================================ */
 
 test("NFR-2: Socket.IO handshake (initSocket + ALLOWED_ORIGINS mới) vẫn hoạt động, không throw, trả response hợp lệ", async () => {
   process.env.JWT_SECRET = process.env.JWT_SECRET || "test-secret-for-smoke-test";
@@ -307,12 +256,6 @@ test("NFR-2: Socket.IO handshake (initSocket + ALLOWED_ORIGINS mới) vẫn ho�
     await once(server, "close");
   }
 });
-
-/* ============================================================================================
-   Test 5 — Regression media base64: createPost / report-CREATE / UPDATE-avatar vẫn nhận media
-   base64 vài MB thành công với TOÀN BỘ middleware Phase 2 (không chỉ express.json như T010/T011
-   đã test riêng — lần này thêm cả mongoSanitize/hpp chạy chung).
-   ============================================================================================ */
 
 test("NFR-2: createPost với media base64 ~3MB vẫn 200 (express.json 50mb + mongoSanitize + hpp cùng lúc)", async () => {
   const app = express();

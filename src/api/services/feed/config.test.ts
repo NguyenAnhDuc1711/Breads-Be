@@ -1,8 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: CHỈ helper thuần `ratio` (5 nhánh của FR-1). KHÔNG test `FEED_CONFIG` qua
-// `process.env` — `FEED_CONFIG` parse lúc import module, và ESM cache module theo tiến trình
-// nên không cache-bust được để thử nhiều giá trị env trong cùng một lần chạy test.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { FEED_CONFIG, ratio } from "./config.ts";

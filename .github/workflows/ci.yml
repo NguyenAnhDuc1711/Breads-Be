@@ -21,38 +21,17 @@ jobs:
 
       - run: npm ci
 
-      # 819 pre-existing errors (mostly @typescript-eslint/no-explicit-any) surfaced the
-      # first time eslint+typescript-eslint recommended rules ran on this codebase — same
-      # situation as type-check below, not a required check yet.
       - name: Lint (non-blocking)
         continue-on-error: true
         run: npx eslint src
 
-      # ~30 pre-existing type errors in the codebase (unrelated to new PRs) mean this
-      # can't be a required check yet. Keep it visible in logs without blocking merges.
       - name: Type-check (non-blocking)
         continue-on-error: true
         run: npx tsc --noEmit
 
-      # Bước 7 (epic access-control-hardening) — CỔNG CHẶN THẬT, không `continue-on-error`.
-      #
-      # Tách thành step RIÊNG thay vì để lẫn trong lượt test lớn bên dưới vì 2 lý do:
-      #   1. Khi đỏ, tên step nói thẳng nguyên nhân ("route mới thiếu guard") thay vì bắt người đọc
-      #      lục trong output của ~40 file test.
-      #   2. Nó KHÔNG cần Redis/mongod (chỉ đọc source + import validator thuần), nên chạy được cả
-      #      khi lượt test lớn phải loại trừ file này file kia vì thiếu hạ tầng.
-      #
-      # Step này đỏ nghĩa là: có route mới không có guard danh tính và không được khai báo công khai
-      # kèm lý do trong PUBLIC_ROUTES, HOẶC một schema của route đã xác thực lại nhận `userId`/
-      # `authorId` từ client. Cả hai đều là lớp lỗi đã từng gây ra lỗ hổng chiếm tài khoản trong
-      # repo này — xem `src/api/routers/guard-matrix.test.ts`.
       - name: Access-control guard matrix (blocking)
         run: npm run security:guards
 
-      # Excludes test files that need a real Redis (feed/queue.ts connects eagerly at
-      # import time, or dbs/redis.ts's initRedis() in a before() hook) or spawn their own
-      # `mongod` binary — neither is available on this runner. See CI setup discussion for
-      # the full list.
       - name: Run tests (excluding tests requiring Redis/mongod)
         run: |
           EXCLUDE=(
@@ -76,15 +55,10 @@ jobs:
             -maxdepth 1 -name '*.test.ts' "${FIND_ARGS[@]}")
           npx tsx --test $FILES
 
-      # 22 pre-existing vulnerabilities (1 critical, 14 high, 6 moderate, 1 low) surfaced
-      # the first run — not a required check yet, same treatment as lint/type-check above.
       - name: Dependency audit (non-blocking)
         continue-on-error: true
         run: npm audit --audit-level=high
 
-      # Filesystem scan (not the built image) — vuln covers npm deps, secret catches
-      # committed credentials, misconfig checks the Dockerfile. exit-code 0 keeps this
-      # non-blocking for the same reason as the steps above.
       - name: Trivy scan (non-blocking)
         uses: aquasecurity/trivy-action@v0.36.0
         with:

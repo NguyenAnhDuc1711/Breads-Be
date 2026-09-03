@@ -1,13 +1,3 @@
-// Run directly: `npx tsx --test src/api/migrations/verifyFollowSuggestionsBenchmark.enabled-false.test.ts`
-// (not part of `npm test`'s glob, same as the sibling `.test.ts` file — migrations/ isn't in it).
-//
-// Task 021, "Tests to Write" bullet 2: the script must work with the kill-switch OFF too (NFR-3's
-// "trước/sau" comparison relies on running it once with `FOLLOW_SUGGESTION_ENABLED=false`, which
-// forces the OLD fallback aggregation for every sampled user — task 011, AD-6). `FOLLOW_SUGGESTION_CONFIG`
-// reads `process.env` once at import time and freezes (same constraint as
-// `user.controller.followSuggestion.enabled-false.test.ts`), so the env var below must be set BEFORE
-// any static import touches `config.ts` (directly or transitively via the controller/benchmark module)
-// — hence the single `await import(...)` inside the test instead of a top-level static import.
 process.env.FOLLOW_SUGGESTION_ENABLED = "false";
 
 import assert from "node:assert/strict";
@@ -75,10 +65,6 @@ before(async () => {
   for (let i = 0; i < 20; i++) {
     users.push(await seedUser(`ks${i}`));
   }
-  // Populate a cache doc for one user with a real mutual-friend candidate — kill-switch off must
-  // still leave the precision@10 read path (which bypasses the kill-switch by design, see the
-  // benchmark script's header comment) working, even though `getUserToFollows` itself will ignore
-  // this cache for the latency measurement.
   await FollowSuggestion.create({
     userId: users[0]._id,
     candidates: [{ userId: users[1]._id, score: 10, mutualFriendCount: 3, categoryOverlapCount: 0 }],
@@ -120,14 +106,8 @@ test("runFollowSuggestionsBenchmark: FOLLOW_SUGGESTION_ENABLED=false -> chạy �
     assert.equal(typeof result.latencyMs[key], "number");
     assert.ok(result.latencyMs[key] >= 0);
   }
-  // precision@10 read path still works independent of the kill-switch (1 user has a cached doc).
   assert.equal(result.precisionAt10.evaluated, 1);
   assert.equal(result.precisionAt10.hits, 1);
 
-  // Exactly 1 of the `cacheReadCalls` (all `FollowSuggestion.findOne` invocations, from either the
-  // controller's cache-hit branch or this script's own precision read) is attributable to the
-  // precision reads (20 sampled users x 1 read each = 20 calls) -- none should come from the
-  // controller, since the kill-switch forces `runFallback()` before it ever reaches
-  // `FollowSuggestion.findOne` (task 011, AD-6). 20 sampled users -> 20 precision reads.
   assert.equal(cacheReadCalls, 20, "chỉ có precision-read gọi FollowSuggestion.findOne, controller không gọi (kill-switch off)");
 });

@@ -8,16 +8,8 @@ import {
   removeFeedOnUnfollow,
 } from "./feed/fanout.ts";
 
-// Without a cap, `$lookup` buffers every matching `follows` doc in memory
-// before continuing the pipeline. Celebrity accounts (see
-// seedCelebrityFollows.ts, up to 2M followers) blow past MongoDB's 100MB
-// per-lookup buffer limit, crashing `getUserInfo` on login. Local membership
-// checks ("am I following X") never need more than a bounded slice, so the
-// `pipeline` limits each lookup regardless of how large the account is.
 const FOLLOW_RELATIONS_LIMIT = 5000;
 
-// Stages that compute `followed` (follower ids) and `following` (followee ids)
-// from the Follow collection, matching the shape of the old embedded arrays.
 export const followRelationsLookupStages = (localField = "_id") => [
   {
     $lookup: {
@@ -51,13 +43,6 @@ export const followRelationsLookupStages = (localField = "_id") => [
   },
 ];
 
-// `includeRelations` pulls the full followed/following id arrays (needed so
-// the requester's own profile can do local "am I following X" membership
-// checks). Viewing someone else's profile only ever needs the counts, which
-// are plain fields — skip the follows lookup there, since a celebrity
-// followee can have millions of followers and returning that whole array
-// just to read `.length` is the exact join-then-scan cost we removed
-// elsewhere (see getForYouPostsId / getUsersToFollow).
 export const getUserInfo = async (userId, { includeRelations = true } = {}) => {
   try {
     if (!userId) {
@@ -105,7 +90,6 @@ export const toggleFollow = async (followerId, followeeId) => {
       { _id: ObjectId(followeeId) },
       { $inc: { followersCount: -1 } }
     );
-    // Fire-and-forget, giống fanoutPostToFollowers (NFR-2) — request unfollow không chờ Redis/Mongo.
     removeFeedOnUnfollow(followerId, followeeId).catch((err) =>
       logger.error({ err }, "[toggleFollow] removeFeedOnUnfollow failed")
     );
@@ -123,7 +107,6 @@ export const toggleFollow = async (followerId, followeeId) => {
     { _id: ObjectId(followeeId) },
     { $inc: { followersCount: 1 } }
   );
-  // Fire-and-forget, giống fanoutPostToFollowers (NFR-2) — request follow không chờ Redis/Mongo.
   backfillFeedOnFollow(followerId, followeeId).catch((err) =>
     logger.error({ err }, "[toggleFollow] backfillFeedOnFollow failed")
   );

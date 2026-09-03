@@ -5,9 +5,6 @@ import Post from "../models/post.model.js";
 
 const { PUBLIC, ONLY_FOLLOWERS, ONLY_ME, PRE_ACCEPT } = Constants.POST_STATUS;
 
-// Mirrors a realistic feed (mostly public) while still producing enough
-// private/followers-only/pending posts to exercise privacy/authorization
-// filtering (IDOR, block, private-account checks) under load.
 const randomStatus = () => {
   const r = Math.random();
   if (r < 0.8) return PUBLIC;
@@ -16,8 +13,6 @@ const randomStatus = () => {
   return PRE_ACCEPT;
 };
 
-// picsum.photos URLs are deterministic strings, not fetched — no network
-// I/O per post, unlike the existing Unsplash-based crawler.
 const randomMedia = (mediaRate) => {
   const hasMedia = Math.random() < mediaRate;
   if (!hasMedia) return [];
@@ -40,10 +35,6 @@ const buildPost = (authorId, categoryIds, mediaRate) => ({
   createdAt: faker.date.past({ years: 1 }),
 });
 
-// Inserts `count` fake posts in batches, picking a random author from
-// `authorPool` (an ObjectIdPool) for each one. `mediaRate` (0-1) controls
-// the fraction of posts that get 1-3 media items (default 0.4 — pass 1 to
-// force every post to have media).
 export const seedPosts = async ({
   count,
   authorPool,

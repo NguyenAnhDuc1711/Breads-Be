@@ -6,8 +6,6 @@ import { ObjectIdPool } from "./idPool.js";
 
 const FAKE_PASSWORD = "password123";
 
-// `runId` scopes usernames/emails to this run so re-running the seeder
-// (without --reset) never collides with users created by a previous run.
 const buildUser = (runId, index) => ({
   name: faker.person.fullName(),
   username: `fake_${runId}_${index}`,
@@ -20,9 +18,6 @@ const buildUser = (runId, index) => ({
   createdAt: faker.date.past({ years: 2 }),
 });
 
-// Inserts `count` fake users in batches and returns an ObjectIdPool sampled
-// from the inserted ids (capped at `authorPoolCapacity`) so callers can pick
-// random authors for post generation without holding every id in memory.
 export const seedUsers = async ({
   runId,
   count,

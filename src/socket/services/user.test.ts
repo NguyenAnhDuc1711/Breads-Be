@@ -6,7 +6,6 @@ import {
   getUserSocketsByUserIds,
 } from "./user.js";
 
-// `io` giả tối thiểu: chỉ cần `fetchSockets()`. Không dựng socket.io thật.
 const fakeIo = (sockets: any[]) =>
   ({ fetchSockets: async () => sockets } as any);
 const sk = (id: string, data: any) => ({ data: { id, ...data } });
@@ -36,7 +35,6 @@ test("FR-5: 1 user 2 tab -> trả 2 socket id", async () => {
 
   const ids = await getUserSocketsByUserIds([USER_A], io);
 
-  // .filter() chứ không .find(): mọi tab của cùng một user phải nhận push.
   assert.deepEqual(ids.sort(), ["tab-1", "tab-2"]);
 });
 
@@ -63,7 +61,6 @@ test("FR-5/TEST-1: getUserSocketsByUserIds nhận ObjectId -> vẫn khớp socke
 });
 
 test("FR-5/TEST-1: wrapper getUserSocketByUserId nhận ObjectId (call site message.ts) -> vẫn khớp", async () => {
-  // `sendToSpecificUser` nhận `postInfo.authorId` từ driver Mongo thô -> ObjectId.
   const objectId = new mongoose.Types.ObjectId(USER_A);
   const io = fakeIo([
     sk("sock-b", { userId: USER_B }),
@@ -71,7 +68,6 @@ test("FR-5/TEST-1: wrapper getUserSocketByUserId nhận ObjectId (call site mess
   ]);
 
   assert.equal(await getUserSocketByUserId(objectId as any, io), "sock-a");
-  // Chiều ngược lại: socket.data.userId là ObjectId, input là string.
   const ioObj = fakeIo([sk("sock-a", { userId: objectId })]);
   assert.equal(await getUserSocketByUserId(USER_A, ioObj), "sock-a");
 });
@@ -94,7 +90,6 @@ test("FR-5/ARCH-4: socket chưa connect (data rỗng) không lọt kết quả; 
   ]);
 
   assert.deepEqual(await getUserSocketsByUserIds([USER_A], io), ["sock-a"]);
-  // String(undefined) === "undefined" không được phép khớp socket chưa auth.
   assert.deepEqual(await getUserSocketsByUserIds([undefined, null], io), []);
   assert.equal(await getUserSocketByUserId(undefined as any, io), undefined);
 });

@@ -46,7 +46,7 @@ export const signupUser = async (req, res) => {
     throw new BadRequestError("Email already exists");
   }
 
-  const expireTime = 10; // Minutes
+  const expireTime = 10;
   const code = genRandomCode();
   const result = await sendMailService({
     to: email,
@@ -87,10 +87,6 @@ export const validateEmailByCode = async (req, res) => {
       if (newUser) {
         // generateTokenAndSetCookie(newUser._id, res);
         await deleteCache(keyCache);
-        // Chủ động tính suggestion ngay lúc đăng ký thay vì đợi cron sweep (tối đa 6h sau, và user
-        // mới chưa có `lastActiveAt` nên không lọt vào active-window filter của cron) — không
-        // `await`, không được làm chậm response tạo tài khoản. Hàm tự nuốt lỗi enqueue (xem
-        // `queue.ts`), không cần `.catch()` ở call-site.
         enqueueOnDemandSuggestion(String(newUser._id));
         new CREATED({
           message: "Create new user successfully",
@@ -112,15 +108,6 @@ export const loginUser = async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ email: email });
 
-  // Bước 6 (V8): "Account not found" và "Wrong password" trước đây là 2 thông báo KHÁC NHAU, tức
-  // endpoint login tự nó trả lời câu hỏi "email này có tài khoản không" cho bất kỳ ai hỏi. Gộp về
-  // MỘT thông báo duy nhất cho cả 2 nhánh.
-  //
-  // `!user` vẫn phải return sớm (không thể so mật khẩu với thứ không tồn tại), nên vẫn còn chênh
-  // lệch thời gian phản hồi giữa 2 nhánh — bcrypt chạy ở nhánh có user, không chạy ở nhánh không.
-  // Đây là timing oracle mức thấp, đo được nhưng nhiễu qua mạng thật; đóng nó cần chạy bcrypt giả
-  // trên một hash cố định, chi phí CPU thật cho mọi lần đăng nhập sai. Chấp nhận có ý thức, ghi
-  // lại ở đây để lần review sau không tưởng là bỏ sót.
   const INVALID_CREDENTIALS = "Email hoặc mật khẩu không đúng";
   if (!user) {
     throw new AuthFailureError(INVALID_CREDENTIALS);
@@ -131,7 +118,6 @@ export const loginUser = async (req, res) => {
     if (user.password.startsWith("$2a$") || user.password.startsWith("$2b$")) {
       isPasswordCorrect = await bcrypt.compare(password, user.password);
     } else {
-      // Legacy plain-text password fallback and auto-upgrade
       if (password === user.password) {
         isPasswordCorrect = true;
         const hashedPassword = await bcrypt.hash(password, 10);
@@ -144,8 +130,6 @@ export const loginUser = async (req, res) => {
     throw new AuthFailureError(INVALID_CREDENTIALS);
   }
 
-  // Bước 6 (V9): chặn SAU khi xác thực mật khẩu, không phải trước — nếu chặn trước, endpoint sẽ
-  // tiết lộ trạng thái tài khoản cho người chỉ đoán email mà không biết mật khẩu.
   if (isAccountRestricted(user.status)) {
     logger.warn(
       { userId: String(user._id), status: user.status },
@@ -192,21 +176,11 @@ export const refreshTokenHandler = async (req, res) => {
   const storedToken = await RefreshToken.findOne({ token: hashedToken });
 
   if (!storedToken) {
-    // Token reuse detection: this token was already consumed by rotation
-    // or was never valid. Possible token theft — revoke ALL refresh tokens
-    // for the user who originally owned this token and blacklist them.
-    //
-    // Try to decode the refresh token to identify the user — but since
-    // refresh tokens are opaque (not JWT), we can't extract userId from
-    // the token itself. Instead, log the incident and return 401.
     logger.warn(
       { hashedToken: hashedToken.substring(0, 16) + "..." },
       "Refresh token reuse detected — possible token theft",
     );
 
-    // We cannot determine the userId from an opaque token that's not in DB,
-    // but if the request has a valid (expired) access token we can try to
-    // extract the userId from it to revoke all their sessions.
     const authHeader = req.headers.authorization;
     if (authHeader?.startsWith("Bearer ")) {
       try {
@@ -215,9 +189,7 @@ export const refreshTokenHandler = async (req, res) => {
           authHeader.split(" ")[1],
         );
         if (decoded?.userId) {
-          // Force revoke ALL refresh tokens for this user
           await RefreshToken.deleteMany({ userId: decoded.userId });
-          // Record in blacklist
           await TokenBlacklist.create({
             userId: decoded.userId,
             reason: "TOKEN_REUSE",
@@ -240,17 +212,14 @@ export const refreshTokenHandler = async (req, res) => {
     throw new AuthFailureError("Invalid refresh token");
   }
 
-  // Check if token has expired (belt-and-suspenders; TTL index handles cleanup)
   if (storedToken.expiresAt < new Date()) {
     await RefreshToken.deleteOne({ _id: storedToken._id });
     clearRefreshTokenCookie(res);
     throw new AuthFailureError("Refresh token expired");
   }
 
-  // Rotation: delete the old refresh token BEFORE issuing a new one
   await RefreshToken.deleteOne({ _id: storedToken._id });
 
-  // Issue new token pair
   const userId = storedToken.userId.toString();
   const { accessToken } = await generateTokens(userId, res);
 
@@ -263,16 +232,7 @@ export const refreshTokenHandler = async (req, res) => {
 //follow and unfollow
 export const followUser = async (req, res) => {
   const { userFlId } = req.body;
-  // Bước 4 (access-control-hardening): NGƯỜI FOLLOW luôn là người đang đăng nhập. Route này VỐN ĐÃ
-  // có `protectRoute`, nhưng controller lại đọc `req.body.userId` — nên bất kỳ tài khoản hợp lệ nào
-  // cũng ép được user khác follow/unfollow ai đó (probe V4). Đây là ca điển hình cho thấy thêm guard
-  // vào route là chưa đủ: nguồn danh tính trong controller mới là thứ quyết định.
-  //
-  // Hệ quả không hiển nhiên của lỗ hổng cũ: `followersCount` bị bơm chính là ngưỡng celebrity của
-  // feed (`FEED_CELEBRITY_FOLLOWER_THRESHOLD`), nên nó đổi cả chiến lược fan-out của hệ thống.
   const userId = String(req.user._id);
-  // `User.findOne` cũ đã bỏ: userId đến từ JWT đã xác thực, `protectRoute` vừa nạp chính document
-  // đó vào `req.user` — không thể "không tồn tại" như khi client tự khai.
   await toggleFollow(userId, userFlId);
   new OK({
     message: "Follow user successfully",
@@ -287,9 +247,6 @@ export const updateUser = async (req, res) => {
 
   let user = await User.findById(userId);
   if (!user) throw new BadRequestError("User not found");
-  // Ownership/role check moved to requireSelfOrRole middleware (route-level) —
-  // the check that used to live here compared req.params.id against a value
-  // derived from itself and never actually blocked anything.
 
   // if (password) {
   //   const salt = await bcrypt.genSalt(10);
@@ -334,9 +291,6 @@ export const updateUser = async (req, res) => {
   }).send(res);
 };
 
-// Admin-only detail lookup cho Breads-Admin Users module — tách khỏi `getUserProfile` (public,
-// dùng chung với Breads-Fe) vì field trả về ở đây nhạy cảm hơn (email, role, status,
-// statusReason, createdAt) và route guard bằng `requireRole(ADMIN)`, không phải public.
 export const getUserAdminDetail = async (req, res) => {
   const { id } = req.params;
   const user = await User.findById(id).select(
@@ -352,9 +306,6 @@ export const getUserAdminDetail = async (req, res) => {
 const VALID_ROLES = Object.values(Constants.USER_ROLE);
 const VALID_STATUSES = Object.values(Constants.USER_STATUS);
 
-// Endpoint riêng cho thao tác quản trị (role/status/lý do) — KHÔNG tái dùng `updateUser` (route
-// đó guard `requireSelfOrRole`, cho phép self-edit, nên field nhạy cảm không được phép khai báo
-// ở `updateUserSchema`). Route này guard `requireRole(ADMIN)` only, allowlist đúng 3 field.
 export const adminUpdateUser = async (req, res) => {
   const { id } = req.params;
   const { role, status, reason } = req.body;
@@ -385,14 +336,6 @@ export const adminUpdateUser = async (req, res) => {
   }).send(res);
 };
 
-/**
- * Đổi mật khẩu KHI ĐÃ ĐĂNG NHẬP.
- *
- * Danh tính do `protectRoute` + `requireSelfOrRole(ADMIN)` ở tầng route bảo đảm (`user.route.ts`),
- * nên `req.params.id` tại đây đã là "chính chủ hoặc admin" — không còn là giá trị client tự khai
- * như trước. Nhánh `forgotPW` đã bị XOÁ HẲN: quên mật khẩu giờ đi qua
- * `requestPasswordReset`/`confirmPasswordReset` bên dưới, nơi mã OTP được server sinh và đối chiếu.
- */
 export const changePassword = async (req, res) => {
   const { currentPW, newPW } = req.body;
   const userId = req.params.id;
@@ -417,9 +360,6 @@ export const changePassword = async (req, res) => {
   }
 
   await applyNewPassword(user._id, newPW, {
-    // Giữ lại ĐÚNG session đang thao tác (refresh token trong cookie của chính request này) và
-    // huỷ mọi session khác: đổi mật khẩu phải đá kẻ đã chiếm phiên ra ngoài, nhưng không có lý do
-    // bắt chính người vừa đổi phải đăng nhập lại.
     keepRefreshTokenRaw: req.cookies?.refreshToken,
   });
 
@@ -429,8 +369,6 @@ export const changePassword = async (req, res) => {
   }).send(res);
 };
 
-/* ------------------------------------------------- quên mật khẩu (server-side) */
-
 const PW_RESET_TTL_SECONDS = 15 * 60;
 const PW_RESET_MAX_ATTEMPTS = 5;
 
@@ -438,20 +376,8 @@ const pwResetCacheKey = (userId: string) => `pw_reset_${userId}`;
 
 type PwResetEntry = { codeHash: string; attempts: number };
 
-/**
- * Hash mã trước khi lưu — cùng lý do `RefreshToken` chỉ lưu hash (`generateTokens.ts`): dump Redis
- * hoặc file RDB backup không được phép chứa thứ dùng lại được ngay.
- */
 const hashResetCode = (code: string) => hashToken(code.toUpperCase());
 
-/**
- * Đọc + xác thực mã reset. Trả `userId` khi hợp lệ, `null` khi không — KHÔNG phân biệt "mã sai" với
- * "không có yêu cầu reset nào" ở tầng gọi, để không rò rỉ tài khoản nào đang có phiên reset.
- *
- * Đếm số lần sai và tự huỷ mã sau `PW_RESET_MAX_ATTEMPTS`: mã chỉ 6 ký tự nên `authTierLimiter`
- * (5 req/phút/IP) là lớp chặn brute-force chính, còn bộ đếm này chặn nốt trường hợp kẻ tấn công
- * xoay IP.
- */
 const consumeResetCode = async (
   userId: string,
   code: string,
@@ -466,8 +392,6 @@ const consumeResetCode = async (
     if (attempts >= PW_RESET_MAX_ATTEMPTS) {
       await deleteCache(key);
     } else {
-      // TTL giữ nguyên theo mốc phát hành ban đầu — ghi lại entry với TTL còn lại xấp xỉ là đủ,
-      // không được reset TTL về 15 phút mỗi lần đoán sai (sẽ thành cửa gia hạn vô hạn).
       const ttl = await getRemainingTtl(key);
       if (ttl > 0) await setCache(key, { ...entry, attempts }, ttl);
     }
@@ -488,13 +412,6 @@ const getRemainingTtl = async (key: string): Promise<number> => {
   }
 };
 
-/**
- * Đổi mật khẩu + dọn session, dùng chung cho cả `changePassword` lẫn `confirmPasswordReset`.
- *
- * Việc revoke refresh token là BẮT BUỘC, không phải "nice to have": trước đây đổi mật khẩu không
- * đụng tới `RefreshToken`, nên một phiên đã bị chiếm vẫn sống thêm 7 ngày sau khi nạn nhân đổi
- * mật khẩu — tức là hành động khắc phục của nạn nhân không khắc phục được gì.
- */
 const applyNewPassword = async (
   userId: any,
   newPW: string,
@@ -510,13 +427,6 @@ const applyNewPassword = async (
   await RefreshToken.deleteMany(filter);
 };
 
-/**
- * Bước 1/3 của luồng quên mật khẩu: server sinh mã, lưu hash vào Redis, gửi mail.
- *
- * LUÔN trả 200 kể cả khi email không tồn tại (AD: chống dò tài khoản). Trước đây FE phải gọi
- * `/validity-checks` rồi `/id-lookup` để biết email có thật và lấy `userId` — cả hai đều là
- * endpoint công khai trả lời thẳng câu hỏi "tài khoản này có tồn tại không". Ở đây thì không.
- */
 export const requestPasswordReset = async (req, res) => {
   const { email } = req.body;
   const user = await User.findOne({ email }, { _id: 1 }).lean();
@@ -533,9 +443,6 @@ export const requestPasswordReset = async (req, res) => {
       { codeHash: hashResetCode(code), attempts: 0 } as PwResetEntry,
       PW_RESET_TTL_SECONDS,
     );
-    // `from`/`subject`/`url` do SERVER quyết định, không nhận từ body — endpoint cũ
-    // `POST /util/send-forgot-pw-mail` nhận cả 3 từ client nên biến SMTP của hệ thống thành
-    // công cụ gửi mail lừa đảo tới địa chỉ bất kỳ (probe V7).
     await sendMailService({
       from: undefined,
       to: email,
@@ -551,13 +458,6 @@ export const requestPasswordReset = async (req, res) => {
   }).send(res);
 };
 
-/**
- * Bước 2/3: người dùng gõ mã trong popup. Trả `userId` để FE điều hướng sang trang đặt lại mật
- * khẩu — an toàn vì chỉ ai cầm được mã (tức đọc được hộp thư) mới nhận được giá trị này.
- *
- * KHÔNG xoá mã ở bước này (`deleteOnSuccess: false`): người dùng còn phải nhập mật khẩu mới ở
- * bước 3, xoá tại đây sẽ làm bước 3 luôn thất bại.
- */
 export const verifyPasswordResetCode = async (req, res) => {
   const { email, code } = req.body;
   const user = await User.findOne({ email }, { _id: 1 }).lean();
@@ -574,7 +474,6 @@ export const verifyPasswordResetCode = async (req, res) => {
   }).send(res);
 };
 
-/** Bước 3/3: đối chiếu mã lần cuối, đổi mật khẩu, tiêu huỷ mã và mọi phiên đăng nhập cũ. */
 export const confirmPasswordReset = async (req, res) => {
   const { userId, code, newPW } = req.body;
   const user = await User.findOne({ _id: ObjectId(userId) }, { _id: 1 }).lean();
@@ -587,8 +486,6 @@ export const confirmPasswordReset = async (req, res) => {
     throw new BadRequestError("Invalid or expired code");
   }
 
-  // Không giữ lại phiên nào: người đặt lại mật khẩu chưa đăng nhập, và nếu tài khoản từng bị
-  // chiếm thì mọi refresh token đang tồn tại đều phải chết.
   await applyNewPassword(userId, newPW);
   logger.info({ userId: String(userId) }, "password reset completed — all sessions revoked");
 
@@ -626,13 +523,6 @@ export const getUserProfile = async (req, res) => {
   }).send(res);
 };
 
-// Task 011 (epic follow-suggestions): bound the fallback's full-collection scan. `score` below is
-// computed per-request (depends on the viewer's own `catesCare`), so it can't be indexed directly —
-// that was the root cause of the original unindexed-full-scan issue. `followersCount` is the
-// dominant, unbounded term in the formula (`*2`, vs. category overlap which is bounded by how many
-// categories a user actually has, `*5`), so pre-sort/limit on it — backed by the new
-// `{followersCount: -1}` index on `User` (see user.model.ts) — before computing the per-viewer score,
-// instead of scanning + in-memory-sorting the whole collection on every request.
 const FALLBACK_CANDIDATE_POOL_SIZE = 2000;
 
 const buildFollowSuggestionFallbackAgg = (
@@ -679,10 +569,6 @@ const buildFollowSuggestionFallbackAgg = (
   },
 ];
 
-// Task 011 (FR-3 fix): hydrate + paginate the cached `FollowSuggestion.candidates` list, applying
-// the SAME already-followed/self exclusion as the fallback branch (`excludeIds`). Candidates are
-// already sorted by score (task 001/`computeSuggestionsForUser`) — order is preserved through the
-// filter/slice/hydrate steps below.
 const buildFollowSuggestionCacheResponse = async (
   candidates: any[],
   excludeIds: any[],
@@ -731,8 +617,6 @@ export const getUserToFollows = async (req, res) => {
     const userInfo = await User.findOne({ _id: ObjectId(userId) });
     userCatesCare = userInfo?.catesCare ?? [];
     invalidToFollow = [ObjectId(userId)];
-    // FR-3 fix: loại cả những user requester ĐÃ follow (bug cũ chỉ loại chính requester qua
-    // `invalidToFollow`) — `excludeIds` bên dưới áp dụng cho CẢ 2 nhánh (cache-hit và fallback).
     followedIds = await Follow.find({ followerId: ObjectId(userId) }).distinct("followeeId");
   }
   const excludeIds = [...invalidToFollow, ...followedIds];
@@ -746,19 +630,12 @@ export const getUserToFollows = async (req, res) => {
 
   let data;
   if (userId && FOLLOW_SUGGESTION_CONFIG.enabled) {
-    // AD-6 kill-switch already gates entry into this branch (see `else` below). Plan-review FAIL-2:
-    // BOTH an empty cache (`candidates.length === 0`) and a thrown read error route to the SAME
-    // fallback aggregation — not just the empty case.
     try {
       const cached = await FollowSuggestion.findOne({ userId: ObjectId(userId) }).lean();
       if (cached?.candidates?.length) {
         data = await buildFollowSuggestionCacheResponse(cached.candidates, excludeIds, page, limit);
       } else {
         if (!cached) {
-          // Chưa từng có document (user mới lọt lưới hook signup, hoặc bị active-window filter
-          // của cron loại ra rồi active trở lại) — enqueue tính on-demand, không `await`. KHÔNG
-          // enqueue lại khi `cached` tồn tại nhưng `candidates` rỗng hợp lệ (đã tính, không có
-          // mutual friend nào) — tránh enqueue lặp lại mỗi request cho case đó.
           enqueueOnDemandSuggestion(String(userId));
         }
         data = await runFallback();
@@ -768,7 +645,6 @@ export const getUserToFollows = async (req, res) => {
       data = await runFallback();
     }
   } else {
-    // Either no `userId` (no per-user cache to read) or AD-6 kill-switch is off — always fallback.
     data = await runFallback();
   }
 
@@ -872,13 +748,7 @@ export const getUsersToTag = async (req, res) => {
   }).send(res);
 };
 
-// `checkValidUser` và `getUserIdFromEmail` ĐÃ XOÁ cùng route của chúng (bước 6) — xem lý do ở
-// comment tương ứng trong `user.route.ts`.
-
 export const getUsersPendingPost = async (req, res) => {
-  // Task 009 (auth-gap fix): danh tính lấy từ `req.user._id` (gắn bởi `protectRoute`, đã qua jwt
-  // verify), KHÔNG còn đọc `userId` từ `req.body` — trước đây bất kỳ ai gửi ID của 1
-  // admin/moderator thật trong body cũng giả mạo được vì route không có `protectRoute`.
   const { page, limit, searchValue } = req.body;
   const userId = req.user._id;
   const skip = (page - 1) * limit;
@@ -917,29 +787,21 @@ export const getUsersPendingPost = async (req, res) => {
 
 export const getUsersWithStatus = async (req, res) => {
   const { page, limit, searchValue, role, status, dateFrom, dateTo } = req.query;
-  // Bước 10: quyền xét trên `req.user` thay vì trên document tra theo `userId` client gửi.
-  // Lưu ý `userInfo.role` cũ còn có thể ném TypeError khi userId không tồn tại (`userInfo` là null).
   assertRole(req.user, Constants.USER_ROLE.ADMIN);
 
-  // Users module (Breads-Admin): gộp mọi filter tuỳ chọn vào 1 `$match` — role/status là zod
-  // z.coerce.number() nên đã là number lúc tới đây, dateFrom/dateTo đã là Date (z.coerce.date()).
   const match: Record<string, unknown> = {};
   if (searchValue) match.username = { $regex: searchValue, $options: "i" };
   if (role !== undefined) match.role = role;
 
-  // Status filter: ACTIVE/INACTIVE dựa trên lastActiveAt (online/offline), LOCK/BANNED giữ nguyên
-  // filter theo field `status` tĩnh. Ngưỡng 5 phút khớp với LAST_ACTIVE_THROTTLE_MS ở protectRoute.
   if (status !== undefined) {
     const { ACTIVE, INACTIVE, LOCK, BANNED } = Constants.USER_STATUS;
     const ONLINE_THRESHOLD_MS = 5 * 60 * 1000;
     const threshold = new Date(Date.now() - ONLINE_THRESHOLD_MS);
 
     if (status === ACTIVE) {
-      // Online: lastActiveAt trong vòng 5 phút gần nhất, tài khoản không bị Lock/Banned
       match.lastActiveAt = { $gte: threshold };
       match.status = { $nin: [LOCK, BANNED] };
     } else if (status === INACTIVE) {
-      // Offline: lastActiveAt quá 5 phút hoặc không có, tài khoản không bị Lock/Banned
       match.$and = [
         { status: { $nin: [LOCK, BANNED] } },
         {
@@ -950,7 +812,6 @@ export const getUsersWithStatus = async (req, res) => {
         },
       ];
     } else {
-      // LOCK hoặc BANNED: giữ nguyên filter theo field status tĩnh
       match.status = status;
     }
   }
@@ -968,9 +829,6 @@ export const getUsersWithStatus = async (req, res) => {
     limit,
     agg,
   });
-  // Trước đây truyền `agg` (mảng aggregation stage) thẳng vào `countDocuments` (nhận filter
-  // object, không phải pipeline) -> count sai khi có searchValue. Dùng `match` (object thật)
-  // sửa luôn — cùng điều kiện với `agg` ở trên, không phải aggregation riêng.
   const count = await User.countDocuments(match);
   new OK({
     message: "Get users with status successfully",
@@ -981,15 +839,7 @@ export const getUsersWithStatus = async (req, res) => {
   }).send(res);
 };
 
-// Task 003 (epic seo-sitemap-schema, FR-2): danh sách user ACTIVE đủ điều kiện sitemap, sibling
-// của `getSitemapEligiblePosts` (post.controller.ts, task 002) — cùng cursor-phân-trang theo `_id`,
-// cùng chốt `totalCount` CHỈ tính ở trang đầu (tránh `countDocuments` lặp lại mỗi trang trên tập
-// ~874K record; trang sau trả `totalCount: null`).
 export const getSitemapEligibleUsers = async (req, res) => {
-  // Cursor mã hoá "followersCount:id" (top-N ưu tiên, fix sau epic seo-sitemap-schema) — cùng
-  // pattern với `getSitemapEligiblePosts`. Sort đổi sang `{followersCount:-1, _id:-1}`. Dùng index
-  // MỚI `{status:1,followersCount:-1,_id:-1}` (`user.model.ts`) — bắt buộc phải có, khác post: đo
-  // thật cho thấy index cũ KHÔNG đủ, Mongo phải sort trong RAM toàn bộ ~874K kết quả nếu thiếu.
   const { cursor, limit } = req.query as { cursor?: string; limit: number };
   const [cursorScore, cursorId] = cursor ? cursor.split(":") : [undefined, undefined];
 
@@ -1013,14 +863,10 @@ export const getSitemapEligibleUsers = async (req, res) => {
     .select("_id updatedAt followersCount")
     .lean();
 
-  // Trần cứng SITEMAP_MAX_RECORDS — xem giải thích đầy đủ ở `getSitemapEligiblePosts`
-  // (post.controller.ts), cùng lý do áp dụng cho user.
   const totalCount = cursor
     ? null
     : Math.min(await User.countDocuments(baseFilter), SITEMAP_MAX_RECORDS);
 
-  // `followersCount` giữ tạm trong `data` để tính `nextCursor` bên dưới không cần cast lại `users`
-  // thô — response cuối vẫn CHỈ trả `{userId, updatedAt}` (xem `.map` cuối trước khi gửi response).
   const dataWithScore = users.map((user: any) => ({
     userId: user._id.toString(),
     updatedAt: user.updatedAt,

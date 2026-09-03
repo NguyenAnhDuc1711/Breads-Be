@@ -1,11 +1,3 @@
-// FR-4 / Phần B — `sendNext` (forward) của epic `presigned-media-upload`, task 010.
-//
-// Khác với `message.controller.test.ts` (stub toàn bộ tầng model), file này chạy trên MỘT MongoDB
-// THẬT, tạm thời: `mongod` được spawn vào thư mục tạm, seed 3 user + 3 conversation + 1 message
-// thật, rồi gọi thẳng `MessageController.sendNext`. Lý do: thứ cần chứng minh ở đây là 1 tính chất
-// BẢO MẬT (IDOR) — nếu stub `Conversation.findOne` thì chính cái stub, chứ không phải code, mới là
-// thứ quyết định kết quả test. Với DB thật, câu truy vấn `{_id, participants: ObjectId(authUserId)}`
-// phải tự nó lọc đúng thì test mới pass.
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -42,12 +34,9 @@ const fakeIo = () => {
   };
 };
 
-// Media "cũ" — có từ TRƯỚC epic này, không theo convention `message/{sortedPairId}/{id}` mới và
-// cũng không nằm trên domain Cloudinary. Forward nó vẫn phải chạy được (fix SCOPE-2).
 const LEGACY_MEDIA = [
   { url: "https://legacy-cdn.example.com/uploads/old-photo-2023.png", type: "image" },
 ];
-// Media client cố tình gửi kèm để thử "đánh tráo" — phải bị bỏ qua hoàn toàn.
 const CLIENT_INJECTED_MEDIA = [
   { url: "https://attacker.example.com/tracking-pixel.png", type: "image" },
 ];
@@ -55,9 +44,9 @@ const CLIENT_INJECTED_MEDIA = [
 let userA: any;
 let userB: any;
 let userC: any;
-let convAC: any; // A ↔ C — chứa message gốc
-let convAB: any; // A ↔ B — đích forward hợp lệ
-let convBC: any; // B ↔ C — đích forward mà kẻ tấn công (B) nhắm tới
+let convAC: any;
+let convAB: any;
+let convBC: any;
 let msgInAC: any;
 
 const seedUser = (name: string) =>
@@ -150,7 +139,6 @@ test("sendNext: participant forwards a message — media comes from the DB, not 
     msgInfo: {
       _id: String(msgInAC._id),
       type: "media",
-      // Client gửi kèm media khác hẳn — phải bị bỏ qua hoàn toàn.
       media: CLIENT_INJECTED_MEDIA,
     },
     conversationsInfo: [{ _id: String(convAB._id), recipientId: String(userB._id) }],
@@ -158,9 +146,6 @@ test("sendNext: participant forwards a message — media comes from the DB, not 
 
   assert.equal(res?.status, "success");
 
-  // FR-2/FR-3 (unread-message-count, task 010): forward tạo 1 message mới trong convAB — userB
-  // (participant khác sender duy nhất trong conversation 1-1 này) phải được recompute + nhận
-  // UNREAD_UPDATE, chạy trên DB THẬT (không stub) để chứng minh query đếm thật sự đúng.
   const unreadDoc = await ConversationRead.findOne({
     conversationId: convAB._id,
     userId: userB._id,
@@ -178,12 +163,10 @@ test("sendNext: participant forwards a message — media comes from the DB, not 
 
   const forwarded = await Message.find({ conversationId: convAB._id }).lean();
   assert.equal(forwarded.length, 1);
-  // Media "cũ" (không theo convention mới, không phải domain Cloudinary) vẫn forward được — SCOPE-2.
   assert.deepEqual(
     (forwarded[0] as any).media.map((m: any) => m.url),
     LEGACY_MEDIA.map((m) => m.url)
   );
-  // Và media client tự gửi KHÔNG lọt vào DB.
   assert.equal(
     JSON.stringify(forwarded[0]).includes("attacker.example.com"),
     false
@@ -193,7 +176,6 @@ test("sendNext: participant forwards a message — media comes from the DB, not 
 });
 
 test("sendNext: IDOR — non-participant cannot forward a message from someone else's conversation", async () => {
-  // User B KHÔNG thuộc conversation A↔C, nhưng biết (hoặc đoán ra) `_id` của message trong đó.
   const beforeCount = await Message.countDocuments({});
 
   const { res, io } = await callSendNext(String(userB._id), {
@@ -208,11 +190,9 @@ test("sendNext: IDOR — non-participant cannot forward a message from someone e
   assert.equal(res?.status, "error");
   assert.equal(res?.data, null);
 
-  // Không message nào được tạo — cả batch bị chặn, không có "một phần thành công".
   assert.equal(await Message.countDocuments({}), beforeCount);
   assert.equal(await Message.countDocuments({ conversationId: convBC._id }), 0);
 
-  // Và media riêng tư của cặp A↔C không rò rỉ ra ngoài qua callback hay socket emit.
   const leaked = JSON.stringify({ res, emits: io.emits });
   assert.equal(leaked.includes("legacy-cdn.example.com"), false);
   assert.equal(io.emits.length, 0);

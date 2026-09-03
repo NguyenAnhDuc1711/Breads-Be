@@ -1,10 +1,5 @@
 import mongoose from "mongoose";
 
-// Fixed-capacity pool of ObjectIds backed by a flat Buffer instead of an
-// array of Mongoose ObjectId instances (~200 bytes/object). At millions of
-// ids this keeps memory at ~12 bytes/id instead of hundreds of MB/GB.
-// Only the first `capacity` ids pushed are kept; extra pushes are dropped —
-// fine for seeding purposes, we just need a large enough random author pool.
 export class ObjectIdPool {
   constructor(capacity) {
     this.capacity = Math.max(capacity, 0);

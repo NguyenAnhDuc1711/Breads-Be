@@ -38,10 +38,7 @@ cloudinary.config({
 });
 
 const router = express.Router();
-// FR-2 (task 010): chỉ `sendForgotPWMail` đọc JSON body (chuỗi email) -> 100kb là quá đủ. Route
-// UPLOAD dùng multer/multipart, `express.json` tự bỏ qua theo Content-Type nên không bị chặn.
 router.use(express.json({ limit: "100kb" }));
-// FR-5 (task 013): sanitize NoSQL operator + HPP.
 router.use(mongoSanitize());
 router.use(hpp());
 
@@ -58,8 +55,6 @@ router.post(
     const filesName = req.body.filesName.split(",");
     const filesInfo = JSON.parse(JSON.stringify(req.files));
     const dir = `./uploads/${userId}`;
-    // Cùng convention `public_id` với `media` (`generatePublicId`, FR-1 epic
-    // presigned-media-upload) — danh tính người upload LUÔN lấy từ `req.user`, không từ client.
     const context =
       entityType === "message"
         ? { senderId: req.user._id.toString(), recipientId }
@@ -78,7 +73,6 @@ router.post(
       }
     }
     fs.rmSync(dir, { recursive: true, force: true });
-    // Save files to db
     const filesId = [];
     const files = filesInfo.map((file, index) => {
       let _id = ObjectId();
@@ -97,10 +91,5 @@ router.post(
     }).send(res);
   })
 );
-// `POST /util/send-forgot-pw-mail` ĐÃ XOÁ (epic access-control-hardening, bước 2): endpoint nhận
-// `from`/`subject`/`url` thẳng từ body client -> biến SMTP của hệ thống thành công cụ gửi mail lừa
-// đảo tới địa chỉ bất kỳ (probe V7), và mã OTP kèm theo cũng do client sinh nên không có giá trị
-// xác thực. Thay bằng `POST /users/password-reset/requests` (user.route.ts), nơi server tự sinh mã,
-// tự dựng URL và tự quyết định người gửi.
 
 export default router;

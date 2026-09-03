@@ -1,6 +1,3 @@
-// One-off migration: compute Post.likesCount and User.followersCount/followingCount
-// from the existing Like/Follow collections so denormalized counters used by
-// getForYouPostsId/getUsersToFollow start in sync. Safe to run multiple times.
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import Follow from "../models/follow.model.js";

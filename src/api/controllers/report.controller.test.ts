@@ -1,23 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 018 — `responseReport` không được set `status: RESPONSED` khi gửi mail thất bại
-// (xem `018.md`). `sendMailService` (`services/util.ts`) nuốt lỗi im lặng (catch không throw),
-// nên bug gốc chỉ lộ ra qua GIÁ TRỊ TRẢ VỀ (`undefined` khi lỗi) — không qua exception.
-// Task 022 (bổ sung, xem cuối file) — role-matrix (ADMIN/MODERATOR/USER/anonymous) cho
-// `getReports`/`responseReport`/`rejectReport` + pagination boundary cho `getReports`, vì
-// `report.route.test.ts` chỉ verify wiring/schema router, không exercise logic 3 hàm này.
-//
-// Vì sao mock ở tầng `nodemailer.createTransport` thay vì mock thẳng `sendMailService`:
-// `sendMailService` là 1 named export dạng `export const fn = ...` của module ESM thật
-// ("type": "module" trong package.json). Dưới `node --test` (không phải `tsx <file>` đơn lẻ),
-// namespace object của module ESM là frozen — gán `mod.sendMailService = stub` ném
-// `TypeError: Cannot assign to read only property` (đã verify thực nghiệm khi viết task này).
-// `nodemailer` thì ngược lại: nó là package CJS, `import nodemailer from "nodemailer"` cho ra
-// đúng object `module.exports` gốc (mutable) qua cơ chế CJS/ESM interop của Node — ghi đè
-// `nodemailer.createTransport` an toàn và không đụng `services/util.ts` (AD-2, KHÔNG được sửa
-// file đó). Nhờ vậy `responseReport` chạy qua `sendMailService` THẬT (đúng like pattern
-// `withStubbedModels` ở `post.route.test.ts`: stub ở biên I/O ngoài cùng, không stub logic của
-// chính mình), quan sát đúng hành vi truthy/falsy như prod.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import nodemailer from "nodemailer";
@@ -31,9 +11,6 @@ import User from "../models/user.model";
 const ADMIN_USER_ID = "652f1b2c3d4e5f6071829304";
 const REPORT_ID = "652f1b2c3d4e5f6071829305";
 
-// #1 (rà soát bảo mật): `from`/`to` KHÔNG còn được nhận từ client — người nhận suy ra từ report.
-// Giữ chúng trong fixture CÓ CHỦ ĐÍCH: nếu controller quay lại đọc `req.body.to`, test
-// "gửi đúng người báo cáo" bên dưới sẽ bắt được ngay vì 2 địa chỉ khác nhau.
 const REPORTER_EMAIL = "reporter@example.com";
 
 const validBody = {
@@ -44,7 +21,6 @@ const validBody = {
   userId: ADMIN_USER_ID,
 };
 
-/** `responseReport` giờ đọc report -> user để lấy email người nhận. */
 const withStubbedReportLookup = async (fn: () => Promise<void>) => {
   const origReportFind = (Report as any).findById;
   const origUserFind = (User as any).findById;
@@ -62,14 +38,6 @@ const withStubbedReportLookup = async (fn: () => Promise<void>) => {
   }
 };
 
-/**
- * Bước 10 (access-control-hardening): 3 controller trong file này KHÔNG còn tra role bằng
- * `User.findOne({_id: req.body.userId})` — quyền giờ xét trên `req.user` do `protectRoute` gán.
- *
- * Helper vì vậy đổi từ "stub tầng model" sang "đặt role của NGƯỜI GỌI": mọi thân test giữ nguyên,
- * chỉ đổi thứ được mô phỏng. `role === undefined` = không có `req.user` (ẩn danh), tương ứng đúng
- * case "user không tồn tại" của bản cũ.
- */
 let callerRole: number | undefined;
 
 const withCallerRole = async (role: number | undefined, fn: () => Promise<void>) => {
@@ -82,12 +50,9 @@ const withCallerRole = async (role: number | undefined, fn: () => Promise<void>)
   }
 };
 
-/** `req.user` mà `protectRoute` sẽ gán ở production — `undefined` khi mô phỏng người ẩn danh. */
 const reqUser = () =>
   callerRole === undefined ? undefined : { _id: ADMIN_USER_ID, role: callerRole };
 
-/** Stub `Report.updateOne`, đếm số lần gọi + ghi lại args — đây là assertion chính của AC:
- * "Report.updateOne KHÔNG được gọi khi gửi mail thất bại". */
 const withStubbedReportUpdateOne = async (
   fn: (calls: any[][]) => Promise<void>
 ) => {
@@ -104,8 +69,6 @@ const withStubbedReportUpdateOne = async (
   }
 };
 
-/** Stub `nodemailer.createTransport` — xem giải thích ở đầu file lý do stub tại đây thay vì
- * thẳng `sendMailService`. `sendMailImpl` mô phỏng `transporter.sendMail`. */
 const withStubbedTransport = async (
   sendMailImpl: (...args: any[]) => Promise<any>,
   fn: () => Promise<void>
@@ -138,7 +101,6 @@ test("responseReport: sendMailService thất bại (sendMail throw -> undefined)
   await withStubbedReportLookup(async () => {
   await withCallerRole(Constants.USER_ROLE.ADMIN, async () => {
     await withStubbedReportUpdateOne(async (calls) => {
-      // `sendMailService` catch lỗi này và trả `undefined` — đúng bug gốc mô tả ở Context 018.md.
       await withStubbedTransport(
         async () => {
           throw new Error("SMTP down (SEND_MAIL_PASS sai/quota)");
@@ -169,7 +131,7 @@ test("responseReport: sendMailService thất bại (sendMail throw -> undefined)
 });
 
 test("responseReport: sendMailService thành công -> Report.updateOne(status=RESPONSED), response 200", async () => {
-  const fakeInfo = { messageId: "abc123" }; // giả lập `info` thật từ nodemailer, chỉ cần truthy
+  const fakeInfo = { messageId: "abc123" };
   await withStubbedReportLookup(async () => {
   await withCallerRole(Constants.USER_ROLE.ADMIN, async () => {
     await withStubbedReportUpdateOne(async (calls) => {
@@ -194,13 +156,6 @@ test("responseReport: sendMailService thành công -> Report.updateOne(status=RE
   });
 });
 
-// ---------------------------------------------------------------------------
-// Task 022 — role-matrix (ADMIN/MODERATOR/USER/anonymous) cho getReports/
-// responseReport/rejectReport + pagination boundary cho getReports. `report.route.test.ts`
-// (14 test hiện có) chỉ verify wiring/schema router, KHÔNG exercise logic của 3 hàm này —
-// đây là gap task 022 lấp lại.
-// ---------------------------------------------------------------------------
-
 const makeRes = () => {
   const res: any = {
     status(code: number) {
@@ -215,9 +170,6 @@ const makeRes = () => {
   return res;
 };
 
-/** Stub `Report.aggregate` — trả về đúng shape `$facet` (`[{data, totalCount}]`), đồng thời
- * ghi lại pipeline truyền vào để assert giá trị `$skip`/`$limit` thật sự nhận được (boundary
- * check) — không cần Mongo thật, không re-implement logic skip/limit trong stub. */
 const withStubbedReportAggregate = async (
   result: { data: any[]; totalCountValue: number },
   fn: (pipelines: any[]) => Promise<void>
@@ -240,7 +192,6 @@ const withStubbedReportAggregate = async (
   }
 };
 
-/** Đọc giá trị `$skip`/`$limit` thật sự trong stage `$facet.data` của pipeline đã capture. */
 const readFacetSkipLimit = (pipeline: any[]) => {
   const facetStage = pipeline.find((stage) => "$facet" in stage);
   const skipStage = facetStage.$facet.data.find((s: any) => "$skip" in s);
@@ -254,17 +205,10 @@ const makeGetReportsReqRes = (query: Record<string, any>) => ({
 });
 
 const makeRejectReportReqRes = (userId: string | undefined, reportId: string) => ({
-  // `userId` giữ trong body CÓ CHỦ ĐÍCH dù controller không còn đọc: nếu ai đó quay lại đọc
-  // `req.body.userId`, test role-matrix sẽ vẫn xanh một cách sai lệch nếu ta bỏ hẳn field này.
   req: { body: { userId }, params: { id: reportId }, user: reqUser() },
   res: makeRes(),
 });
 
-/* ------------------ #1 (rà soát bảo mật): người nhận mail do SERVER quyết ---------------- */
-
-// Đây là assertion QUAN TRỌNG NHẤT của nhóm này: không kiểm status code, mà kiểm ĐỐI SỐ THẬT
-// truyền vào `sendMailService`. Một test chỉ nhìn 200 sẽ xanh y hệt kể cả khi controller quay lại
-// gửi tới `req.body.to` — tức là relay vẫn mở.
 test("#1: responseReport gửi tới email của NGƯỜI BÁO CÁO, bỏ qua `to` client gửi", async () => {
   let sentOptions: any = null;
   await withStubbedReportLookup(async () => {
@@ -322,8 +266,6 @@ test("#1: responseReport với report không tồn tại -> lỗi, KHÔNG gửi 
   }
 });
 
-/* ------------------------------- getReports: role-matrix ------------------------------- */
-
 test("getReports: ADMIN -> 200, không bị chặn quyền", async () => {
   await withCallerRole(Constants.USER_ROLE.ADMIN, async () => {
     await withStubbedReportAggregate({ data: [], totalCountValue: 0 }, async () => {
@@ -368,8 +310,6 @@ test("getReports: user không tồn tại (anonymous) -> ForbiddenError (403)", 
   });
 });
 
-/* ---------------------------- getReports: pagination boundary -------------------------- */
-
 test("getReports: page=3&limit=5 -> $skip=10/$limit=5 đúng, data/totalCount pass-through đúng", async () => {
   await withCallerRole(Constants.USER_ROLE.ADMIN, async () => {
     const fakeData = Array.from({ length: 5 }, (_, i) => ({ _id: `r${i}` }));
@@ -406,10 +346,6 @@ test("getReports: thiếu page/limit -> mặc định pageNum=1, limitNum=10 ($s
     });
   });
 });
-
-/* ----------------------------- responseReport: role-matrix ----------------------------- */
-// ADMIN đã được cover ở 2 test mail-fail/mail-success phía trên (dùng
-// `withCallerRole(Constants.USER_ROLE.ADMIN, ...)`) — chỉ bổ sung MODERATOR/USER/anonymous.
 
 test("responseReport: MODERATOR -> thành công giống ADMIN (Report.updateOne được gọi, response 200)", async () => {
   const fakeInfo = { messageId: "moderator-ok" };
@@ -455,8 +391,6 @@ test("responseReport: user không tồn tại (anonymous) -> ForbiddenError, Rep
     });
   });
 });
-
-/* ------------------------------- rejectReport: role-matrix ----------------------------- */
 
 test("rejectReport: ADMIN -> Report.updateOne(status=REJECT) được gọi, response 200", async () => {
   await withCallerRole(Constants.USER_ROLE.ADMIN, async () => {
@@ -508,8 +442,3 @@ test("rejectReport: user không tồn tại (anonymous) -> ForbiddenError, Repor
     });
   });
 });
-
-/* --------------------------- Regression: report.route.test.ts -------------------------- */
-// Không cần code — chỉ chạy `npm test` (bao gồm `report.route.test.ts`, 14 test wiring/schema
-// cũ) để xác nhận 0 regression sau khi thêm các test ở trên. Xem Verification Checklist ở
-// `022.md`/issue #22.

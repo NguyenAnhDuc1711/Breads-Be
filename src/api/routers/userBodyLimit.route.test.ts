@@ -1,18 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 011 (security-hardening, FR-2) — `user.route.ts` là router DUY NHẤT lẫn 2 nhóm
-// payload (auth/text 100kb + avatar base64 50mb) nên phải mount `express.json({limit})` PER-ROUTE
-// thay vì `router.use(...)` cấp file như 7 router ở Task 010.
-//
-// Vì sao không import router thật (AD-7, giống `bodyLimit.route.test.ts`): file route kéo theo
-// controller -> Redis/Cloudinary mở NGAY LÚC IMPORT, giữ event loop sống nên `npm test` sẽ treo.
-//
-// Điểm khác quan trọng so với `bodyLimit.route.test.ts`: test này KHÔNG chép tay lại chain
-// middleware. Nó PARSE source `user.route.ts`, dựng lại đúng chain mà source khai báo, rồi bắn
-// request thật. Lý do: 2 lần soạn PRD trước đều sai theo kiểu "quên mount cho một số route" — một
-// test chép tay bảng route sẽ chép luôn cái sai đó và vẫn pass. Kỳ vọng ở đây được suy ra từ
-// `user.validator.ts` (route nào có `.body` thì BẮT BUỘC phải có `express.json`), tức là từ nguồn
-// độc lập với file đang được kiểm tra.
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fsp from "node:fs/promises";
@@ -27,21 +12,16 @@ const SRC_PATH = "src/api/routers/user.route.ts";
 const VALID_ID = "652f1b2c3d4e5f6071829304";
 const OTHER_ID = "652f1b2c3d4e5f6071829305";
 
-/* ------------------------------------------------------------------ parse source thành bảng */
-
 type ParsedRoute = {
   method: "get" | "post" | "put";
-  /** Tên hằng USER_PATH đứng đầu biểu thức path (duy nhất trong 18 route). */
   key: string;
   path: string;
   jsonLimit: string | null;
-  /** Vị trí của `express.json(...)` trong danh sách tham số (0 = path), -1 nếu không có. */
   jsonArgIndex: number;
   schemaName: string | null;
   hasProtectRoute: boolean;
 };
 
-/** Tách danh sách tham số ở cấp cao nhất (bỏ qua dấu phẩy nằm trong ngoặc lồng nhau). */
 const splitTopLevel = (args: string) => {
   const out: string[] = [];
   let depth = 0;
@@ -60,7 +40,6 @@ const splitTopLevel = (args: string) => {
   return out;
 };
 
-/** `PROFILE + ":userId"` -> "/profile/:userId" (dùng giá trị THẬT trong USER_PATH). */
 const resolvePath = (expr: string) =>
   expr
     .split("+")
@@ -75,7 +54,7 @@ const resolvePath = (expr: string) =>
     .join("");
 
 const parseRouter = (src: string): ParsedRoute[] => {
-  const code = src.replace(/^\s*\/\/.*$/gm, ""); // bỏ comment, tránh match nhầm ví dụ trong doc
+  const code = src.replace(/^\s*\/\/.*$/gm, "");
   const routes: ParsedRoute[] = [];
   const re = /router\.(get|post|put)\(/g;
   let m: RegExpExecArray | null;
@@ -107,24 +86,17 @@ const parseRouter = (src: string): ParsedRoute[] => {
 
 const parsedRoutes = parseRouter(await fsp.readFile(SRC_PATH, "utf8"));
 
-/* ------------------------------------------------------- bảng kỳ vọng 18 route (011.md §Description) */
-
 const EXPECTED_LIMITS: Record<string, string | null> = {
-  // 8 route nhóm 100kb (đều có `.body` trong user.validator.ts)
   SIGN_UP: "100kb",
   LOGIN: "100kb",
   FOLLOW: "100kb",
   CHANGE_PW: "100kb",
-  // Bước 6 (access-control-hardening): CHECK_VALID_USER / GET_USER_ID_FROM_EMAIL đã bị XOÁ
-  // (oracle dò tài khoản). Bước 2 thêm 3 route password-reset, đều đọc `.body` -> cùng nhóm 100kb.
   PW_RESET_REQUEST: "100kb",
   PW_RESET_VERIFY: "100kb",
   PW_RESET_CONFIRM: "100kb",
   VALIDATE_USER_EMAIL: "100kb",
   GET_USERS_PENDING_POST: "100kb",
-  // 1 route nhóm 50mb (avatar base64)
   UPDATE: "50mb",
-  // 8 route không đọc `.body` -> KHÔNG mount gì (ADMIN đã gỡ, security-hardening)
   ME: null,
   PROFILE: null,
   USERS_FOLLOW: null,
@@ -134,15 +106,11 @@ const EXPECTED_LIMITS: Record<string, string | null> = {
   LOGOUT: null,
   CRAWL_USER: null,
   REFRESH_TOKEN: null,
-  // Task 003 (epic seo-sitemap-schema): GET, không đọc `.body` -> KHÔNG mount, cùng nhóm ME/PROFILE/...
   SITEMAP_ELIGIBLE: null,
-  // MỚI (Breads-Admin Users module): admin-only detail (GET, không đọc `.body`) + admin-only
-  // role/status/lý do (PUT, `.body` optional 100kb — cùng nhóm SIGN_UP/LOGIN/...).
   ADMIN_DETAIL: null,
   ADMIN_ACTION: "100kb",
 };
 
-/** Payload hợp lệ TỐI THIỂU cho từng route (dùng cho smoke test 18/18). */
 const REQUESTS: Record<string, { query?: string; body?: unknown }> = {
   ME: {},
   PROFILE: {},
@@ -174,13 +142,8 @@ const REQUESTS: Record<string, { query?: string; body?: unknown }> = {
   REFRESH_TOKEN: {},
   SITEMAP_ELIGIBLE: {},
   ADMIN_DETAIL: {},
-  // body không rỗng (dù mọi field đều optional ở schema) — tránh false-positive ở check
-  // "spec.body && payload.bodyKeys === 0" (smoke test coi bodyKeys===0 là dấu hiệu thiếu
-  // express.json).
   ADMIN_ACTION: { body: { role: 1 } },
 };
-
-/* --------------------------------------------------------------------------- test harness */
 
 const errorHandler = (err, _req, res, _next) => {
   res
@@ -188,17 +151,10 @@ const errorHandler = (err, _req, res, _next) => {
     .json({ message: err.message, type: err.type });
 };
 
-/** Chạm được đây nghĩa là body-parser + validate đã cho qua. Echo lại body để phát hiện
- * `req.body === undefined` (đúng triệu chứng của lỗi "quên mount" đã xảy ra 2 lần). */
 const reachedController = (req, res) => {
   res.json({ reached: true, bodyKeys: Object.keys(req.body ?? {}).length });
 };
 
-/**
- * Dựng app từ CHÍNH chain mà source khai báo: `express.json` (nếu source có) -> `validate` THẬT
- * với schema THẬT (nếu source có) -> controller giả. `protectRoute` bị bỏ (cần DB/JWT, và không
- * đọc `req.body` nên không ảnh hưởng ngữ nghĩa body-parser).
- */
 const buildAppFromSource = (routes: ParsedRoute[] = parsedRoutes) => {
   const app = express();
   for (const route of routes) {
@@ -247,9 +203,6 @@ const send = (base: string, route: ParsedRoute, body?: unknown) =>
         }),
   });
 
-/* ------------------------------------------------------- 1. wiring: đủ 18 route, đúng limit */
-
-// Bước 2 thêm 3 route `password-reset/*`, bước 6 xoá 2 route dò tài khoản -> 21 + 3 - 2 = 22.
 test("FR-2: user.route.ts có ĐÚNG 22 route, không thiếu không thừa so với bảng 011.md + SITEMAP_ELIGIBLE task 003 + ADMIN_DETAIL/ADMIN_ACTION (Users module) + password-reset (bước 2)", () => {
   assert.equal(parsedRoutes.length, 22, "phải parse ra đúng 22 route");
   assert.deepEqual(
@@ -259,8 +212,6 @@ test("FR-2: user.route.ts có ĐÚNG 22 route, không thiếu không thừa so v
   );
 });
 
-// Bắt trực tiếp failure mode #1 khi soạn PRD: quên `UPDATE` (avatar) cần 50mb -> avatar vài MB
-// sẽ bị limit 100kb của nhóm auth chặn.
 test("FR-2: mỗi route mount ĐÚNG limit của nó (10×100kb + 1×50mb + 11×không mount)", () => {
   for (const route of parsedRoutes) {
     assert.equal(
@@ -282,8 +233,6 @@ test("FR-2: mỗi route mount ĐÚNG limit của nó (10×100kb + 1×50mb + 11×
   assert.equal(at("100kb") + at("50mb") + at(null), 22);
 });
 
-// Bắt trực tiếp failure mode #2: quên mount cho 6 route có `.body` ngoài SIGN_UP/LOGIN. Kỳ vọng
-// suy ra từ `user.validator.ts` (nguồn độc lập), KHÔNG từ bảng chép tay ở trên.
 test("FR-2: mọi route có `.body` trong user.validator.ts đều PHẢI có express.json (và ngược lại)", () => {
   for (const route of parsedRoutes) {
     const schema = route.schemaName ? userValidators[route.schemaName] : null;
@@ -299,8 +248,6 @@ test("FR-2: mọi route có `.body` trong user.validator.ts đều PHẢI có ex
   assert.equal(parsedRoutes.filter((r) => r.jsonLimit).length, 11);
 });
 
-// Không được quay lại `router.use(express.json(...))` cấp file: sẽ áp CÙNG 1 limit cho cả nhóm
-// auth lẫn route avatar — đúng cái sai mà task này tồn tại để tránh.
 test("FR-2: user.route.ts KHÔNG mount express.json ở cấp router", async () => {
   const src = await fsp.readFile(SRC_PATH, "utf8");
   const code = src.replace(/^\s*\/\/.*$/gm, "");
@@ -310,8 +257,6 @@ test("FR-2: user.route.ts KHÔNG mount express.json ở cấp router", async () 
   );
 });
 
-// `express.json` phải chạy TRƯỚC `validate()` (validate đọc `req.body`). Đặt ngay sau path là
-// vị trí an toàn và nhất quán nhất — cũng là mốc để T012 chèn rate-limiter mà không phá thứ tự này.
 test("FR-2: express.json luôn là middleware ĐẦU TIÊN (trước protectRoute/validate)", () => {
   const mounted = parsedRoutes.filter((r) => r.jsonLimit);
   assert.equal(mounted.length, 11, "phải kiểm tra đủ 11 route có express.json");
@@ -325,11 +270,6 @@ test("FR-2: express.json luôn là middleware ĐẦU TIÊN (trước protectRout
   }
 });
 
-/* ------------------------------------------- 2. smoke test toàn router (test QUAN TRỌNG NHẤT) */
-
-// AC quan trọng nhất của 011.md: gọi CẢ 18 route với payload hợp lệ tối thiểu, không route nào
-// được lỗi vì `req.body` rỗng/undefined. Nếu bất kỳ route body nào thiếu `express.json`, Zod
-// `.parse(undefined)` -> 400 và test này fail ngay tại route đó.
 test("FR-2 (SMOKE 22/22): mọi route xử lý bình thường, không route nào lỗi do req.body undefined", async () => {
   const app = buildAppFromSource();
   const failures: string[] = [];
@@ -359,8 +299,6 @@ test("FR-2 (SMOKE 22/22): mọi route xử lý bình thường, không route nà
   assert.deepEqual(failures, [], `21 route phải pass hết:\n${failures.join("\n")}`);
 });
 
-// Đối chứng cho smoke test: nếu gỡ `express.json` khỏi các route có body (mô phỏng đúng lỗi đã
-// xảy ra 2 lần), smoke test PHẢI fail. Chứng minh test trên không pass một cách vô nghĩa.
 test("FR-2 (đối chứng): gỡ express.json khỏi route có body -> 400 vì req.body undefined", async () => {
   const stripped = parsedRoutes.map((r) => ({ ...r, jsonLimit: null }));
   const app = buildAppFromSource(stripped);
@@ -373,8 +311,6 @@ test("FR-2 (đối chứng): gỡ express.json khỏi route có body -> 400 vì 
     })
   );
 });
-
-/* --------------------------------------------------- 3. hành vi limit: 413 auth, 200 avatar */
 
 test("FR-2: SIGN_UP/LOGIN với body > 100kb -> 413 trước validate/controller", async () => {
   const app = buildAppFromSource();
@@ -395,7 +331,6 @@ test("FR-2: SIGN_UP/LOGIN với body > 100kb -> 413 trước validate/controller
   );
 });
 
-// AC: avatar vài MB KHÔNG được dính nhầm limit 100kb của nhóm auth (failure mode #1).
 test("FR-2: UPDATE với avatar base64 ~3MB vẫn 200, không bị áp nhầm limit 100kb", async () => {
   const app = buildAppFromSource();
   const route = parsedRoutes.find((r) => r.key === "UPDATE")!;
@@ -411,15 +346,11 @@ test("FR-2: UPDATE với avatar base64 ~3MB vẫn 200, không bị áp nhầm li
   });
 });
 
-// Regression: 6 route "bị quên" ở lần soạn PRD thứ 2 — kiểm riêng, tách khỏi smoke test để khi
-// fail thì thông báo chỉ thẳng vào đúng nhóm route đó.
 test("FR-2: nhóm route từng bị quên (FOLLOW/CHANGE_PW/password-reset/...) parse body bình thường", async () => {
   const app = buildAppFromSource();
   const keys = [
     "FOLLOW",
     "CHANGE_PW",
-    // 2 key cũ (CHECK_VALID_USER/GET_USER_ID_FROM_EMAIL) đã xoá ở bước 6; 3 route
-    // password-reset của bước 2 thế chỗ, cùng nhóm "đọc body, limit 100kb".
     "PW_RESET_REQUEST",
     "PW_RESET_VERIFY",
     "PW_RESET_CONFIRM",
@@ -440,8 +371,6 @@ test("FR-2: nhóm route từng bị quên (FOLLOW/CHANGE_PW/password-reset/...) 
     })
   );
 });
-
-/* ------------------------------------------------- 4. 9 route không override: không regression */
 
 test("FR-2: 11 route không mount body-parser (GET listing + LOGOUT + CRAWL_USER + REFRESH_TOKEN + SITEMAP_ELIGIBLE + ADMIN_DETAIL) vẫn 200", async () => {
   const app = buildAppFromSource();

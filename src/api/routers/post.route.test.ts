@@ -1,22 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 012 — schema cho `post.route.ts` (FR-5/FR-9).
-//
-// 3 tầng, cố ý không thay thế nhau:
-//  - Tầng schema (parse trực tiếp): kiểm từng field, nhanh, không mở socket.
-//  - Tầng HTTP: dựng 1 `express()` mới, mount SCHEMA THẬT + `validate()` THẬT, controller là stub.
-//    CỐ Ý không `import` chính `post.route.ts`: file đó kéo theo `post.controller.ts` ->
-//    `services/feed/queue.ts`, mà module này tạo `new Redis(...)` + 2 `new Queue(...)` NGAY LÚC
-//    IMPORT. Connection đó giữ event loop sống mãi -> `npm test` chạy xong hết test rồi treo, không
-//    bao giờ exit. Vì vậy phần "router có wire đúng không" được kiểm bằng test đọc SOURCE ở cuối
-//    file (cùng cách `validate.test.ts` kiểm `src/app.ts`).
-//  - Tầng integration: đẩy object đã parse vào `getPostsIdByFilter` THẬT, stub model ở tầng
-//    mongoose để không cần DB — đây là test bắt được đúng loại bug "schema nuốt field mà service
-//    cần" mà test schema thuần KHÔNG bắt được.
-//  - Tầng repost-guard end-to-end (Task 011, R-6): NGOẠI LỆ có chủ đích với ghi chú "không import
-//    post.route.ts" ở trên — phần cuối file import CHÍNH `createPost` thật để chạy guard chặn bypass
-//    task 090 qua ĐÚNG route/method mới (`POST /posts`). Redis/BullMQ mở lúc import được đóng lại
-//    bằng `after(closeFanoutQueues)` ở cuối file, đúng pattern `post.controller.test.ts` đã dùng.
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { after, test } from "node:test";
@@ -86,15 +67,10 @@ const withServer = async (app, fn: (base: string) => Promise<void>) => {
   }
 };
 
-/** Controller stub: nếu request chạm được tới đây nghĩa là `validate()` ĐÃ CHO QUA. Test payload
- * sai phải không bao giờ tới. `async` + KHÔNG bọc `asyncHandler` — giống hệt `createPost` thật. */
 const reachedController = (_req, res) => {
   res.json({ reached: true });
 };
 
-/** Mirror cách `post.route.ts` wire 3 route dùng trong tầng HTTP dưới đây, giữ nguyên thứ tự
- * middleware. Task 011 (D-1): `POST /posts/create` -> `POST /posts`,
- * `POST /posts/update-post-visibility` -> `PATCH /posts/:id/visibility`. */
 const routeApp = () => {
   const app = express();
   app.use(express.json());
@@ -114,10 +90,6 @@ const routeApp = () => {
   return app;
 };
 
-/* ------------------------------------------------- getPostsQuerySchema (core) */
-
-// AC FR-5: đúng request đã verify ở phiên fix N+1. Dùng express thật để `?filter[page]=users&
-// filter[value]=` được `qs` parse y hệt production, thay vì tự dựng object bằng tay.
 test("FR-5 (qs thật): filter[value]= rỗng được GIỮ NGUYÊN là chuỗi rỗng, không bị loại/400", async () => {
   const app = express();
   let seen: any = null;
@@ -139,11 +111,6 @@ test("FR-5 (qs thật): filter[value]= rỗng được GIỮ NGUYÊN là chuỗi
   });
 });
 
-// Task 020 (SC-4): bản automated tương đương ĐÚNG 1:1 với curl trong Verification Checklist —
-// `curl 'http://localhost:8080/api/posts/all?filter[page]=users&filter[value]='`. Khác test ngay
-// trên: query string ở đây KHÔNG kèm bất kỳ param nào khác (không `userId`), đúng hình dạng đã
-// điều tra ở phiên fix N+1. Chạy được không cần Mongo/Redis vì controller là stub — cái đang
-// verify là `validate()` không chặn/không bóp méo query, không phải logic feed.
 test("SC-4 (curl-equivalent): GET /posts/all?filter[page]=users&filter[value]= -> 200", async () => {
   const app = express();
   let seen: any = null;
@@ -157,15 +124,12 @@ test("SC-4 (curl-equivalent): GET /posts/all?filter[page]=users&filter[value]= -
     const res = await fetch(`${base}/api/posts/all?filter[page]=users&filter[value]=`);
 
     assert.equal(res.status, 200, "đúng query trong checklist phải 200, không được 400/500");
-    // `{ ok: true }` nguyên vẹn = không có field `message` -> chắc chắn không phải response lỗi
-    // của `validate()` (`{ message: VALIDATION_ERROR_MESSAGE }`).
     assert.deepEqual(await res.json(), { ok: true });
     assert.equal(seen.filter.page, PageConstant.USER, "filter.page phải còn nguyên là 'users'");
     assert.equal(seen.filter.value, "", "filter[value]= rỗng phải tới controller là chuỗi rỗng");
   });
 });
 
-// AC FR-5 (field completeness): assert trên KEY của object đã parse, không chỉ "parse thành công".
 test("FR-5: parse giữ đủ 4 field getPostsIdByFilter destructure (filter/userId/page/limit)", () => {
   const parsed: any = getPostsQuerySchema.query.parse({
     filter: { page: PageConstant.SAVED, value: "" },
@@ -184,9 +148,6 @@ test("FR-5: parse giữ đủ 4 field getPostsIdByFilter destructure (filter/use
   assert.equal(parsed.limit, 10);
 });
 
-// Bằng chứng cho quyết định `.passthrough()` trên `filter`: 3 field này CHỈ được đọc trong
-// `getQueryPostValidation` (nhánh admin), không có trong bảng tóm tắt của task. Nếu `filter` bị
-// đóng, nhánh duyệt bài admin sẽ âm thầm lọc sai.
 test("FR-5: field admin trong filter (user/postContent/postType) sống sót qua parse", () => {
   const parsed: any = getPostsQuerySchema.query.parse({
     filter: {
@@ -221,7 +182,6 @@ test("FR-5: filter[user]= rỗng hợp lệ, filter[user] rác bị 400 (FR-9)",
   );
 });
 
-// Quyết định có chủ đích (không phải sót): `filter.page` để permissive.
 test("quyết định: filter.page KHÔNG bị enum-restrict — page lạ vẫn parse (rơi vào nhánh for_you)", () => {
   const parsed: any = getPostsQuerySchema.query.parse({
     filter: { page: "a_brand_new_page_type" },
@@ -229,7 +189,6 @@ test("quyết định: filter.page KHÔNG bị enum-restrict — page lạ vẫn
   assert.equal(parsed.filter.page, "a_brand_new_page_type");
 });
 
-// Top-level thì ĐÓNG: viewerId/isAdminPage do client gửi phải bị loại trước khi tới controller.
 test("NFR-2: viewerId/isAdminPage client gửi lên bị strip khỏi req.query", () => {
   const parsed: any = getPostsQuerySchema.query.parse({
     filter: { page: PageConstant.USER, value: "" },
@@ -254,12 +213,6 @@ test("FR-9: userId không phải ObjectId -> ZodError", () => {
   );
 });
 
-/* ------------------------------ integration: object đã parse -> hàm service THẬT */
-
-// AC FR-5 (integration, không chỉ unit): đẩy KẾT QUẢ PARSE vào `getPostsIdByFilter` thật và quan
-// sát 4 field có thực sự tới nơi không. Stub ở tầng model (`SavedPost.find`) nên không cần Mongo.
-// Chọn nhánh SAVED vì nó dùng CẢ 4 field: `filter.page` (chọn nhánh), `userId` (điều kiện find),
-// `page`+`limit` (skip/limit).
 test("FR-5 integration: object đã parse đi qua getPostsIdByFilter THẬT, đủ cả 4 field", async () => {
   const parsed: any = getPostsQuerySchema.query.parse({
     filter: { page: PageConstant.SAVED, value: "" },
@@ -297,8 +250,6 @@ test("FR-5 integration: object đã parse đi qua getPostsIdByFilter THẬT, đ�
   }
 });
 
-/* ------------------------------------------------------------ các schema còn lại */
-
 test("createPostSchema: payload đầy đủ hợp lệ pass", () => {
   const body = createPostSchema.body.parse({
     _id: VALID_ID,
@@ -310,8 +261,6 @@ test("createPostSchema: payload đầy đủ hợp lệ pass", () => {
     usersTag: [VALID_ID],
     visibility: Constants.POST_VISIBILITY.PUBLIC,
   });
-  // Bước 3: `authorId` không còn trong schema nên không còn trên kiểu kết quả — assert đã chuyển
-  // sang test riêng "không còn nhận authorId" bên dưới. Ở đây chỉ giữ phần `visibility`.
   assert.equal(body.visibility, Constants.POST_VISIBILITY.PUBLIC);
 });
 
@@ -333,11 +282,6 @@ test("createPostSchema: visibility ngoài enum fail", () => {
   assert.throws(() => createPostSchema.body.parse({ ...base, visibility: 99 }), z.ZodError);
 });
 
-/* ------------------------- Bước 3 (access-control-hardening): danh tính rời khỏi payload ------ */
-
-// ĐẢO NGƯỢC kỳ vọng cũ ("thiếu authorId -> fail"). `authorId` giờ KHÔNG còn là field hợp lệ: payload
-// không có nó vẫn parse được, và payload CÓ nó thì giá trị bị strip trước khi tới controller —
-// client không còn cửa nào tự khai mình là tác giả (probe V2a).
 test("Bước 3: createPostSchema không còn nhận authorId — thiếu thì pass, gửi kèm thì bị strip", () => {
   const base = { _id: VALID_ID, content: "hi", type: "create" };
   assert.doesNotThrow(() => createPostSchema.body.parse(base));
@@ -365,9 +309,6 @@ test("Bước 3: tickPostSurveySchema không còn nhận userId — gửi kèm t
   assert.equal(parsed.userId, undefined, "userId do client gửi phải bị strip");
 });
 
-// Guard chống hồi quy ở tầng wiring: 4 route GHI của post đều phải có `protectRoute`. Không có nó
-// thì mọi thay đổi ở trên vô nghĩa — controller sẽ đọc `req.user._id` của `undefined` và ném 500
-// thay vì 401, một chế độ hỏng khó truy hơn hẳn lỗ hổng ban đầu.
 test("Bước 3 (wiring): 4 route ghi của posts đều có protectRoute", async () => {
   const src = await readRouteSource();
   for (const [marker, label] of [
@@ -384,9 +325,6 @@ test("Bước 3 (wiring): 4 route ghi của posts đều có protectRoute", asyn
   );
 });
 
-/* ---------------------------------- Task 010 (FR-3/FR-5/FAIL-1): sanitize post.content ---------------------------------- */
-
-// AC FR-3 scenario 1: createPostSchema.content required -> `.transform(sanitizeText)` trực tiếp.
 test("FR-3: createPostSchema.content chứa <script> bị strip sau transform", () => {
   const body = createPostSchema.body.parse({
     _id: VALID_ID,
@@ -398,7 +336,6 @@ test("FR-3: createPostSchema.content chứa <script> bị strip sau transform", 
   assert.equal(body.content, "Hello");
 });
 
-// AC FR-5 (non-regression): tiếng Việt có dấu / emoji không bị strip nhầm bởi sanitizeText.
 test("FR-5: createPostSchema.content tiếng Việt có dấu và emoji giữ nguyên", () => {
   const raw = "Xin chào các bạn 🎉";
   const body = createPostSchema.body.parse({
@@ -410,18 +347,11 @@ test("FR-5: createPostSchema.content tiếng Việt có dấu và emoji giữ ng
   assert.equal(body.content, raw);
 });
 
-// AC FAIL-1 (CRITICAL): field optional -> guard bắt buộc. Bug gốc: naive `.transform(sanitizeText)`
-// không guard sẽ khiến `content` absent -> `""` (sanitizeText(undefined) === ""), rồi
-// `post.controller.ts:392` (`post.content = content;`, vô điều kiện) ghi đè "" lên content cũ.
-// Test dưới đây chứng minh guard hiện tại KHÔNG rơi vào case đó: `content` vắng mặt trong body ->
-// key `content` không tồn tại trong kết quả parse (rơi ra `undefined` khi destructure ở controller),
-// KHÔNG BAO GIỜ là chuỗi rỗng `""`.
 test("FAIL-1 guard (CRITICAL): updatePostSchema — content vắng mặt -> parse ra undefined, KHÔNG phải ''", () => {
   const parsed: any = updatePostSchema.body.parse({
     _id: VALID_ID,
     userId: OTHER_ID,
     survey: [],
-    // content: cố ý KHÔNG truyền — mô phỏng request chỉ update survey.
   });
 
   assert.equal(
@@ -437,8 +367,6 @@ test("FAIL-1 guard (CRITICAL): updatePostSchema — content vắng mặt -> pars
   );
 });
 
-// Đối chứng trực tiếp: một transform KHÔNG guard (naive, đúng bug mà FAIL-1 mô tả) sẽ cho '' —
-// chứng minh guard trong updatePostSchema thực sự cần thiết, không phải phòng thủ thừa.
 test("FAIL-1 guard: đối chứng naive transform (không guard) sẽ tạo ra '' — lý do guard bắt buộc", () => {
   const naiveContentSchema = z.string().optional().transform((val) => sanitizeText(val));
   assert.equal(
@@ -448,8 +376,6 @@ test("FAIL-1 guard: đối chứng naive transform (không guard) sẽ tạo ra 
   );
 });
 
-// AC FR-5 (non-regression, update path): content có giá trị (tiếng Việt/emoji) qua updatePostSchema
-// vẫn giữ nguyên, không bị strip nhầm.
 test("FR-5: updatePostSchema.content có giá trị tiếng Việt/emoji giữ nguyên, không bị guard nuốt", () => {
   const raw = "Cập nhật nội dung 😊";
   const parsed: any = updatePostSchema.body.parse({
@@ -461,7 +387,6 @@ test("FR-5: updatePostSchema.content có giá trị tiếng Việt/emoji giữ n
   assert.equal(parsed.content, raw);
 });
 
-// AC FR-3 scenario 1 (update path): content chứa <script> qua updatePostSchema cũng bị strip.
 test("FR-3: updatePostSchema.content chứa <script> bị strip sau transform", () => {
   const parsed: any = updatePostSchema.body.parse({
     _id: VALID_ID,
@@ -472,7 +397,6 @@ test("FR-3: updatePostSchema.content chứa <script> bị strip sau transform", 
   assert.equal(parsed.content, "Bye");
 });
 
-// Task 011 correction: postId chuyển từ body vào params.id — schema.body không còn field postId.
 test("updatePostVisibilitySchema / updatePostStatusSchema: giá trị sai bị từ chối", () => {
   const ids = { userId: VALID_ID };
   assert.equal(
@@ -486,7 +410,6 @@ test("updatePostVisibilitySchema / updatePostStatusSchema: giá trị sai bị t
     () => updatePostVisibilitySchema.body.parse({ ...ids, visibility: 99 }),
     z.ZodError
   );
-  // AD-5: body không coerce -> "0" dạng string không được ngầm thành số 0.
   assert.throws(
     () => updatePostStatusSchema.body.parse({ ...ids, status: "0" }),
     z.ZodError
@@ -497,8 +420,6 @@ test("updatePostVisibilitySchema / updatePostStatusSchema: giá trị sai bị t
   );
 });
 
-// AD-5: chỉ query/params mới coerce. Body tới từ `express.json()` nên đã đúng kiểu — "true" dạng
-// string là lỗi client thật sự, không được nuốt.
 test("AD-5: tickPostSurveySchema — isAdd là string \"true\" bị từ chối, boolean thì pass", () => {
   const base = { optionId: VALID_ID };
   assert.equal(tickPostSurveySchema.body.parse({ ...base, isAdd: true }).isAdd, true);
@@ -523,9 +444,6 @@ test("getPostActivitiesSchema: validates id param and activity query types", () 
   assert.throws(() => getPostActivitiesSchema.query.parse({ type: "invalid-type" }), z.ZodError);
 });
 
-/* ------------------------------------------------------------------- HTTP thật */
-
-// AC FR-9: 400 phải xảy ra TRƯỚC controller — stub `reachedController` không được chạm tới.
 test("FR-9 (HTTP): DELETE /posts/not-an-objectid -> 400 trước khi controller chạy", async () => {
   await silenceWarn(() =>
     withServer(routeApp(), async (base) => {
@@ -538,9 +456,6 @@ test("FR-9 (HTTP): DELETE /posts/not-an-objectid -> 400 trước khi controller 
   );
 });
 
-// AC FR-5 (AD-4): `validate()` phải đồng bộ / `next(err)` chứ không throw vào khoảng không, nếu
-// không express không có ai bắt -> request treo tới khi client timeout. Test này fail bằng cách
-// TREO, nên phải tự đặt hạn giờ thay vì chờ test runner. Task 011: path `/posts/create` -> `/posts`.
 test("AD-4 (HTTP): POST /posts body sai -> 400, KHÔNG treo", async () => {
   await silenceWarn(() =>
     withServer(routeApp(), async (base) => {
@@ -587,10 +502,6 @@ test("FR-5 (HTTP): PATCH /posts/:id/visibility visibility ngoài enum -> 400", a
   );
 });
 
-// Task 020 (NFR-4, positive path): 3 test HTTP ở trên đều là negative. Nếu `validate()` lỡ chặn
-// nhầm payload HỢP LỆ thì không test nào ở trên fail. Test này đi ngược chiều: payload đúng theo
-// bảng field của `012.md` phải CHẠM được controller trên cả 3 mặt reassignment (AD-6) —
-// `req.body` (POST /posts), `req.params` + `req.query` (DELETE /posts/:id).
 test("NFR-4 (HTTP positive): payload hợp lệ chạm được controller trên cả body/params/query", async () => {
   await withServer(routeApp(), async (base) => {
     const createRes = await fetch(`${base}/posts`, {
@@ -628,11 +539,6 @@ test("NFR-4 (HTTP positive): payload hợp lệ chạm được controller trên
   });
 });
 
-/* ------------------------------------------------- wiring (đọc source, không import) */
-
-// `post.route.ts` không import được trong test (xem đầu file: `feed/queue.ts` mở Redis lúc import),
-// nên kiểm wiring bằng cách đọc source — đúng cách `validate.test.ts` kiểm `src/app.ts`.
-// Đường dẫn theo cwd: `npm test` luôn chạy từ thư mục gốc repo.
 const readRouteSource = async () =>
   await import("node:fs/promises").then((fs) =>
     fs.readFile("src/api/routers/post.route.ts", "utf8")
@@ -644,8 +550,6 @@ const parseRouteLines = (src: string) =>
     .join(" ")
     .match(/router\.(get|post|put|patch|delete)\([\s\S]*?\);/g) ?? [];
 
-/** `(method, path)` của từng route, path đã resolve: đối số đầu tiên hoặc là string literal, hoặc
- * là 1 constant destructure từ `POST_PATH` (task 011 nhét luôn `:id` vào giá trị constant). */
 const parseRoutePairs = (src: string) =>
   parseRouteLines(src).map((line) => {
     const m = line.match(/^router\.(\w+)\(\s*("([^"]*)"|[A-Z_]+)/);
@@ -677,35 +581,26 @@ test("wiring: 12/13 route có validate(), CRAWL_POST cố ý không có", async 
   );
 });
 
-/* --------------------------------------------- Task 011 (FR-3, D-1): bảng 11 endpoint mới */
-
-// AC FR-3: chốt CỨNG method + path của cả 13 endpoint (11 gốc + `/:id/replies` thêm sau (xem
-// "tối ưu Post.replies") + `SITEMAP_ELIGIBLE` task 002) theo đúng bảng trong `011.md`/`002.md`.
-// Thứ tự trong list cũng là thứ tự ĐĂNG KÝ — có ý nghĩa với express (route literal 1 segment như
-// `/crawl`/`/sitemap-eligible` phải đứng trước route dynamic 1 segment cùng method), nên assert
-// nguyên list chứ không dùng Set.
 test("FR-3 (D-1): 13 endpoint posts đúng method + path RESTful mới, đúng thứ tự đăng ký", async () => {
   const pairs = parseRoutePairs(await readRouteSource());
 
   assert.deepEqual(pairs, [
-    ["get", "/"], // GET_ALL: /all -> /
-    ["get", "/sitemap-eligible"], // MỚI (task 002): post đủ điều kiện sitemap, literal -> trước /:id
-    ["get", "/:id/activities"], // giữ nguyên
-    ["get", "/:id/replies"], // MỚI: danh sách reply phân trang, thay cho nhúng không giới hạn
-    ["get", "/:id"], // giữ nguyên
-    ["post", "/"], // CREATE: /create -> /
-    ["delete", "/:id"], // giữ nguyên
-    ["put", "/:id"], // UPDATE: /update -> /:id
-    ["post", "/:id/like"], // LIKE: /like/:id -> /:id/like
-    ["post", "/crawl"], // CRAWL_POST: /crawl-post -> /crawl
-    ["post", "/:id/survey-ticks"], // TICK_SURVEY: PUT /tick-post-survey -> POST /:id/survey-ticks
-    ["patch", "/:id/status"], // UPDATE_POST_STATUS: POST /update-post-status -> PATCH /:id/status
-    ["patch", "/:id/visibility"], // UPDATE_POST_VISIBILITY: POST -> PATCH /:id/visibility
+    ["get", "/"],
+    ["get", "/sitemap-eligible"],
+    ["get", "/:id/activities"],
+    ["get", "/:id/replies"],
+    ["get", "/:id"],
+    ["post", "/"],
+    ["delete", "/:id"],
+    ["put", "/:id"],
+    ["post", "/:id/like"],
+    ["post", "/crawl"],
+    ["post", "/:id/survey-ticks"],
+    ["patch", "/:id/status"],
+    ["patch", "/:id/visibility"],
   ]);
 });
 
-// FR-3 (id-source): `PUT /posts/:id` chỉ có nghĩa nếu controller đọc id từ `req.params.id`. Nếu ai
-// đó revert về `payload._id`, `PUT /posts/<A>` với body `_id: <B>` sẽ âm thầm sửa NHẦM bài B.
 test("FR-3 (id-source): updatePost đọc req.params.id, KHÔNG đọc payload._id", async () => {
   const src = await import("node:fs/promises").then((fs) =>
     fs.readFile("src/api/controllers/post.controller.ts", "utf8")
@@ -723,9 +618,6 @@ test("FR-3 (id-source): updatePost đọc req.params.id, KHÔNG đọc payload._
   );
 });
 
-// Task 011 correction (phát hiện lúc viết FE call site, T020): route đã là PATCH /:id/status và
-// /:id/visibility từ đầu task 011, nhưng 2 controller quên đổi nguồn đọc postId — :id trong URL
-// từng vô nghĩa (danh tính thật vẫn qua body `postId`). Cùng lớp lỗi với plan-review FAIL-1 (T012).
 test("FR-3 (id-source correction): updatePostStatus/updatePostVisibility đọc req.params.id, KHÔNG đọc body.postId", async () => {
   const src = await import("node:fs/promises").then((fs) =>
     fs.readFile("src/api/controllers/post.controller.ts", "utf8")
@@ -744,7 +636,6 @@ test("FR-3 (id-source correction): updatePostStatus/updatePostVisibility đọc 
   }
 });
 
-// FR-10: 0 raw `res.json({error...})` còn lại — envelope lỗi phải đi qua error-handler tập trung.
 test("FR-10: post.controller.ts không còn raw res.json({ error ... })", async () => {
   const src = await import("node:fs/promises").then((fs) =>
     fs.readFile("src/api/controllers/post.controller.ts", "utf8")
@@ -756,29 +647,13 @@ test("FR-10: post.controller.ts không còn raw res.json({ error ... })", async 
   );
 });
 
-/* -------------------------- R-6 (BẮT BUỘC): regression bypass repost task 090, end-to-end -------
-   Guard chặn repost sống trong `createPost` và đọc CẢ `?action=repost` (query) LẪN `type` (body)
-   LẪN `quote._id`. Task 011 đổi route `POST /posts/create` -> `POST /posts` và bọc `asyncHandler`
-   — nếu việc đổi đó làm hỏng đường đi của guard (hoặc làm request TREO thay vì trả 400), bypass
-   task 090 sống lại. Test dưới đây chạy controller THẬT sau `validate()` THẬT trên ĐÚNG route mới,
-   stub tầng model để không cần Mongo. */
-
 const AUTHOR_ID = "652f1b2c3d4e5f6071829306";
 const QUOTED_POST_ID = "652f1b2c3d4e5f6071829307";
 
-/** Dựng app mirror `post.route.ts`: 1 `Router` mount tại `Route.POST` (= `/posts`), route
- * `POST POST_PATH.CREATE` (= `/`) gồm `validate(createPostSchema)` + `asyncHandler(createPost)`,
- * cộng error-handler kiểu `app.ts` (đọc `err.statusCode`). Mount qua Router chứ không `app.post()`
- * thẳng, để `POST_PATH.CREATE = "/"` được nối với prefix đúng như production. */
 const createPostApp = () => {
   const app = express();
   app.use(express.json());
   const router = express.Router();
-  // Bước 3 (access-control-hardening): route thật giờ có `protectRoute` đứng trước `validate`, và
-  // `createPost` đọc tác giả từ `req.user._id`. Harness này CỐ Ý stub thay vì mount `protectRoute`
-  // thật (nó cần JWT + Mongo): mục tiêu của nhóm test R-6 là guard repost, không phải tầng auth —
-  // auth đã có test riêng. Thiếu stub thì mọi test R-6 trả 500 (đọc `_id` của undefined) và không
-  // còn chứng minh được điều gì về guard repost.
   const fakeProtectRoute = (req: any, _res: any, next: any) => {
     req.user = { _id: AUTHOR_ID };
     next();
@@ -789,8 +664,6 @@ const createPostApp = () => {
   return app;
 };
 
-/** Stub `User.findById` (tác giả tồn tại) + `Post.findById` (bài bị quote, visibility tuỳ test) +
- * `Post.prototype.save` (đánh dấu nếu bị gọi = guard đã LỌT). */
 const withStubbedModels = async (
   quotedVisibility: number,
   fn: (state: { saveCalled: boolean }) => Promise<void>
@@ -817,11 +690,8 @@ const withStubbedModels = async (
   }
 };
 
-/** Payload repost/quote: nội dung bài gốc bị copy nguyên văn vào `quote.content`. `action` KHÔNG
- * nằm trong body — nó chỉ tồn tại ở query string, nên bỏ query = bỏ tín hiệu `action`. */
 const quotePayload = (type: string) => ({
   _id: "652f1b2c3d4e5f6071829308",
-  // `authorId` đã bỏ khỏi payload (bước 3) — tác giả đến từ `req.user`, xem `fakeProtectRoute`.
   content: "",
   media: [],
   survey: [],
@@ -835,8 +705,6 @@ const quotePayload = (type: string) => ({
   },
 });
 
-// AC R-6 (test quan trọng nhất của task 011): `type=REPOST` trong body, KHÔNG có `?action=repost`
-// trong query, `quote._id` copy từ bài khác (bài đó ONLY_ME) -> PHẢI vẫn bị chặn 400.
 test("R-6 (BẮT BUỘC): POST /posts type=REPOST KHÔNG kèm ?action=repost -> vẫn bị chặn 400, không lưu", async () => {
   await silenceWarn(() =>
     withStubbedModels(Constants.POST_VISIBILITY.ONLY_ME, async (state) => {
@@ -856,7 +724,6 @@ test("R-6 (BẮT BUỘC): POST /posts type=REPOST KHÔNG kèm ?action=repost -> 
 
         try {
           const res: any = await Promise.race([
-            // CỐ Ý không có `?action=repost` — đây chính là vector bypass của task 090.
             fetch(`${base}/posts`, {
               method: "POST",
               headers: { "content-type": "application/json" },
@@ -882,8 +749,6 @@ test("R-6 (BẮT BUỘC): POST /posts type=REPOST KHÔNG kèm ?action=repost -> 
   );
 });
 
-// AC R-6 (biến thể bypass gốc task 090): `type=CREATE` + `quote._id` tự dựng thủ công, không
-// `action`, không `parentPost` — đây là payload ĐÃ khai thác được live lần đầu.
 test("R-6 (bypass gốc 090): POST /posts type=CREATE + quote._id thủ công -> vẫn bị chặn 400", async () => {
   await silenceWarn(() =>
     withStubbedModels(Constants.POST_VISIBILITY.ONLY_FOLLOWERS, async (state) => {
@@ -904,9 +769,6 @@ test("R-6 (bypass gốc 090): POST /posts type=CREATE + quote._id thủ công ->
   );
 });
 
-// Đối chứng (không phải chặn mù): bài được quote là PUBLIC -> guard CHO QUA, chạy tiếp tới bước lưu
-// (`save()` stub ném REACHED_SAVE = 500). Thiếu test này thì một guard "luôn 400" cũng pass 2 test
-// trên mà không ai biết.
 test("R-6 (đối chứng): quote bài PUBLIC -> guard cho qua, đi tiếp tới bước lưu", async () => {
   await silenceWarn(() =>
     withStubbedModels(Constants.POST_VISIBILITY.PUBLIC, async (state) => {
@@ -928,14 +790,6 @@ test("R-6 (đối chứng): quote bài PUBLIC -> guard cho qua, đi tiếp tới
   );
 });
 
-/* -------------------------- Task 002 (epic seo-sitemap-schema, FR-1): GET /posts/sitemap-eligible
-   end-to-end. CỐ Ý KHÔNG mount `sitemapListLimiter` thật trong app test dưới đây: đó là 1 singleton
-   module-level (`rateLimiter.ts`) dùng chung state trong CẢ process test — mount nó vào 1 route bị
-   gọi nhiều lần (nhiều test trong file này) có thể tự trip giữa chừng, che mất assertion thật đang
-   test (đúng lý do `security-hardening.smoke.test.ts:165` đã né tương tự với authTierLimiter). Sự
-   có mặt của `sitemapListLimiter` trên route này đã được xác nhận riêng bằng test đọc SOURCE bên
-   dưới — cùng pattern `rateLimiter.test.ts:166` áp dụng cho `CRAWL_POST`. */
-
 const SITEMAP_SECRET = "test-sitemap-secret";
 
 const withSitemapSecret = async (fn: () => Promise<void> | void) => {
@@ -947,8 +801,6 @@ const withSitemapSecret = async (fn: () => Promise<void> | void) => {
   }
 };
 
-/** Mirror ĐÚNG wiring thật của `SITEMAP_ELIGIBLE` trong `post.route.ts` (trừ `authTierLimiter`,
- * lý do xem comment ngay trên): `sitemapAuthGate` -> `validate(...)` -> controller thật. */
 const sitemapEligibleApp = () => {
   const app = express();
   const router = express.Router();
@@ -983,16 +835,12 @@ test("FR-1 (auth gate): sai header secret -> 401", async () => {
   });
 });
 
-// 25 doc giả lập kết quả ĐÃ QUA filter status/visibility/engagementScore (đúng field controller
-// select), _id hex 24 ký tự tăng dần để so sánh chuỗi `>` tương đương thứ tự ObjectId thật.
 const FAKE_ELIGIBLE_DOCS = Array.from({ length: 25 }, (_, i) => ({
   _id: String(i + 1).padStart(24, "0"),
   updatedAt: new Date(2024, 0, i + 1),
   engagementScore: 5 + i,
 }));
 
-// Mock giả lập ĐÚNG hành vi query thật (top-N ưu tiên, fix sau epic seo-sitemap-schema): sort
-// (engagementScore giảm dần, _id giảm dần) + cursor $or "score:id" — KHÔNG còn thuần `_id`.
 const withStubbedSitemapQuery = async (
   docs: typeof FAKE_ELIGIBLE_DOCS,
   fn: () => Promise<void> | void,
@@ -1000,7 +848,6 @@ const withStubbedSitemapQuery = async (
   const originalFind = (Post as any).find;
   const originalCountDocuments = (Post as any).countDocuments;
 
-  // "Backend thật" luôn trả theo (engagementScore giảm dần, _id giảm dần).
   const ranked = [...docs].sort((a, b) =>
     a.engagementScore !== b.engagementScore
       ? b.engagementScore - a.engagementScore
@@ -1089,7 +936,6 @@ test("FR-1 (phân trang, end-to-end): 3 trang liên tiếp qua nextCursor -> kh�
         assert.equal(seenIds.length, totalCountFromFirstPage, "không được thiếu record nào so với totalCount");
         assert.deepEqual(
           seenIds,
-          // engagementScore giảm dần -> thứ tự NGƯỢC LẠI với mảng tạo sẵn (vốn tăng dần theo index).
           [...FAKE_ELIGIBLE_DOCS].reverse().map((d) => d._id),
           "thứ tự + tập hợp record phải khớp chính xác, không trùng không thiếu",
         );
@@ -1102,10 +948,6 @@ test("FR-1 (wiring, source): SITEMAP_ELIGIBLE có sitemapAuthGate + validate(get
   const src = await readRouteSource();
   const noComments = src.replace(/^\s*\/\/.*$/gm, "");
 
-  // KHÔNG rate limiter (đã thử authTierLimiter 5/phút, rồi sitemapListLimiter 300/phút — cả 2 đều
-  // fail khi verify sống vì Next.js's static export gọi getChunk() đồng thời cho nhiều chunk lúc
-  // build, cộng dồn vượt bất kỳ ngưỡng theo-phút nào. sitemapAuthGate là biên bảo mật thật —
-  // xem rateLimiter.ts.
   assert.ok(
     noComments.includes(
       "router.get(\n  SITEMAP_ELIGIBLE,\n  sitemapAuthGate,\n  validate(getSitemapEligiblePostsQuerySchema),\n  asyncHandler(getSitemapEligiblePosts),\n);",
@@ -1122,14 +964,6 @@ test("FR-1 (wiring, source): SITEMAP_ELIGIBLE có sitemapAuthGate + validate(get
   );
 });
 
-/* --------------------------- Task 009: role-gate cho getPosts (admin/*) -------------------- */
-
-// `getPosts` dùng CHUNG cho mọi loại feed (for_you/following/saved/user/admin/*) -> role-check
-// chỉ áp dụng khi `filter.page` bắt đầu bằng "admin" (xem Context task 009). Test dựng app riêng
-// (không qua `post.route.ts` thật — lý do "không import" đã ghi ở đầu file: kéo Redis lúc import).
-// Middleware test-only dưới đây thay `optionalAuth` thật, nhưng giữ ĐÚNG hợp đồng của nó (chỉ set
-// `req.viewerId` từ 1 nguồn test tương đương jwt đã verify) — cùng cách `withStubbedModels` ở
-// tầng R-6 phía trên thay `protectRoute`/DB thật bằng stub mongoose.
 const fakeOptionalAuth = (req, _res, next) => {
   req.viewerId = (req.headers["x-test-viewer-id"] as string) || null;
   next();
@@ -1142,9 +976,6 @@ const getPostsApp = () => {
   return app;
 };
 
-/** Stub `User.findById` (role-gate đọc viewer) + `Post.find` (cả 2 nhánh admin đều rơi vào
- * `Post.find` cuối `getPostsIdByFilter` SAU KHI qua gate — xem `services/post.ts`) — không cần
- * Mongo. `role: null` mô phỏng ẩn danh/không tìm thấy user (viewer falsy -> gate chặn). */
 const withStubbedAdminGateModels = async (
   role: number | null,
   fn: () => Promise<void>,
@@ -1160,8 +991,6 @@ const withStubbedAdminGateModels = async (
     then(resolve: any) { resolve([]); },
   };
   (Post as any).find = () => chain;
-  // Bug fix totalCount: role hợp lệ (200) giờ đi tới `Post.countDocuments` thật trong
-  // `getPostsIdByFilter` — stub để không treo chờ Mongo thật (không có DB trong test env).
   (Post as any).countDocuments = async () => 0;
   try {
     await fn();
@@ -1172,12 +1001,6 @@ const withStubbedAdminGateModels = async (
   }
 };
 
-// LƯU Ý status code: Implementation Steps của task 009 chỉ định dùng ĐÚNG `AuthFailureError` cho
-// cả 2 role-check này (giống hệt code review đã confirm), và `AuthFailureError` trong
-// `core/error.response.ts` mặc định là 401 (`HTTPStatus.UNAUTHORIZED`), KHÔNG phải 403
-// (`ForbiddenError`/403 là 1 class riêng, không được dùng ở đây). Acceptance Criteria của task ghi
-// "403" nhưng hành vi THẬT của code theo đúng Implementation Steps là 401 — test dưới đây khớp
-// hành vi thật (đã note lại làm warning cho review, xem task report).
 const ADMIN_GATE_ROLE_CASES: Array<[string, number | null, number]> = [
   ["ADMIN", Constants.USER_ROLE.ADMIN, 200],
   ["MODERATOR", Constants.USER_ROLE.MODERATOR, 200],
@@ -1209,11 +1032,6 @@ for (const adminPage of [PageConstant.ADMIN.POSTS, PageConstant.ADMIN.POSTS_VALI
   }
 }
 
-// AC FR-4 (regression): non-admin page không được bị đòi role — role-gate mới CHỈ kích hoạt khi
-// `filter.page` bắt đầu bằng "admin". Dùng nhánh SAVED (đã stub sẵn ở integration test phía trên,
-// đơn giản/ổn định) thay vì `for_you` — nhánh mặc định kéo theo toàn bộ pipeline fanout/Redis
-// không liên quan tới điều đang test ở đây (role-gate không được kích hoạt), AC cũng chấp nhận
-// "for_you (hoặc bất kỳ page không phải admin/*)".
 test("Task 009 regression: GET /posts?filter[page]=saved role=USER vẫn 200, không bị đòi role", async () => {
   const originalSavedFind = (SavedPost as any).find;
   const chain: any = {
@@ -1240,12 +1058,6 @@ test("Task 009 regression: GET /posts?filter[page]=saved role=USER vẫn 200, kh
   }
 });
 
-/* --------------------------- Task 016: query-builder cho filter ở admin/posts ----------------- */
-
-// Trước fix: nhánh `ADMIN.POSTS` (`services/post.ts`) chỉ set `sort`, không build `query` từ
-// filter -> `Post.find({}, ...)` trả toàn bộ post bất kể filter FE gửi (xem Context task #16).
-// Test dưới đây gọi thẳng `getPostsIdByFilter` (đã import ở đầu file cho tầng integration phía
-// trên), stub `Post.find` để bắt CHÍNH XÁC `query` được build, không cần Mongo.
 const withCapturedPostFind = async (
   fn: (calls: { query?: any; sort?: any; countQuery?: any }) => Promise<void>,
 ) => {
@@ -1262,8 +1074,6 @@ const withCapturedPostFind = async (
     calls.query = query;
     return chain;
   };
-  // Task (bug fix totalCount): admin/posts + admin/posts/validation giờ gọi thêm
-  // `Post.countDocuments(query)` — stub để không chạm Mongo thật trong test này.
   (Post as any).countDocuments = async (query: any) => {
     calls.countQuery = query;
     return 0;
@@ -1291,12 +1101,6 @@ test("Task 016: admin/posts + filter.postContent=image -> query lọc theo media
   });
 });
 
-// Bug fix (Posts page filter trả rỗng): dropdown single-select trên Admin FE luôn gửi filter
-// content type dưới dạng CHUỖI ĐƠN (không phải mảng) — `fetchBaseQuery` serialize `["image"]`
-// bằng `String(["image"])` = `"image"`, và `qs` parse `filter[postContent]=image` (không `[]`)
-// thành string, không phải array. `buildAdminPostFilterSubQueries` trước đây gọi thẳng
-// `postContent.forEach` -> TypeError trên string, bị nuốt ở `getPostsIdByFilter` và trả `[]` âm
-// thầm dù có data thật khớp. Test này tái hiện đúng shape request thật (string, không phải mảng).
 test("Task 016 (bug fix): admin/posts + filter.postContent='image' (string đơn, không phải mảng) -> vẫn lọc đúng, không throw", async () => {
   await withCapturedPostFind(async (calls) => {
     await getPostsIdByFilter({
@@ -1380,8 +1184,6 @@ test("Task 016: admin/posts không filter gì -> query rỗng {}, KHÔNG ràng b
   });
 });
 
-// Regression AC (task #16): refactor tách `buildAdminPostFilterSubQueries` KHÔNG được đổi hành vi
-// nhánh `admin/posts/validation` — vẫn ràng buộc PRE_ACCEPT, vẫn nhận đúng filter.user.
 test("Task 016 regression: admin/posts/validation vẫn ràng buộc status PRE_ACCEPT + filter.user sau refactor", async () => {
   await withCapturedPostFind(async (calls) => {
     await getPostsIdByFilter({
@@ -1410,9 +1212,6 @@ test("Task 016 regression: admin/posts/validation không filter -> query chỉ {
   });
 });
 
-// FR-3 (phát hiện lúc verify task #15): default `sort` trong getPostsIdByFilter là
-// {createdAt:-1} (mới nhất trước) -> hàng đợi validation PHẢI override sang cũ-nhất-trước
-// (FIFO), nếu không bài chờ duyệt lâu sẽ bị chìm xuống cuối, dễ bỏ sót.
 test("Task 015 (verify fix): admin/posts/validation sort createdAt tăng dần (FIFO, cũ nhất trước)", async () => {
   await withCapturedPostFind(async (calls) => {
     await getPostsIdByFilter({
@@ -1426,10 +1225,6 @@ test("Task 015 (verify fix): admin/posts/validation sort createdAt tăng dần (
   });
 });
 
-// Bug fix (báo cáo sau merge): FE ước lượng totalPages sai (tăng dần theo từng lần bấm next)
-// vì BE không trả tổng số bản ghi thật. Payload.totalCount phải được set (qua countDocuments)
-// cho CẢ 2 trang admin, và KHÔNG set cho nhánh khác (USER) — tránh countDocuments thừa trên
-// path nóng không cần nó.
 test("Bug fix totalCount: admin/posts set payload.totalCount đúng bằng countQuery", async () => {
   await withCapturedPostFind(async (calls) => {
     const payload: any = {
@@ -1472,11 +1267,6 @@ test("Bug fix totalCount: nhánh USER KHÔNG set payload.totalCount (không cầ
   });
 });
 
-// Phát hiện lúc merge (đúng bug pattern Issue #9, lần thứ 4): `isAdminViewer` (dùng trong
-// `getPostDetail` để quyết định có bỏ qua `filterViewablePosts` hay không) trước đây chỉ check
-// role===ADMIN. Moderator qua được gate ở `getPosts` (Issue #9) nhưng bị lọc mất bài PRE_ACCEPT/
-// non-public của người khác NGAY TẠI ĐÂY — silent, không có lỗi hiển thị, chỉ là danh sách rỗng/
-// thiếu. Test stub `User.findOne` để không cần Mongo thật.
 const withStubbedUserFindOne = async (
   role: number | undefined,
   fn: () => Promise<void>,
@@ -1511,11 +1301,6 @@ test("isAdminViewer trả false cho USER thường, cho user không tồn tại,
   assert.equal(await isAdminViewer(null), false);
 });
 
-/* --------------------------- Task 009: role-gate cho updatePostStatus (MODERATOR) ------------ */
-
-// Bước 10 (access-control-hardening): `updatePostStatus` xét quyền trên `req.user.role` (do
-// `protectRoute` gán) thay vì tra `User.findOne({_id: req.body.userId})`. Harness stub `req.user`
-// thay vì stub tầng model — mô phỏng đúng thứ production cung cấp.
 const updatePostStatusApp = (role: number) => {
   const app = express();
   app.use(express.json());
@@ -1553,8 +1338,6 @@ test("Task 009: PATCH /posts/:id/status role=MODERATOR -> 200 (trước đây 40
   }
 });
 
-// Đối chứng cho test trên: cùng harness, chỉ đổi role -> phải bị chặn. Không có nó, test
-// "MODERATOR -> 200" vẫn xanh kể cả khi `assertRole` bị gỡ hoàn toàn.
 test("Bước 10 (đối chứng): PATCH /posts/:id/status role=USER -> 403, không chạm Post.updateOne", async () => {
   const originalUpdateOne = (Post as any).updateOne;
   let updateCalled = false;
@@ -1579,10 +1362,7 @@ test("Bước 10 (đối chứng): PATCH /posts/:id/status role=USER -> 403, kh�
   }
 });
 
-// AC "Enum-validate": status ngoài {0 (PRE_ACCEPT), 1 (PUBLIC), 4 (DELETED)} phải bị 400 ở tầng
-// schema, không chạm tới DB.
 test("Task 009 (enum-validate): updatePostStatusSchema từ chối status ngoài enum {0,1,4}", () => {
-  // Bước 10: body chỉ còn `status` — `userId` đã bỏ khỏi schema.
   const ids = {};
   for (const status of Object.values(Constants.POST_STATUS) as number[]) {
     assert.doesNotThrow(() => updatePostStatusSchema.body.parse({ ...ids, status }));

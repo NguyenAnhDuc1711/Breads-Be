@@ -1,18 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 012 (`dispatchFanout`, `post.controller.ts`) — nhánh mặc định (`FEED_FANOUT_MODE`
-// KHÔNG set -> "queue", `FEED_FANOUT_ENABLED` KHÔNG set -> `true`, đúng default thật của
-// `config.ts`, không cần override env). File này KHÔNG set `process.env` trước khi import, nên
-// dùng chung process/import cache với mọi test khác đọc `FEED_CONFIG` ở default state.
-//
-// Không gọi `createPost` trực tiếp (repo chưa có harness Mongo — xem `fanout.test.ts`,
-// `fanout.dispatch.test.ts`). Thay vào đó test thẳng `dispatchFanout`, hàm được tách riêng đúng
-// mục đích test độc lập 4 nhánh FR-2/FR-8/NFR-2 mà không cần Mongo/Redis thật, cùng pattern
-// dependency-injection `processDispatchJob` đã dùng ở task 010/011.
-//
-// `post.controller.ts` import `dispatchQueue` từ `queue.ts`, mở một connection ioredis thật ngay
-// lúc import — phải `closeFanoutQueues()` ở `after()` để `node --test` thoát được, cùng lý do
-// `queue.test.ts` đã làm (xem comment ở đó).
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { dispatchFanout } from "./post.controller.ts";
@@ -70,9 +55,6 @@ test("NFR-2: dispatchQueue.add reject -> dispatchFanout không throw, lỗi bị
         },
       }),
     );
-    // `dispatchFanout` fire-and-forget: đợi 1 tick để promise nội bộ reject và bị `.catch()` xử lý
-    // trước khi assert — nếu lỗi không bị bắt, nó sẽ nổi lên như `unhandledRejection` thay vì bị
-    // log ở đây.
     await new Promise((r) => setTimeout(r, 10));
   } finally {
     (logger as any).error = originalError;

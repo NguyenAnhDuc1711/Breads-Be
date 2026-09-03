@@ -1,4 +1,3 @@
-// Run with Node's built-in test runner: `npm test` (glob `src/api/services/*.test.ts`).
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {

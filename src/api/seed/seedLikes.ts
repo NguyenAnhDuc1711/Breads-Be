@@ -1,22 +1,3 @@
-// One-off seed: give posts a realistic like distribution — most posts get a
-// handful of likes (or none), while posts authored by a seeded celebrity
-// (see seedCelebrityFollows.ts) get a much higher, follower-scaled count, so
-// ranking/engagement code has real high-vs-low engagement data to sort on.
-//
-// Strategy: single pass over the `posts` collection. For each post, pick a
-// mean like count — `--celebrityEngagementRate` × that celebrity's target
-// follower count (capped by `--celebrityAvgLikesCap`) for celebrity authors,
-// or a flat `--ordinaryAvgLikes` for everyone else — then sample an actual
-// count from an exponential distribution around that mean (so it varies post
-// to post instead of every post from the same author landing on an identical
-// number) and like it with that many random users from a sampling pool.
-//
-// This only inserts Like documents. Run these next to sync denormalized
-// fields from them:
-//   npm run migrate:backfill-like-follow-counts   (Post.likesCount)
-//   npm run migrate:backfill-engagement-score     (Post.engagementScore)
-//
-// Usage: npx tsx src/api/seed/seedLikes.ts [--ordinaryAvgLikes=3] [--celebrityEngagementRate=0.002] [--celebrityAvgLikesCap=3000] [--likerPoolCapacity=500000]
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import Like from "../models/like.model.js";
@@ -24,9 +5,6 @@ import { ObjectIdPool } from "./idPool.js";
 
 dotenv.config();
 
-// Keep in sync with CELEBRITY_TARGETS in seedCelebrityFollows.ts — used here
-// to scale a celebrity's average likes-per-post with how big they are (a
-// mega star's posts should out-perform a minor celebrity's, not tie with it).
 const CELEBRITY_FOLLOWERS = {
   "66fa65b4775c617545634c99": 2000000,
   "671ee34db863a9a7301732af": 50000,
@@ -51,9 +29,6 @@ const parseArgs = () => {
   return args;
 };
 
-// Inverse-CDF sample from an exponential distribution with the given mean.
-// Unlike follow-degree sampling, 0 is a valid (and common) outcome here —
-// most ordinary posts get no likes at all.
 const sampleCount = (mean) => {
   if (mean <= 0) return 0;
   return Math.floor(-mean * Math.log(1 - Math.random()));

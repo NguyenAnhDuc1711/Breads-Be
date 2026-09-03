@@ -1,20 +1,3 @@
-// Bulk fake-data generator for load/performance testing — offline (no
-// external API calls, unlike crawl.js), batched inserts, bounded memory.
-//
-// Usage:
-//   npx tsx src/api/seed/index.ts --users=1000000 --posts=2000000
-//   npx tsx src/api/seed/index.ts --posts=500000 --users=0        # reuse existing fake_ users
-//   npx tsx src/api/seed/index.ts --users=100000 --posts=200000 --reset
-//
-// Flags:
-//   --users=N          number of fake users to insert (required unless --users=0)
-//   --posts=N          number of fake posts to insert (required unless --posts=0)
-//   --batchSize=N      docs per insertMany call (default 2000)
-//   --authorPool=N     max number of author ids kept in memory for post
-//                       generation (default 300000)
-//   --mediaRate=0-1    fraction of new posts that get 1-3 media items
-//                       (default 0.4, pass 1 to force every post to have media)
-//   --reset            delete all previously seeded fake_ users + their posts first
 import "dotenv/config.js";
 import mongoose from "mongoose";
 import crypto from "crypto";

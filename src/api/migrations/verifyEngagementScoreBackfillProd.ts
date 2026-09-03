@@ -1,10 +1,3 @@
-// Verification script (not a one-off migration itself): counts posts that match the sitemap
-// filter shape (`status=PUBLIC, visibility=PUBLIC` — see FR-3) but are still missing the
-// `engagementScore` field on production. `backfillEngagementScore.ts` was written to backfill
-// this field, but its run against production was never confirmed — if any such post still lacks
-// the field, Mongo's `$gte` range filter silently excludes it (a missing field never matches a
-// range operator), so the sitemap/discovery endpoints would drop URLs with no visible error.
-// Safe to run repeatedly: only re-runs the backfill when the count is > 0.
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { pathToFileURL } from "url";

@@ -1,12 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 015 — schema cho `util.route.ts` (FR-8).
-//
-// Pattern (task 001, AD-7): mount schema + `validate()` THẬT trên 1 `express()` mới, không import
-// `util.route.ts` thật (route thật cần Cloudinary/Mongo cho controller). Riêng test "ordering" bên
-// dưới là ngoại lệ CỐ Ý: mount `upload.array("files")` THẬT (từ `middlewares/upload.js`) cùng với
-// `validate()` THẬT, vì đây là rủi ro hồi quy cao nhất của cả epic (ARCH-2, xem `015.md`) — chỉ có
-// integration test đi qua multer thật mới bắt được lỗi thứ tự middleware.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
@@ -44,8 +35,6 @@ const withServer = async (app, fn: (base: string) => Promise<void>) => {
     await once(server, "close");
   }
 };
-
-/* --------------------------------------------- uploadSchema (schema-only, không cần multer) */
 
 test("uploadSchema: thiếu query.userId -> 400", async () => {
   const app = express();
@@ -89,15 +78,13 @@ test("uploadSchema: thiếu body.filesName -> 400", async () => {
   );
 });
 
-/* --------------------------------------------- ordering integration (multer THẬT + validate THẬT) */
-
 const UPLOAD_TEST_DIR = `./uploads/${VALID_ID}`;
 
 test("FR-8 (ordering, ARCH-2): protectRoute -> upload.array -> validate -> handler, multipart hợp lệ -> tới được handler", async () => {
   const app = express();
   app.post(
     "/t",
-    (_req, _res, next) => next(), // protectRoute stub
+    (_req, _res, next) => next(),
     upload.array("files"),
     validate(uploadSchema),
     (req: any, res) => {
@@ -140,7 +127,7 @@ test("FR-8 (ordering): multipart thiếu filesName sau khi multer parse -> 400, 
   const app = express();
   app.post(
     "/t",
-    (_req, _res, next) => next(), // protectRoute stub
+    (_req, _res, next) => next(),
     upload.array("files"),
     validate(uploadSchema),
     (_req, res) => {
@@ -158,7 +145,6 @@ test("FR-8 (ordering): multipart thiếu filesName sau khi multer parse -> 400, 
           new Blob(["hello world"], { type: "text/plain" }),
           "hello.txt"
         );
-        // filesName cố ý bỏ trống
 
         const res = await fetch(`${base}/t?userId=${VALID_ID}`, {
           method: "POST",
@@ -174,18 +160,10 @@ test("FR-8 (ordering): multipart thiếu filesName sau khi multer parse -> 400, 
   }
 });
 
-// Test cho `sendForgotPWMailSchema` ĐÃ XOÁ cùng schema/endpoint của nó (epic
-// access-control-hardening, bước 2). Ràng buộc tương đương giờ nằm ở
-// `requestPasswordResetSchema`/`confirmPasswordResetSchema` (`user.validator.ts`), test trong
-// `user.route.test.ts`.
-
-/* ------------------------------------------------- wiring (đọc source, không import) */
-
 test("wiring: util.route.ts có đúng 1 validate(), upload.array đứng ngay trước validate(uploadSchema)", async () => {
   const src = await fsp.readFile("src/api/routers/util.route.ts", "utf8");
 
   const validateCount = (src.match(/validate\(/g) || []).length;
-  // 1 chứ không phải 2: route `send-forgot-pw-mail` (validate thứ hai) đã bị xoá ở bước 2.
   assert.equal(validateCount, 1, "phải có đúng 1 lời gọi validate() trong util.route.ts");
 
   const uploadIdx = src.indexOf('upload.array("files")');

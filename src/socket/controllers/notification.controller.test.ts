@@ -5,10 +5,6 @@ import User from "../../api/models/user.model.js";
 import logger from "../../core/logger.js";
 import NotificationController from "./notification.controller.js";
 
-// Kỹ thuật này CHỈ ăn với property của một object đã import (Notification.find,
-// logger.warn, ...). Gán đè một named function export từ file test KHÔNG có tác dụng
-// dưới `npx tsx --test` — module gọi vẫn resolve về binding gốc, counter đứng yên và
-// assertion "0 lần gọi" xanh một cách rỗng. Chỉ stub property, không stub named export.
 const withStubbedModel = async (
   stubs: Array<[any, string, any]>,
   fn: () => Promise<void> | void
@@ -34,8 +30,6 @@ const fakeSocket = (userId?: string) => ({
   id: "sk-1",
   user: userId ? { userId } : undefined,
 });
-// `sockets` phục vụ `getUserSocketsByUserIds` — hàm THẬT được gọi với io giả
-// (named export, không stub được; xem TEST-3).
 const fakeIo = (sockets: any[] = []) => {
   const emits: any[] = [];
   return {
@@ -122,8 +116,6 @@ test("FR-2: fromUser khớp danh tính -> luồng cũ chạy (Notification.find 
 
   await withStubbedModel(
     [
-      // Dừng ngay sau khi ghi nhận lượt gọi find, tránh chạm các bước sau (save/aggregate/Mongo
-      // thật) có thể treo test. try/catch containment ở controller nuốt lỗi này.
       [Notification, "find", async () => { findCalls++; throw new Error("stop-after-find"); }],
       [logger, "error", () => {}],
     ],
@@ -171,8 +163,6 @@ test("FAIL-1: Notification.find throw -> create không reject, logger.error 1 l�
   );
 });
 
-// --- Issue #011: FR-4 dedupe theo target + FR-5 multi-recipient push + FR-3 isRead ---
-
 const U_FROM = "6512f0a1b2c3d4e5f6a7b8c1";
 const U_TO_1 = "6512f0a1b2c3d4e5f6a7b8c2";
 const U_TO_2 = "6512f0a1b2c3d4e5f6a7b8c3";
@@ -180,8 +170,6 @@ const POST_1 = "6512f0a1b2c3d4e5f6a7b8d1";
 const POST_2 = "6512f0a1b2c3d4e5f6a7b8d2";
 const EXISTING_ID = "6512f0a1b2c3d4e5f6a7b8e1";
 
-// Assert trên chính object truyền VÀO model (filter / pipeline), không trên giá trị
-// stub trả về — MongoDB không bao giờ chạy pipeline ở đây nên assert đó là tautology.
 const spy = (findResults: any[][] = []) => {
   const st = {
     findFilters: [] as any[],
@@ -260,7 +248,6 @@ test("FR-4: REPLY khác target -> filter find có target khác nhau, deleteMany 
 
     assert.deepEqual(st.errors, []);
     assert.equal(st.findFilters.length, 2);
-    // Bug A12: filter cũ không có `target` -> lần 2 match lần 1 và xoá mất nó.
     assert.equal(String(st.findFilters[0].target), POST_1);
     assert.equal(String(st.findFilters[1].target), POST_2);
     assert.notEqual(
@@ -285,7 +272,6 @@ test("FR-4: FOLLOW không target -> filter có target: {$exists:false}, deleteMa
 
     assert.deepEqual(st.errors, []);
     const filter = st.findFilters[0];
-    // R-1: `target: undefined` bị Mongoose strip -> điều kiện biến mất, bug tái tạo.
     assert.equal(Object.hasOwn(filter, "target"), true);
     assert.notEqual(filter.target, undefined);
     assert.deepEqual(filter.target, { $exists: false });
@@ -325,7 +311,6 @@ test("FR-5: sendTo 2 user online -> io.to().emit đúng 2 lần với 2 id khác
 
   await withStubbedModel(stubs, async () => {
     const socket = fakeSocket(U_FROM);
-    // getUserSocketsByUserIds THẬT chạy trên io giả này.
     const io = fakeIo([
       { data: { id: "sock-to-1", userId: U_TO_1 } },
       { data: { id: "sock-from", userId: U_FROM } },
@@ -347,7 +332,6 @@ test("FR-5: sendTo 2 user online -> io.to().emit đúng 2 lần với 2 id khác
     assert.equal(io.emits.length, 2);
     const ids = io.emits.map((e: any) => e.id).sort();
     assert.deepEqual(ids, ["sock-to-1", "sock-to-2"]);
-    // Không gửi ngược về chính người tạo (dùng sendTo, không phải toUsers thô).
     assert.equal(ids.includes("sock-from"), false);
   });
 });
@@ -371,8 +355,6 @@ test("FR-5: User.updateMany 1 lần với filter _id.$in = sendTo (không update
     assert.equal(st.updateOneCalls, 0);
     assert.equal(st.updateManyArgs.length, 1);
     const [filter, update] = st.updateManyArgs[0];
-    // ObjectId() của repo sinh id NGẪU NHIÊN khi input invalid (mảng) -> phải assert
-    // giá trị id, không chỉ "có key".
     assert.deepEqual(filter._id.$in.map(String).sort(), [U_TO_1, U_TO_2].sort());
     assert.equal(filter._id.$in.map(String).includes(U_FROM), false);
     assert.deepEqual(update, { hasNewNotify: true });
@@ -398,7 +380,6 @@ test("FR-3: $project của socket create chứa $ifNull cho isRead", async () =>
     assert.equal(st.pipelines.length, 1);
     const project = projectOf(st.pipelines[0]);
     assert.ok(project, "pipeline phải có stage $project");
-    // ARCH-1: `isRead: 1` bỏ hẳn key trên document legacy chưa có field.
     assert.deepEqual(project.isRead, { $ifNull: ["$isRead", false] });
     assert.notEqual(project.isRead, 1);
   });

@@ -1,16 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: `processDispatchJob` (task 010) — chunk math, cổng celebrity/ONLY_ME, dedup `jobId`,
-// idempotency socket. Tách khỏi `fanout.test.ts` có chủ đích: file đó là regression gate của
-// `fanoutPostToFollowers` gốc (Iron Regression Rule) và phải giữ nguyên trạng.
-//
-// Hai điều kiện môi trường bắt buộc, và lý do:
-// 1. `FEED_SOCKET_ENABLED=true` phải set TRƯỚC khi `config.ts` được nạp — `FEED_CONFIG` đọc
-//    `process.env` đúng một lần lúc import rồi `Object.freeze`. `import` tĩnh bị hoist lên trước
-//    mọi câu lệnh nên không đặt env kịp; dùng `await import()` động. `node --test` chạy mỗi file
-//    test trong một process riêng nên env này không rò sang các file khác.
-// 2. Mọi I/O (Mongo/Redis/BullMQ) tiêm qua tham số `deps` — repo không có harness Mongo/Redis, và
-//    một `import` tĩnh `queue.ts` sẽ mở socket ioredis trong process test.
 process.env.FEED_SOCKET_ENABLED = "true";
 
 import assert from "node:assert/strict";
@@ -18,10 +5,6 @@ import { test } from "node:test";
 import { Constants } from "../../../Breads-Shared/Constants/index.js";
 import PostConstants from "../../../Breads-Shared/Constants/PostConstants.js";
 
-// `import` tĩnh bị hoist lên TRƯỚC dòng `process.env...` phía trên, nên mọi module thuộc chuỗi
-// nạp `config.ts` (`zset.ts`, `fanout.ts`) bắt buộc phải nạp động — không phải style choice.
-// Nạp bên trong hàm (không top-level `await`) để `tsc --noEmit` không sinh TS1378 với `module`
-// setting hiện tại của repo.
 let mods: {
   FEED_CONFIG: any;
   BATCH_SIZE: number;
@@ -57,7 +40,6 @@ const makePost = (over: Record<string, any> = {}) => ({
   ...over,
 });
 
-/** Ghi lại mọi lần `addBulk` được gọi (mock BullMQ ở mức hợp đồng `Queue.addBulk`). */
 const recorder = () => {
   const calls: any[][] = [];
   return {
@@ -72,7 +54,6 @@ const recorder = () => {
 const ids = (n: number, prefix = "u") =>
   Array.from({ length: n }, (_, i) => `${prefix}${i}`);
 
-/** Redis giả chỉ đủ cho cặp `EXISTS`/`SET ... EX` mà FR-5 dùng. */
 const fakeRedis = () => {
   const store = new Map<string, { value: string; ttl: number }>();
   return {
@@ -130,7 +111,6 @@ test("FR-3/scenario 2: 4500 follower -> đúng 3 batch job 2000/2000/500, jobId 
     [`${POST_ID}:batch:0`, `${POST_ID}:batch:1`, `${POST_ID}:batch:2`],
   );
   assert.equal(new Set(jobs.map((j: any) => j.opts.jobId)).size, 3);
-  // Không mất/không trùng follower nào khi ghép 3 chunk lại.
   assert.deepEqual(jobs.flatMap((j: any) => j.data.followerIds), ids(4500));
 });
 
@@ -219,9 +199,6 @@ test("reply (type ngoài CREATE/EDIT/REPOST) -> 0 batch job; post đã bị xoá
 });
 
 test("FR-3/scenario 5: dispatch job retry -> addBulk lặp cùng jobId, không sinh job trùng", async () => {
-  // Mô phỏng đúng hợp đồng dedup của BullMQ: job được lưu theo `jobId`, `addBulk` lại cùng id là
-  // no-op. Lần chạy 1 lỗi SAU khi addBulk (mock Redis throw ở bước cờ socket) -> BullMQ retry ->
-  // lần chạy 2 chạy lại từ đầu.
   const store = new Map<string, any>();
   const enqueueBatches = async (jobs: any[]) => {
     for (const j of jobs) if (!store.has(j.opts.jobId)) store.set(j.opts.jobId, j);
@@ -243,9 +220,6 @@ test("FR-3/scenario 5: dispatch job retry -> addBulk lặp cùng jobId, không s
   assert.equal(store.size, 3, "retry KHÔNG được nhân đôi batch job");
 });
 
-// --- FR-5: idempotency socket-emit ---
-
-/** `io` giả: 2 follower online (u0, u1), ghi lại từng lần emit. */
 const fakeIo = () => {
   const emits: { socketId: string; event: string; payload: any }[] = [];
   return {
@@ -275,12 +249,10 @@ test("FR-5/scenario 1+2: emit đúng 1 lần dù dispatch job chạy lại; cờ
   assert.equal(emits.length, 2, "2 follower online -> 2 emit ở lần chạy đầu");
   assert.deepEqual(emits[0].payload, { postId: POST_ID, authorId: AUTHOR_ID });
 
-  // FR-5/scenario 2: cờ tồn tại với đúng TTL 3600s (mode "EX" đã được assert trong fakeRedis).
   const flag = redis.store.get(socketSentKey(POST_ID));
   assert.ok(flag, "cờ feed:fanout:socket-sent:{postId} phải được set sau khi emit");
   assert.equal(flag.ttl, 3600);
 
-  // FR-5/scenario 1: chạy lại (BullMQ retry) -> không emit thêm lần nào.
   await silence(() =>
     run(makePost(), ids(3), { enqueueBatches: rec.enqueueBatches, redis }, io),
   );
@@ -298,7 +270,6 @@ test("AD-4: getAllSockets quét registry đúng 1 lần cho cả lượt dispatc
     },
     to: () => ({ emit: () => {} }),
   };
-  // 4500 follower = 3 batch job; nếu socket bị tách theo batch thì scans sẽ là 3.
   await silence(() =>
     run(makePost(), ids(4500), { enqueueBatches: rec.enqueueBatches, redis }, io),
   );

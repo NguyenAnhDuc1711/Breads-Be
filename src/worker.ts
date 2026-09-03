@@ -13,13 +13,6 @@ import logger from "./core/logger.ts";
 instanceMongoDB.connect();
 initRedis();
 
-// [fanout-queue A3] Process riêng cho BullMQ Worker (dispatch/batch), tách khỏi HTTP server
-// (src/server.ts) để scale độc lập theo queue depth thay vì cạnh tranh CPU/event-loop với việc
-// phục vụ HTTP. Không có Socket.IO ở đây nên truyền `io = undefined`: nhánh push real-time
-// (`FEED_CONFIG.socketEnabled`, xem fanout.ts) tự bỏ qua khi thiếu `io` — chỉ mất tính năng push
-// real-time "bài viết mới" (mặc định tắt, off theo `FEED_SOCKET_ENABLED`), fan-out ghi ZSET vẫn
-// chạy bình thường. Muốn giữ push real-time khi tách process cần Redis adapter cho Socket.IO (A1)
-// làm cầu nối giữa 2 process.
 try {
   initFanoutWorkers(undefined);
   logger.info("[fanout-queue] worker process started");
@@ -28,10 +21,6 @@ try {
   process.exit(1);
 }
 
-// [follow-suggestion-queue task 010] try/catch RIÊNG, KHÔNG gộp với khối phía trên (AD-2 epic.md,
-// task 010 AC "isolation"): feed-fanout là chức năng chính (mất nó -> process.exit), suggestion
-// worker là phụ trợ — lỗi khởi tạo (vd Redis down) chỉ log, không được kéo theo crash cả process
-// lẫn feed-fanout worker đã khởi tạo thành công ở trên.
 try {
   initFollowSuggestionWorker();
   logger.info("[follow-suggestion-queue] worker process started");
@@ -39,12 +28,6 @@ try {
   logger.error({ err }, "[follow-suggestion-queue] initFollowSuggestionWorker failed — suggestion worker disabled, process continues");
 }
 
-// [follow-suggestion-cron task 012] Cùng subsystem/cùng mức độ "phụ trợ" như worker phía trên —
-// đặt trong try/catch RIÊNG (không gộp) để lỗi lịch cron không kéo theo lỗi worker và ngược lại.
-// initFollowSuggestionCron() không có trong "files:" của task 012.md (chỉ scope cron.ts) nên chưa
-// từng được wire vào bootstrap nào — bổ sung ở đây, chỗ tự nhiên duy nhất (giống initFanoutWorkers/
-// initFollowSuggestionWorker phía trên), để cron thực sự chạy thay vì chỉ tồn tại dưới dạng hàm
-// export chưa ai gọi.
 let followSuggestionCronTask: ReturnType<typeof initFollowSuggestionCron> | undefined;
 try {
   followSuggestionCronTask = initFollowSuggestionCron();

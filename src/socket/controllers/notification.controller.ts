@@ -24,9 +24,6 @@ export default class NotificationController {
         fromUser: ObjectId(fromUser),
         toUsers: { $in: toUsers?.map((userId) => ObjectId(userId)) },
         action: action,
-        // Nhánh falsy phải tường minh `$exists: false`. Gán key target bằng giá trị
-        // undefined thì Mongoose strip key đó đi, điều kiện biến mất và bug A12 tái
-        // tạo nguyên vẹn trong khi test FOLLOW vẫn pass.
         ...(target
           ? { target: ObjectId(target) }
           : { target: { $exists: false } }),
@@ -55,8 +52,6 @@ export default class NotificationController {
         newNotification = await notificationInfo.save();
       } catch (err) {
         if ((err as any)?.code === 11000) {
-          // Request khác đã tạo notification giống hệt (fromUser, action, target, toUsers) trong
-          // cùng khoảnh khắc — request đó đã emit rồi, request này rút lui, không phải lỗi thật.
           logger.warn(
             { fromUser, toUsers: sendTo, action, target },
             "notifications/create duplicate skipped (race)"
@@ -119,15 +114,10 @@ export default class NotificationController {
             createdAt: 1,
             FromUserDetails: 1,
             "postDetails.content": 1,
-            // Phải là $ifNull, không phải projection inclusion: aggregate bỏ qua
-            // schema/default của Mongoose nên key biến mất hoàn toàn trên document
-            // legacy chưa có field này.
             isRead: { $ifNull: ["$isRead", false] },
           },
         },
       ]);
-      // `sendTo` (đã lọc `fromUser`), không phải `toUsers` thô — và mọi socket của
-      // mọi recipient, không phải một socket duy nhất.
       const socketIds = await getUserSocketsByUserIds(sendTo, io);
       for (const id of socketIds) {
         io.to(id).emit(

@@ -6,19 +6,12 @@ import Notification from "../models/notification.model.js";
 import User from "../models/user.model.js";
 
 export const getNotifications = async (req, res) => {
-  // A-4: `protectRoute` gán thẳng kết quả `User.findById` vào `req.user` mà KHÔNG return sớm khi
-  // `null` (token hợp lệ của user đã bị xoá). Guard phải đứng trước mọi `ObjectId(...)` vì
-  // `ObjectId(undefined)` sinh id NGẪU NHIÊN thay vì throw -> response rỗng im lặng thay vì 401.
   if (!req.user) {
     throw new AuthFailureError("Unauthorized");
   }
-  // Task 013 (D-1): route đổi POST -> GET, page/limit/action đọc từ query (đã coerce số ở
-  // getNotificationsSchema), không còn từ body.
   const { page, limit, action } = req.query;
   const skip = (page - 1) * limit;
   const notifications = await Notification.aggregate([
-    // FR-6: `"all"` là sentinel tab "Tất cả" = KHÔNG lọc (không document nào có `action: "all"`).
-    // `$match` giữ nguyên vị trí trước `$sort`/`$skip`/`$limit` để phân trang tính trên tập đã lọc.
     {
       $match: {
         toUsers: ObjectId(req.user._id),
@@ -74,9 +67,6 @@ export const getNotifications = async (req, res) => {
         toUsers: 1,
         action: 1,
         target: 1,
-        // ARCH-1: aggregate đọc thẳng từ MongoDB, BỎ QUA schema/default của Mongoose. Projection
-        // dạng inclusion (`<field>` -> 1) trên document legacy (thiếu key trên đĩa) sẽ bỏ hẳn key
-        // khỏi output -> SC-12 fail trên đúng tập document lớn nhất.
         isRead: { $ifNull: ["$isRead", false] },
         createdAt: 1,
         FromUserDetails: 1,
@@ -91,22 +81,11 @@ export const getNotifications = async (req, res) => {
   }).send(res);
 };
 
-// FR-3 (task 010): PATCH /notifications/read — mark-read (1 document hoặc tất cả) rồi recompute
-// `User.hasNewNotify` bằng 1 truy vấn `Notification.exists` trong chính request (AD-5 — không
-// counter field, không Mongoose hook, không migration).
-//
-// ARCH-1: ~370k document Notification legacy KHÔNG có key `isRead` trên đĩa. `default: false` của
-// Mongoose chỉ áp lúc TẠO document mới, không áp lúc query. Điều kiện "chưa đọc" PHẢI là
-// `isRead: { $ne: true }` — TUYỆT ĐỐI KHÔNG so sánh isRead với giá trị false trực tiếp — ở cả
-// `updateMany` lẫn `exists`.
 export const readNotifications = async (req, res) => {
-  // A-4: guard trước mọi ObjectId(...) — ObjectId(undefined) sinh id NGẪU NHIÊN thay vì throw.
   if (!req.user) {
     throw new AuthFailureError("Unauthorized");
   }
   const uid = ObjectId(req.user._id);
-  // Schema (XOR) đã đảm bảo đúng 1 trong 2 key tồn tại — chỉ cần đọc `notificationId`; nhánh
-  // `else` tự động là `markAll` (`noUnusedLocals` cấm destructure `markAll` rồi bỏ không dùng).
   const { notificationId } = req.body;
 
   if (notificationId) {
@@ -119,14 +98,14 @@ export const readNotifications = async (req, res) => {
     }
   } else {
     await Notification.updateMany(
-      { toUsers: { $in: [uid] }, isRead: { $ne: true } }, // ⚠️ $ne: true — ARCH-1
+      { toUsers: { $in: [uid] }, isRead: { $ne: true } },
       { isRead: true }
     );
   }
 
   const stillUnread = await Notification.exists({
     toUsers: { $in: [uid] },
-    isRead: { $ne: true }, // ⚠️ $ne: true — ARCH-1
+    isRead: { $ne: true },
   });
   await User.updateOne({ _id: uid }, { hasNewNotify: !!stillUnread });
 

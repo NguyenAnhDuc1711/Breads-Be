@@ -23,10 +23,9 @@ export const destructObjectId = (objectId: any) => {
 
 export const formatDate = (date: Date) => {
   let day: string | number = date.getDate();
-  let month: string | number = date.getMonth() + 1; // Months are zero-indexed
+  let month: string | number = date.getMonth() + 1;
   let year: string | number = date.getFullYear();
 
-  // Ensure day and month are always two digits
   day = day < 10 ? "0" + day : day;
   month = month < 10 ? "0" + month : month;
 
@@ -97,19 +96,5 @@ export const getCountKeyAnalyticValue = ({
   return result;
 };
 
-/**
- * Escape mọi ký tự đặc biệt của regex trong chuỗi do NGƯỜI DÙNG nhập, trước khi đưa vào `$regex`.
- *
- * Vì sao bắt buộc (finding A5, `docs/architecture-review.md`, mở từ 2026-08-10):
- *
- *   1. **ReDoS** — input đi thẳng vào `$regex` nghĩa là người dùng viết được CHƯƠNG TRÌNH regex,
- *      không chỉ từ khoá tìm kiếm. Một chuỗi như `(a+)+$` gây catastrophic backtracking: máy chủ
- *      quay cuồng CPU trên MỘT request.
- *   2. **Sai kết quả im lặng** — `.` `*` `?` `[` `(` trong câu tìm kiếm bình thường của người dùng
- *      hiện đang được diễn giải là cú pháp regex, nên "a.b" khớp cả "axb".
- *
- * `[.*+?^${}()|[\]\\]` là tập ký tự đặc biệt đầy đủ của JS RegExp; `\\$&` chèn `\` trước ký tự
- * khớp được.
- */
 export const escapeRegex = (input: unknown): string =>
   String(input ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

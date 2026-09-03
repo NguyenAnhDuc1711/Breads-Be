@@ -1,11 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: các hàm này gọi `getRedisInstance()` — trong môi trường test không có `initRedis()`
-// (chỉ chạy ở server.ts) nên instance luôn `null`. Test ở đây xác nhận đúng hợp đồng "Redis chưa
-// init -> no-op, không throw" (cùng hợp đồng với mọi helper khác trong file — xem `client()`), và
-// guard "input rỗng -> return trước khi chạm Redis". Không có harness Redis thật trong repo nên
-// không verify được nội dung ZADD/ZREM ghi thực tế — xem `fanout.test.ts` cho lý do tương tự với
-// Mongo.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { zAddPostsForUser, zRemovePostsForUser } from "./zset.ts";

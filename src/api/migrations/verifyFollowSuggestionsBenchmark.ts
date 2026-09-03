@@ -1,32 +1,3 @@
-// Benchmark/evaluation script (task 021, epic follow-suggestions). Pattern mirrors
-// `verifyEngagementScoreBackfillProd.ts` (verify-after-the-fact script, safe to re-run any number of
-// times, exports a pure function + a thin CLI `main()`).
-//
-// Measures the 2 success criteria from the PRD that can only be confirmed by real numbers, not
-// description (project convention: "ưu tiên đo lường định lượng"):
-//   - SC-2 / NFR-1: P50/P95/P99 latency of the SAME entry point end users hit
-//     (`getUserToFollows`, task 011) — includes the exclude-already-followed step, per 011's
-//     handoff (WARN-5 from plan-review: NFR-1's <200ms P99 target covers that step too, not just
-//     the raw cache read).
-//   - SC-1: precision@10 — fraction of sampled users whose top-10 `FollowSuggestion.candidates`
-//     contain at least 1 candidate with `mutualFriendCount > 0`, used as an automatable proxy for
-//     "relevant" (manually judging every candidate isn't feasible here).
-//
-// Kill-switch (NFR-3): `FOLLOW_SUGGESTION_CONFIG.enabled` is read once at import time and frozen
-// (`services/followSuggestion/config.ts`), so this script never toggles it programmatically — it
-// just records whichever state the process was started with. To compare "before" (fallback path)
-// vs "after" (cache path), run the script twice as 2 separate processes:
-//   FOLLOW_SUGGESTION_ENABLED=false npx tsx src/api/migrations/verifyFollowSuggestionsBenchmark.ts
-//   npx tsx src/api/migrations/verifyFollowSuggestionsBenchmark.ts
-// and diff the 2 JSON files written to `benchmark-results/`. Any `FOLLOW_SUGGESTION_*` env var
-// (e.g. `FOLLOW_SUGGESTION_MUTUAL_FRIEND_WEIGHT`) can be changed the same way, no code edit needed.
-//
-// precision@10 is measured by reading `FollowSuggestion.candidates` directly (not through the HTTP
-// response shape, which only hydrates avatar/username/name/bio/status — task 011's
-// `buildFollowSuggestionCacheResponse` intentionally drops `mutualFriendCount` before sending it to
-// clients). This measures the underlying candidate quality regardless of which serving path is
-// active; a user with no cached `FollowSuggestion` doc yet (cron/backfill — tasks 010/012/020 — has
-// not run for them) is excluded from the precision denominator rather than counted as a miss.
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { pathToFileURL } from "url";
@@ -76,8 +47,6 @@ const round = (n: number, decimals = 2) => {
   return Math.round(n * factor) / factor;
 };
 
-// Nearest-rank percentile over an ascending-sorted array (standard, dependency-free — no need for
-// interpolation precision at this sample size).
 const percentile = (sortedAsc: number[], p: number): number => {
   if (sortedAsc.length === 0) return 0;
   const rank = Math.min(sortedAsc.length, Math.max(1, Math.ceil((p / 100) * sortedAsc.length)));
@@ -92,10 +61,6 @@ const pickSampleUserIds = async (n: number): Promise<string[]> => {
   return sampled.map((u: any) => String(u._id));
 };
 
-// Calls the SAME controller function the real `GET /users/suggestions/to-follow` route dispatches
-// to (see user.route.ts) — service-layer call, not an HTTP round-trip, per epic.md's Technical
-// Details ("gọi thẳng service layer để tránh nhiễu network"). `req`/`res` are minimal stubs
-// matching the shape `user.controller.test.ts` already uses for this same function.
 const measureLatencyForUser = async (userId: string, topN: number): Promise<number> => {
   const req = { query: { userId, page: "1", limit: String(topN) } } as any;
   const res = {
@@ -112,8 +77,6 @@ const measureLatencyForUser = async (userId: string, topN: number): Promise<numb
   return performance.now() - start;
 };
 
-// Returns null when the user has no cached suggestions yet (excluded from the precision
-// denominator), otherwise whether >=1 of their top-N candidates has mutualFriendCount > 0.
 const measurePrecisionForUser = async (userId: string, topN: number): Promise<boolean | null> => {
   const doc = await FollowSuggestion.findOne({ userId: ObjectId(userId) }).lean();
   if (!doc || !doc.candidates || doc.candidates.length === 0) return null;

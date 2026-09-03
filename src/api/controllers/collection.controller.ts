@@ -55,8 +55,6 @@ export const removePostFromCollection = async (req, res) => {
     userId: ObjectId(userId),
     postId: ObjectId(postId),
   });
-  // Task 013 (D-1 / plan-review edge case): postId không tồn tại trong collection -> 404, nhất
-  // quán với hành vi DELETE resource không tồn tại ở /posts/:id.
   if (deleteResult.deletedCount === 0) {
     throw new NotFoundError("Post not found in collection");
   }

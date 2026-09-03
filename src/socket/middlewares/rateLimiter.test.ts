@@ -33,7 +33,6 @@ test("SocketRateLimiter: blocks requests exceeding limit and returns retryAfterM
   assert.equal(typeof blocked.retryAfterMs, "number");
   assert.ok(blocked.retryAfterMs! > 0);
 
-  // Different user is not blocked
   const resOther = limiter.check("user2");
   assert.equal(resOther.allowed, true);
 

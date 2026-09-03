@@ -1,11 +1,3 @@
-// One-off migration: copy the legacy Collection.postsId embedded array into
-// the new SavedPost collection (one record per save, with a real
-// timestamp), then drop the old `collections` collection.
-//
-// The old array had no per-item timestamp — only insertion order (always
-// appended via $push). We reconstruct a monotonically increasing
-// createdAt per item from that order, anchored to the parent document's
-// updatedAt, so "most recently saved" still sorts correctly after migration.
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import SavedPost from "../models/savedPost.model.js";
