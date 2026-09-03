@@ -1,13 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: fix CRITICAL của plan-review (AD-3, task 011) — `zAddPostForUsersOrThrow` phải throw
-// khi pipeline Redis lỗi (để BullMQ retry hoạt động thật cho batch job, FR-6), trong khi
-// `zAddPostForUsers` gốc PHẢI giữ nguyên hành vi "không bao giờ throw" (R-5 — không được vô tình
-// đổi hành vi caller cũ). Tách khỏi `zset.test.ts` có chủ đích: file đó dựa vào giả định "Redis
-// chưa init -> `getRedisInstance()` trả null" (xem header của nó); file này cần một kết nối Redis
-// THẬT để mô phỏng lỗi pipeline (mock `r.pipeline`) và để so sánh kết quả ghi ZSET thật giữa 2
-// hàm — gộp chung sẽ phá vỡ giả định null-instance mà các test hiện có của `zset.test.ts` dựa
-// vào. Đòi hỏi Redis chạy thật ở localhost:6379, cùng điều kiện `queue.test.ts` đã đòi hỏi.
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import initRedis, { getRedisInstance } from "../../../dbs/redis.ts";
@@ -24,17 +14,9 @@ before(async () => {
 });
 
 after(async () => {
-  // Đóng connection mà `initRedis()` ở trên mở ra để `node --test` thoát được (không có
-  // `closeRedis()` export sẵn trong `dbs/redis.ts`, `quit()` trực tiếp qua `getRedisInstance()`).
   await getRedisInstance()?.quit();
 });
 
-/**
- * Pipeline giả: mọi command được ghi lại (đúng thứ tự `zadd -> zremrangebyrank -> expire` như
- * pipeline thật) nhưng lệnh ĐẦU TIÊN trả lỗi — đúng shape `[Error, null]` mà ioredis
- * `pipeline.exec()` trả cho một command lỗi bên trong một pipeline đã gửi thành công (xem comment
- * gốc ở `zset.ts::logPipelineErrors` giải thích shape này). Không chạm mạng thật.
- */
 const makeFailingPipeline = () => {
   const ops: string[] = [];
   const self: any = {

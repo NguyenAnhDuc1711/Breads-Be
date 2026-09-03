@@ -1,11 +1,3 @@
-// One-off migration: `Post.replies` used to be an embedded array of reply ObjectIds on the
-// PARENT document (post.model.ts) — every new reply rewrote that array in place, risking document
-// move / the 16MB doc cap on a viral post. The replacement stores the edge on the CHILD instead
-// (`parentPost`, the same field REPOST already used) plus a `repliesCount` counter on the parent.
-//
-// This script backfills both from the legacy array — the ONLY place that edge exists today — then
-// drops the array. Safe to run multiple times: once a post's `replies` field is unset, it's no
-// longer selected by the `$exists` filter below, so a second run is a no-op.
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 

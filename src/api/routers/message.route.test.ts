@@ -1,12 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 013 — 7 schema của router `message`. Task 012 thêm: redesign RESTful (D-1),
-// bảng 8 endpoint method+path mới, và regression id-source cho 3 route media/files/links
-// (POST body -> GET :conversationId path).
-//
-// Pattern (task 001, AD-7): mount `validate(schema)` trần trên 1 `express()` mới, không import
-// `app.ts`/`message.route.ts` thật (route thật còn `protectRoute` cần Mongo/JWT) — không cần
-// Mongo/Redis, vẫn kiểm đúng mã lỗi HTTP THẬT trả về client.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
@@ -54,8 +45,6 @@ const withServer = async (app, fn: (base: string) => Promise<void>) => {
   }
 };
 
-/* --------------------------------------------- getConversationByUsersIdSchema (body) */
-
 test("getConversationByUsersIdSchema: body hợp lệ -> 200", async () => {
   const app = express();
   app.use(express.json());
@@ -72,8 +61,6 @@ test("getConversationByUsersIdSchema: body hợp lệ -> 200", async () => {
     const res = await fetch(`${base}/t`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      // Bước 9: `userId` gửi kèm vẫn đi lọt tầng validate nhưng bị STRIP — participant thứ nhất
-      // luôn là `req.user._id` ở controller, không phải giá trị client khai.
       body: JSON.stringify({ userId: VALID_ID_1, anotherId: VALID_ID_2 }),
     });
     assert.equal(res.status, 200);
@@ -104,8 +91,6 @@ test("FR-6: getConversationByUsersIdSchema: thiếu anotherId -> 400", async () 
   );
 });
 
-/* ------------------------------------------- getConversationByIdQuerySchema (query) */
-
 test("FR-6 (query-based route): getConversationByIdQuerySchema: conversationId không phải ObjectId -> 400", async () => {
   const app = express();
   app.get("/t", validate(getConversationByIdQuerySchema), (_req, res) => {
@@ -135,8 +120,6 @@ test("getConversationByIdQuerySchema: userId vắng mặt vẫn pass (optional)"
     assert.deepEqual(await res.json(), { query: { conversationId: VALID_ID_1 } });
   });
 });
-
-/* --------------------------------------------------------------- searchMsgSchema (body) */
 
 test("FR-6 (search minimum): searchMsgSchema: value rỗng -> 400", async () => {
   const app = express();
@@ -190,8 +173,6 @@ test("searchMsgSchema: page/limit không phải số nguyên -> 400", async () =
   );
 });
 
-// AC FR-3 scenario 2 (task 010): searchMsgSchema.value là field free-text API-side duy nhất trong
-// file này, tương đương `searchValue` bên socket đã có `sanitizeText` từ lâu.
 test("FR-3: searchMsgSchema.value chứa <script> bị strip sau transform", async () => {
   const app = express();
   app.use(express.json());
@@ -219,7 +200,6 @@ test("FR-3: searchMsgSchema.value chứa <script> bị strip sau transform", asy
   });
 });
 
-// AC FR-5 (non-regression): tiếng Việt có dấu / emoji không bị strip nhầm.
 test("FR-5: searchMsgSchema.value tiếng Việt có dấu và emoji giữ nguyên", () => {
   const raw = "Xin chào các bạn 🎉";
   const parsed = searchMsgSchema.body.parse({
@@ -230,8 +210,6 @@ test("FR-5: searchMsgSchema.value tiếng Việt có dấu và emoji giữ nguy�
   });
   assert.equal(parsed.value, raw);
 });
-
-/* ------------------------------------------------ handleFakeConversationsSchema (body) */
 
 test("handleFakeConversationsSchema: numberConversations vắng mặt vẫn pass (optional, controller tự default)", async () => {
   const app = express();
@@ -272,13 +250,6 @@ test("handleFakeConversationsSchema: numberConversations âm -> 400", async () =
     })
   );
 });
-
-/* ------------------------------- getConversationMediaSchema (params, task 012) -------------
-   Task 012: 3 route media/files/links đổi POST(body) -> GET(:conversationId trong path). Đây
-   chính là bug được task này tồn tại để ngăn: nếu schema/controller vẫn đọc từ req.body, GET
-   request (không mang body) sẽ luôn 400/"Empty conversationId". Test dưới đây mount `validate()`
-   trên 1 route THẬT có `:conversationId` ở path (không phải body) để xác nhận id được resolve
-   đúng từ req.params. */
 
 test("FR-4 (task 012): getConversationMediaSchema: conversationId hợp lệ trong URL path -> 200, resolve từ req.params", async () => {
   const app = express();
@@ -394,8 +365,6 @@ test("FR-4 (task 012): getConversationLinksSchema: conversationId không phải 
   );
 });
 
-/* --------------------------------------------------------------------- wiring/structure */
-
 test("message.route.ts: validate() wired vào đúng 7/8 route (FAKE_CONVERSATIONS_MSGS không có schema)", async () => {
   const src = await fs.readFile("src/api/routers/message.route.ts", "utf8");
   const validateCalls = src.match(/validate\(/g) || [];
@@ -408,16 +377,12 @@ test("message.route.ts: validate() wired vào đúng 7/8 route (FAKE_CONVERSATIO
   );
 });
 
-/* --------------------------------------- Task 012: bảng 8 endpoint method + path RESTful mới */
-
 const parseRouteLines = (src: string) =>
   src
     .split("\n")
     .join(" ")
     .match(/router\.(get|post|put|patch|delete)\([\s\S]*?\);/g) ?? [];
 
-/** `(method, path)` của từng route, path resolve từ constant destructure `MESSAGE_PATH.XXX`
- * (cùng quy ước `post.route.test.ts` dùng cho `POST_PATH`). */
 const parseRoutePairs = (src: string) =>
   parseRouteLines(src).map((line) => {
     const m = line.match(/^router\.(\w+)\(\s*("([^"]*)"|[A-Z_]+)/);
@@ -437,23 +402,17 @@ test("FR-4 (task 012): 8 endpoint messages đúng method + path RESTful mới, �
   const pairs = parseRoutePairs(src);
 
   assert.deepEqual(pairs, [
-    ["post", "/conversations/lookup-by-users"], // GET_CONVERSATION_BY_USERS_ID: action, giữ POST
-    ["get", "/conversations/:conversationId"], // GET_CONVERSATION_BY_ID: giữ nguyên method
-    ["get", "/conversations/:conversationId/media"], // POST(body) -> GET(:conversationId path)
-    ["get", "/conversations/:conversationId/files"], // POST(body) -> GET(:conversationId path)
-    ["get", "/conversations/:conversationId/links"], // POST(body) -> GET(:conversationId path)
-    ["post", "/search"], // giữ nguyên
-    ["post", "/conversations/seed"], // FAKE_CONVERSATIONS: rename, giữ POST
-    ["post", "/conversations/seed-messages"], // FAKE_CONVERSATIONS_MSGS: rename, giữ POST
+    ["post", "/conversations/lookup-by-users"],
+    ["get", "/conversations/:conversationId"],
+    ["get", "/conversations/:conversationId/media"],
+    ["get", "/conversations/:conversationId/files"],
+    ["get", "/conversations/:conversationId/links"],
+    ["post", "/search"],
+    ["post", "/conversations/seed"],
+    ["post", "/conversations/seed-messages"],
   ]);
 });
 
-/* -------------------------------------- Task 012 (id-source bug fix): controller regression */
-
-// AC FR-4 (controller fix, "bug này tồn tại chính là lý do task này có extra care"): 3 route
-// media/files/links đổi thành GET -> GET request KHÔNG mang body. Nếu controller vẫn đọc
-// `req.body.conversationId`, conversationId luôn undefined -> mọi request 400 "Empty
-// conversationId", 100% thời gian. Test này khoá lại: controller PHẢI đọc từ `req.params`.
 test("FR-4 (task 012, id-source): getConversationMedia/Files/Links đọc req.params.conversationId, KHÔNG đọc req.body", async () => {
   const src = await fs.readFile("src/api/controllers/message.controller.ts", "utf8");
 
@@ -477,7 +436,6 @@ test("FR-4 (task 012, id-source): getConversationMedia/Files/Links đọc req.pa
   }
 });
 
-// FR-10: 0 raw `res.json({error...})` còn lại trong message.controller.ts.
 test("FR-10 (task 012): message.controller.ts không còn raw res.json({ error ... })", async () => {
   const src = await fs.readFile("src/api/controllers/message.controller.ts", "utf8");
   assert.equal(

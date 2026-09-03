@@ -1,9 +1,3 @@
-// Task 012 (epic follow-suggestions) — cron trigger định kỳ enqueue job refresh suggestion
-// (NFR-2). Không có Worker mới ở đây — chỉ enqueue vào `followSuggestionQueue` (task 010).
-//
-// Lock overlap-guard (AD-7, epic.md — fix sau plan-review FAIL-1): BẮT BUỘC TTL-based qua Redis
-// `SET <key> <value> NX EX <ttl>`, KHÔNG dùng SETNX/flag không hết hạn — nếu process giữ lock
-// crash giữa chừng (không gọi release), lock phải tự hết hạn thay vì kẹt vĩnh viễn.
 import cron from "node-cron";
 import mongoose from "mongoose";
 import { getRedisInstance } from "../../../dbs/redis.ts";
@@ -11,22 +5,10 @@ import User from "../../models/user.model.ts";
 import { followSuggestionQueue, type FollowSuggestionJobData } from "./queue.ts";
 import { FOLLOW_SUGGESTION_CONFIG } from "./config.ts";
 
-/** Key lock dùng chung với backfill script (task 020) — cả 2 phải cùng key để ngăn overlap thật
- * sự (NFR-2). Export để test dọn dẹp giữa các case (`redis.del(LOCK_KEY)`). */
 export const LOCK_KEY = "follow-suggestion:refresh-lock";
 
-/** Batch user/job — trong khoảng 100-500 theo 012.md Description. Export để test tính trước số
- * job kỳ vọng từ tổng số user seed, không cần đoán số cứng. */
 export const ENQUEUE_BATCH_SIZE = 300;
 
-/**
- * Acquire lock TTL-based (AD-7). Trả `true` nếu acquire thành công (lock trước đó không tồn tại
- * hoặc đã hết hạn), `false` nếu lock đang bị process khác giữ (backfill task 020 hoặc 1 lần cron
- * trước chưa xong/chưa hết TTL).
- *
- * `lockValue` chỉ dùng để nhận diện ai đang giữ lock (debug/log) — KHÔNG dùng cho một release có
- * kiểm tra quyền sở hữu, vì hàm này cố ý không có release (xem `runFollowSuggestionRefresh`).
- */
 export const acquireLock = async (
   lockValue: string,
   ttlSeconds: number,
@@ -45,44 +27,19 @@ export const acquireLock = async (
 };
 
 export type RunFollowSuggestionRefreshDeps = {
-  /** Injectable cho test (mirror `ProcessBatchJobDeps` ở `queue.ts`) — mặc định enqueue thật vào
-   * `followSuggestionQueue`. */
   enqueue?: (data: FollowSuggestionJobData) => Promise<unknown>;
-  /** Injectable cho test — cho phép seed ít user hơn 300 mà vẫn verify được logic chia nhiều
-   * batch, không phải insert hàng trăm document giả chỉ để lấp đầy 1 batch. */
   batchSize?: number;
 };
 
 export type RunFollowSuggestionRefreshResult = {
-  /** `false` nếu bỏ qua lần chạy này vì lock đang bị giữ (AC "ngăn overlap", NFR-2). */
   acquired: boolean;
-  /** Số job đã enqueue (0 nếu không acquire được lock, hoặc không có user nào). */
   jobCount: number;
 };
 
-/** Cutoff active-window (mirror `feed/fanout.ts:activeCutoff`) — chỉ user hoạt động trong
- * `activeWindowDays` ngày gần nhất mới được refresh mỗi lần cron chạy (tránh quét + tính lại
- * suggestion cho toàn bộ user, phần lớn trong đó không mở app để xem). User chưa từng active
- * (mới đăng ký, `lastActiveAt` chưa set) được xử lý riêng lúc signup, không qua đường cron này —
- * xem `enqueueOnDemandSuggestion` (`queue.ts`). */
 const DAY_MS = 86400_000;
 const activeCutoff = (): Date =>
   new Date(Date.now() - FOLLOW_SUGGESTION_CONFIG.activeWindowDays * DAY_MS);
 
-/**
- * 1 lần chạy refresh: acquire lock -> đọc user theo batch keyset `(lastActiveAt, _id)` giảm dần,
- * CHỈ user active trong `activeWindowDays` ngày gần nhất (KHÔNG resume, cron chạy lại toàn bộ tập
- * active mỗi lần) -> enqueue mỗi batch thành 1 job vào `follow-suggestion` queue (task 010).
- *
- * Lock CỐ Ý KHÔNG được release tường minh ở cuối hàm (AD-7 trade-off): release ngay sau khi
- * enqueue xong chỉ mới là enqueue xong — worker (task 010) vẫn còn đang xử lý các job đó, nên
- * release sớm ở đây vẫn cho backfill (task 020) chen vào giữa lúc suggestion thật sự chưa tính
- * xong. `lockTtlSeconds` (mặc định 1800s, `FOLLOW_SUGGESTION_CONFIG`) được chọn CHỦ ĐÍCH dài hơn
- * thời gian xử lý tối đa dự kiến của 1 lần refresh, nên để TTL tự hết hạn là cơ chế release DUY
- * NHẤT — vừa đơn giản (không cần theo dõi "queue đã rỗng chưa"), vừa tránh lớp bug kinh điển của
- * distributed lock: release không kiểm tra quyền sở hữu có thể xoá nhầm lock mà một process khác
- * đã acquire hợp lệ sau khi lock của mình đã tự hết hạn.
- */
 export const runFollowSuggestionRefresh = async (
   deps: RunFollowSuggestionRefreshDeps = {},
 ): Promise<RunFollowSuggestionRefreshResult> => {
@@ -103,9 +60,6 @@ export const runFollowSuggestionRefresh = async (
 
   let jobCount = 0;
   const cutoff = activeCutoff();
-  // Keyset pagination trên `(lastActiveAt, _id)` — dùng "trang trước kết thúc ở đâu" (giá trị
-  // `lastActiveAt`/`_id` của bản ghi cuối) làm điều kiện cho trang sau, thay vì `.skip()`, để không
-  // bị lệch trang khi `lastActiveAt` của user thay đổi giữa lúc loop đang chạy.
   let cursor: { lastActiveAt: Date; _id: mongoose.Types.ObjectId } | undefined;
   for (;;) {
     const query: Record<string, unknown> = { lastActiveAt: { $gte: cutoff } };
@@ -138,11 +92,6 @@ export const runFollowSuggestionRefresh = async (
   return { acquired: true, jobCount };
 };
 
-/**
- * Đăng ký cron theo `FOLLOW_SUGGESTION_CONFIG.refreshCronSchedule`. Lỗi trong 1 lần chạy chỉ log
- * (KHÔNG throw ra khỏi callback của `node-cron` — 1 lần chạy lỗi không được làm cron ngừng lịch
- * những lần sau). Trả về `ScheduledTask` (có `.stop()`) để caller/test tự dọn dẹp khi cần.
- */
 export const initFollowSuggestionCron = () =>
   cron.schedule(FOLLOW_SUGGESTION_CONFIG.refreshCronSchedule, () => {
     runFollowSuggestionRefresh().catch((err) => {

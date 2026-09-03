@@ -1,12 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 013 (security-hardening, FR-5) — sanitize NoSQL operator injection
-// (express-mongo-sanitize) + HTTP Parameter Pollution (hpp), mount router.use() ở cả 8 router file
-// (7 router thuần từ Task 010 + user.route.ts, xem Anchor Code trong 013.md).
-//
-// Không import route file trực tiếp (AD-7 — controller mở Mongo/Redis/Cloudinary lúc import).
-// mongoSanitize/hpp tự thân không đụng DB, an toàn import trực tiếp để test hành vi; wiring trong
-// từng router file được xác nhận bằng cách đọc source (giống Task 010/011/012).
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fsp from "node:fs/promises";
@@ -32,8 +23,6 @@ const postJson = (base: string, path: string, body: unknown) =>
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-
-/* ------------------------------------------------------------------- hành vi: mongoSanitize */
 
 test("FR-5: key bắt đầu bằng $ trong req.body bị strip trước khi tới handler", async () => {
   const app = express();
@@ -76,8 +65,6 @@ test("FR-5: key $ trong req.query cũng bị strip (không chỉ req.body)", asy
   });
 });
 
-/* ---------------------------------------------------------------------------- hành vi: hpp */
-
 test("FR-5: hpp giữ giá trị CUỐI CÙNG khi query key lặp lại, không truyền array", async () => {
   const app = express();
   app.use(hpp());
@@ -90,8 +77,6 @@ test("FR-5: hpp giữ giá trị CUỐI CÙNG khi query key lặp lại, không 
     assert.ok(!Array.isArray(page), "không được truyền array xuống handler/service");
   });
 });
-
-/* ---------------------------------------------------------- không strip nhầm dữ liệu hợp lệ */
 
 test("FR-5: tên tiếng Việt có dấu và ký tự đặc biệt hợp lệ (không phải $/.) không bị strip", async () => {
   const app = express();
@@ -109,8 +94,6 @@ test("FR-5: tên tiếng Việt có dấu và ký tự đặc biệt hợp lệ 
     assert.equal(body.bio, "yêu đời! #vibe @all 100%");
   });
 });
-
-/* ------------------------------------------------------- tích hợp: injection không gây lỗi 500 */
 
 test("FR-5 (tích hợp): payload injection tới route có validate() không gây lỗi 500, operator đã bị strip trước Zod", async () => {
   const { z } = await import("zod");
@@ -130,8 +113,6 @@ test("FR-5 (tích hợp): payload injection tới route có validate() không g�
   });
 
   await withServer(app, async (base) => {
-    // $ne bị strip -> field `email` còn lại {} (object rỗng, không phải operator injection nữa)
-    // -> Zod reject vì {} không phải email hợp lệ (400, KHÔNG PHẢI 500 do injection lọt xuống DB).
     const res = await postJson(base, "/login", {
       email: { $ne: null },
       password: "anything",
@@ -140,8 +121,6 @@ test("FR-5 (tích hợp): payload injection tới route có validate() không g�
     assert.equal(res.status, 400, "Zod phải reject vì email không còn là operator, chỉ là object rỗng");
   });
 });
-
-/* ------------------------------------------------------------- source assertion: wiring đủ 8 file */
 
 const readSrc = (path: string) => fsp.readFile(path, "utf8");
 
@@ -173,10 +152,6 @@ test("FR-5: KHÔNG mount mongoSanitize/hpp ở app.ts cấp global (phải nằm
   assert.ok(!src.includes("import hpp"), "app.ts không được import/mount hpp");
 });
 
-// `user.route.ts` là router DUY NHẤT có body-parser PER-ROUTE (Task 011), không phải router.use()
-// cấp file — router.use(mongoSanitize()) ở đầu file chạy TRƯỚC mọi express.json per-route, nên
-// KHÔNG sanitize được req.body (chỉ query/params). 9 route có `.body` phải tự có mongoSanitize()/
-// hpp() riêng NGAY SAU express.json của route đó — nếu không, injection trong body sẽ lọt qua.
 test("FR-5: 9 route có .body trong user.route.ts đều có mongoSanitize()/hpp() riêng SAU express.json của chính route đó", async () => {
   const src = await readSrc("src/api/routers/user.route.ts");
   const code = src.replace(/^\s*\/\/.*$/gm, "");
@@ -193,10 +168,10 @@ test("FR-5: 9 route có .body trong user.route.ts đều có mongoSanitize()/hpp
       i++;
     }
     const chain = code.slice(re.lastIndex, i - 1);
-    if (!chain.includes("express.json(")) continue; // route không có .body, bỏ qua
+    if (!chain.includes("express.json(")) continue;
 
     const jsonIdx = chain.indexOf("express.json(");
-    const jsonEndIdx = chain.indexOf(")", jsonIdx) + 2; // qua dấu `),`
+    const jsonEndIdx = chain.indexOf(")", jsonIdx) + 2;
     const afterJson = chain.slice(jsonEndIdx);
     assert.ok(
       afterJson.trimStart().startsWith("mongoSanitize()"),

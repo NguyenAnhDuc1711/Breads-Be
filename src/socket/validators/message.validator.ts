@@ -9,10 +9,6 @@ export const objectIdSchema = z
 
 export { sanitizeText, sanitizeNoSqlPayload } from "../../api/middlewares/sanitize.js";
 
-/**
- * Check if the JSON-serialized payload exceeds max allowed byte size.
- * Default limit: 25MB (to allow multiple image base64 uploads).
- */
 export const checkPayloadSize = (
   payload: any,
   maxBytes: number = 25 * 1024 * 1024

@@ -15,8 +15,6 @@ import { assertRole } from "../middlewares/requireRole.js";
 
 export const sendReport = async (req, res) => {
   const { content, media } = req.body;
-  // Bước 9: `userId` là NGƯỜI BÁO CÁO. Lấy từ body nghĩa là ai cũng gửi report mạo danh người khác
-  // được (route đã có `protectRoute`, nhưng guard đó không nói gì về việc report thuộc về ai).
   const userId = String(req.user._id);
   const userInfo = await User.findOne(
     {
@@ -55,8 +53,6 @@ export const sendReport = async (req, res) => {
 
 export const getReports = async (req, res) => {
   const { searchValue, page, limit } = req.query;
-  // Bước 10: quyền xét trên `req.user` (protectRoute đã nạp sẵn, có `role`), không phải trên
-  // document tra theo `userId` client gửi. Bỏ luôn 1 query DB thừa mỗi request.
   assertRole(req.user, Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR);
   const pageNum = Number(page) || 1;
   const limitNum = Number(limit) || 10;
@@ -94,8 +90,6 @@ export const getReports = async (req, res) => {
     {
       $unwind: "$userReport",
     },
-    // Guard `searchValue` rỗng: BSON driver drop field `undefined` khỏi $regex, để lại $options
-    // mồ côi -> Mongo lỗi ngay. Chỉ thêm stage search khi searchValue thực sự có giá trị.
     ...(searchValue
       ? [
           {
@@ -139,9 +133,6 @@ export const getReports = async (req, res) => {
   }).send(res);
 };
 
-// Breads-Admin Users module: toàn bộ lịch sử report 1 user ĐÃ NỘP (mọi status) — khác `getReports`
-// (hàng đợi PENDING, search theo tên), không cần $lookup vì đã đứng trên trang chi tiết của đúng
-// user đó rồi. Guard `requireRole(ADMIN)` ở route.
 export const getReportsByUser = async (req, res) => {
   const { id } = req.params;
   const reports = await Report.find({ userId: id })
@@ -161,11 +152,6 @@ export const responseReport = async (req, res) => {
   }
   assertRole(req.user, Constants.USER_ROLE.ADMIN, Constants.USER_ROLE.MODERATOR);
 
-  // NGƯỜI NHẬN do SERVER quyết, suy ra từ chính report đang được trả lời — không nhận `to` từ body.
-  // Trước đây `to` (và cả `from`) lấy thẳng từ client: một tài khoản ADMIN/MODERATOR bị chiếm là đủ
-  // để gửi HTML tuỳ ý tới ĐỊA CHỈ BẤT KỲ qua SMTP thật của hệ thống — cùng lớp lỗi với endpoint
-  // `POST /util/send-forgot-pw-mail` đã xoá ở bước 2, chỉ khác là có role-gate nên hẹp hơn.
-  // Ràng buộc mới: chỉ gửi được cho đúng người đã gửi report đó, không ai khác.
   const report: any = await Report.findById(reportId, { userId: 1 }).lean();
   if (!report) {
     throw new NotFoundError("Report not found");
@@ -176,7 +162,6 @@ export const responseReport = async (req, res) => {
   }
 
   const result = await sendMailService({
-    // `from` KHÔNG nhận từ client — `sendMailService` tự dùng `SEND_MAIL_USER` khi vắng.
     from: undefined,
     to: reporter.email,
     subject,

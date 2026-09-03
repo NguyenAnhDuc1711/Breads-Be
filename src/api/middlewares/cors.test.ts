@@ -1,16 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 001 (security-hardening, FR-3) — `resolveAllowedOrigins()` (`utils/allowedOrigins.ts`)
-// và hành vi CORS thật khi mount lên Express.
-//
-// 2 tầng, cố ý không thay thế nhau (AD-7, xem `validate.test.ts`):
-//  - Tầng pure function: kiểm từng nhánh của `resolveAllowedOrigins` trực tiếp với env giả — bắt
-//    buộc vì `ALLOWED_ORIGINS` (default export) được tính 1 LẦN lúc import module (ESM cache theo
-//    tiến trình, xem `config.test.ts`), không thể tái tạo nhiều giá trị env trong cùng 1 lần chạy
-//    test nếu chỉ đọc default export.
-//  - Tầng HTTP thật: dựng `cors(corOption)` giống hệt cấu hình `app.ts` trên 1 `express()` mới
-//    (KHÔNG import `app.ts` — file đó connect Mongo/Redis thật ngay lúc import), dùng list origin
-//    trả về từ `resolveAllowedOrigins` để xác nhận `cors` middleware thật sự reject/accept đúng.
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { test } from "node:test";
@@ -29,7 +16,6 @@ const withServer = async (app, fn: (base: string) => Promise<void>) => {
   }
 };
 
-/** Mirror đúng `corOption` ở `src/app.ts` — chỉ đổi `origin` theo từng test case. */
 const corsApp = (allowedOrigins: string[]) => {
   const app = express();
   app.use(
@@ -46,8 +32,6 @@ const corsApp = (allowedOrigins: string[]) => {
   });
   return app;
 };
-
-/* ---------------------------------------------------------- resolveAllowedOrigins (pure) */
 
 test("resolveAllowedOrigins: env var set -> parse comma-separated, trim, bỏ rỗng, KHÔNG phụ thuộc NODE_ENV", () => {
   assert.deepEqual(
@@ -82,8 +66,6 @@ test("resolveAllowedOrigins: env var rỗng ('') coi như không set -> theo nh�
   assert.deepEqual(resolveAllowedOrigins("", "dev"), DEV_ORIGINS);
   assert.deepEqual(resolveAllowedOrigins("", "production"), []);
 });
-
-/* ---------------------------------------------------------------------- HTTP thật */
 
 test("CORS (HTTP thật): origin KHÔNG nằm trong allowlist + credentials -> response KHÔNG có Access-Control-Allow-Origin khớp origin đó", async () => {
   const app = corsApp(["https://allowed.example.com"]);

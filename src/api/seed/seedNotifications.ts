@@ -1,26 +1,3 @@
-// One-off seed: give the `notifications` collection realistic volume so
-// `getNotifications` (paginated `{toUsers: userId}` query, sorted by
-// createdAt) has real data to page through — currently 3 documents total.
-//
-// Strategy: two independent streaming passes, each mirroring how the real
-// app creates notifications (see `socket/controllers/post.controller.ts`
-// `likePost` and `socket/controllers/notification.controller.ts` `create`):
-//   1. Stream the `posts` collection. Each post gets a small chance
-//      (exponential mean = --postNotifyRate) of generating 1+ notifications
-//      with action LIKE/REPLY/REPOST/TAG, `target` = that post, `toUsers` =
-//      [post author] — modeling "someone reacted to your post".
-//   2. Stream the `follows` collection — already real follower/followee
-//      pairs — and sample a `--followNotifyRate` fraction into FOLLOW
-//      notifications. Reusing real edges keeps `fromUser` genuinely
-//      following `toUsers[0]`, matching how a FOLLOW notification is only
-//      ever created alongside a real Follow document in production.
-//
-// Defaults produce roughly postNotifyRate*posts + followNotifyRate*follows
-// notifications — with the current dataset (~6M posts, ~74M follows) that's
-// ~300k + ~74k ≈ 370k documents, plenty to exercise pagination/index
-// behavior without an expensive multi-collection join.
-//
-// Usage: npx tsx src/api/seed/seedNotifications.ts [--postNotifyRate=0.05] [--followNotifyRate=0.001] [--actorPoolCapacity=300000] [--batchSize=5000]
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { faker } from "@faker-js/faker";
@@ -39,14 +16,11 @@ const parseArgs = () => {
   return args;
 };
 
-// Same exponential sampler as seedLikes.ts's sampleCount — 0 is the common
-// outcome, occasionally a post gets more than one reaction-notification.
 const sampleCount = (mean) => {
   if (mean <= 0) return 0;
   return Math.floor(-mean * Math.log(1 - Math.random()));
 };
 
-// LIKE dominates in a real feed, REPLY/REPOST/TAG progressively rarer.
 const POST_ACTIONS = [
   { action: Constants.NOTIFICATION_ACTION.LIKE, weight: 55 },
   { action: Constants.NOTIFICATION_ACTION.REPLY, weight: 25 },

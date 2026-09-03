@@ -1,15 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 012 (`dispatchFanout`) — FR-8/scenario 1: `FEED_FANOUT_MODE=direct` -> gọi
-// `fanoutPostToFollowers` y hệt hành vi cũ, 0 job enqueue. Đây là đường rollback duy nhất (US-5).
-//
-// Cùng lý do set env TRƯỚC import như `post.controller.dispatch.enabled-false.test.ts` —
-// `FEED_CONFIG` parse `process.env` đúng 1 lần lúc import rồi đóng băng.
-//
-// QUAN TRỌNG: import TĨNH bị hoist lên TRƯỚC dòng `process.env...` phía dưới, bất kể thứ tự viết
-// trong file — nên MỌI import chạm tới `config.ts` (kể cả gián tiếp qua `queue.ts` để lấy
-// `closeFanoutQueues`) phải là `await import(...)` động bên trong test/hook, không được là import
-// tĩnh ở đầu file (xem comment đầy đủ ở `post.controller.dispatch.enabled-false.test.ts`).
 process.env.FEED_FANOUT_MODE = "direct";
 
 import assert from "node:assert/strict";

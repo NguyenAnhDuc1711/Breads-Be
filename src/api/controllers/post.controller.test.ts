@@ -1,15 +1,3 @@
-// Run with Node's built-in test runner: `npm test`. Cùng quy ước với
-// `services/postVisibility.test.ts` — test 2 hàm thuần trích ra từ guard chặn repost/quote
-// trong `createPost`, không chạm DB.
-//
-// Phạm vi: FR-10 (chặn repost/quote bài non-PUBLIC). Đây là nơi Critical Issue #2
-// (`prd-validate` vòng 2) VÀ 1 bypass thật khác (Task 090 verify — `type=CREATE` + `quote._id`
-// thủ công né được guard bản gốc) đã từng xảy ra. Test này tồn tại để 2 lỗi đó không tái sinh
-// một cách âm thầm nếu ai đó sửa lại `createPost` sau này (epic post-visibility, GAP-2).
-//
-// Task 012: `post.controller.ts` nay import `dispatchQueue` từ `queue.ts`, mở một connection
-// ioredis thật ngay lúc import — phải `closeFanoutQueues()` ở `after()` để `node --test` thoát
-// được, cùng lý do `queue.test.ts` đã làm (xem comment ở đó).
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
@@ -54,8 +42,6 @@ test("isRepostLikePayload: type=REPOST (không có action) -> true", () => {
 });
 
 test("isRepostLikePayload regression (Task 090 bypass): quote._id thủ công, không action/type -> true", () => {
-  // Đây chính xác là payload đã bypass guard bản gốc: type=CREATE + quote thủ công, không
-  // parentPost, không action=repost.
   assert.equal(
     isRepostLikePayload({
       type: PostConstants.ACTIONS.CREATE,
@@ -95,29 +81,11 @@ test("validateRepostGuard: bài tham chiếu visibility=PUBLIC -> cho phép", ()
   assert.deepEqual(validateRepostGuard({ visibility: PUBLIC }), { ok: true });
 });
 
-/* ------------------------------- Task 010, FAIL-1 (CRITICAL): updatePost content guard, end-to-end ------------------------------- */
-
-// Bằng chứng end-to-end (không chỉ tầng schema): đẩy body ĐÃ QUA `updatePostSchema.body.parse()`
-// (đúng những gì `validate()` middleware thật sẽ gán lại vào `req.body`) vào hàm `updatePost` THẬT,
-// stub tầng model (`Post.findById`, `.save()`) theo đúng pattern đã dùng ở
-// `post.route.test.ts:249-267` (gán đè property của object đã import, restore trong `finally`).
-//
-// LƯU Ý quan trọng cho người đọc sau: `post.controller.ts:392` làm `post.content = content;` VÔ
-// ĐIỀU KIỆN — task 010 KHÔNG được phép sửa file này (chỉ sửa validator). Vì vậy khi `content` vắng
-// mặt, `content` destructure ra `undefined`, và dòng 392 gán `post.content = undefined`. Với
-// Mongoose thật, gán `undefined` lên 1 path đã có giá trị sẽ đánh dấu path đó "modified" và khi
-// `.save()` sẽ sinh `$unset` (đã verify trực tiếp bằng `Model.hydrate()` + `doc.$__delta()` khi
-// viết test này) — nghĩa là hành vi "field vắng mặt vẫn xóa mất content cũ" là bug CÓ THẬT, nhưng
-// PRE-EXISTING ở `post.controller.ts` (không phải do transform tạo ra), và nằm NGOÀI phạm vi task
-// 010 (chỉ sửa validator, cấm sửa controller). Điều task 010 chịu trách nhiệm — và test dưới đây
-// verify — là: guard ngăn KHÔNG để `content` trở thành `""` (silent-overwrite-với-chuỗi-rỗng, bug
-// cụ thể mà FAIL-1 cảnh báo). Nếu thiếu guard, assert `notEqual(..., "")` bên dưới sẽ fail.
 test("FAIL-1 (CRITICAL, end-to-end): updatePost content vắng mặt -> content KHÔNG bị ghi đè thành ''", async () => {
   const VALID_ID = "652f1b2c3d4e5f6071829304";
   const AUTHOR_ID = "652f1b2c3d4e5f6071829305";
   const existingContent = "Nội dung gốc, không được ghi đè";
 
-  // Body y hệt request thật KHÔNG kèm `content` (client chỉ update survey).
   const parsedBody: any = updatePostSchema.body.parse({
     _id: VALID_ID,
     userId: AUTHOR_ID,
@@ -154,8 +122,6 @@ test("FAIL-1 (CRITICAL, end-to-end): updatePost content vắng mặt -> content 
   };
 
   try {
-    // Task 011 (D-1): `updatePost` đọc id từ `req.params.id` (route `PUT /posts/:id`), không còn
-    // từ `body._id` — mọi call site test phải truyền `params`.
     await updatePost({ body: parsedBody, params: { id: VALID_ID }, user: { _id: AUTHOR_ID } }, res);
 
     assert.equal(res._status, 200, "request hợp lệ phải thành công");
@@ -169,17 +135,7 @@ test("FAIL-1 (CRITICAL, end-to-end): updatePost content vắng mặt -> content 
   }
 });
 
-/* ------------------------------- Task 011 (FR-5), epic `presigned-media-upload`: cutover
-   `createPost`/`updatePost` sang chỉ chấp nhận URL Cloudinary hợp lệ (validate qua flow ký ở task
-   002), thay vì base64 relay (`uploadFileFromBase64`). ------------------------------- */
-
 const AUTHOR_ID = "652f1b2c3d4e5f6071829305";
-
-/* ---- `processNewPostMediaItem`: hàm thuần dùng chung cho 1 item media MỚI, cùng thứ tự 3-bước
-   check như `sendMessage` (task 010) — GIF bỏ qua -> flag+`data:` fallback -> `validateMediaUrl`
-   strict. `createPost` gọi hàm này cho MỌI item; `updatePost` chỉ gọi cho item MỚI (sau khi diff).
-   Test trực tiếp hàm này để không phụ thuộc DB thật (đúng pattern `isRepostLikePayload`/
-   `validateRepostGuard` đã có sẵn trong file). ---- */
 
 test("FR-5 scenario (createPost, hợp lệ): URL Cloudinary đúng authorId -> được chấp nhận", async () => {
   await withCloudName(async () => {
@@ -192,9 +148,6 @@ test("FR-5 scenario (createPost, hợp lệ): URL Cloudinary đúng authorId -> 
 
 test("FR-5 scenario (createPost, GIF): item type=gif với URL NGOÀI Cloudinary -> được chấp nhận, bỏ qua validate (AD-4)", async () => {
   await withCloudName(async () => {
-    // Shape thật của post có GIF — xem `crawl.ts:54-84` `crawlPostsWithGif`: `media: [{url:
-    // <giphy url>, type: Constants.MEDIA_TYPE.GIF}]`. URL này CỐ Ý không phải domain Cloudinary —
-    // nếu carve-out GIF không hoạt động, validateMediaUrl strict sẽ reject item này (regression).
     const item = {
       url: "https://media.giphy.com/media/l3vR85PnGsBwu1PFK/giphy.gif",
       type: Constants.MEDIA_TYPE.GIF,
@@ -226,20 +179,8 @@ test("FR-5 scenario (createPost, URL không hợp lệ): sai domain (không ph�
   });
 });
 
-/* ---- `createPost` end-to-end (controller thật, stub tầng model theo đúng pattern
-   `Post.findById`/`(Post as any).prototype.save` đã dùng ở FAIL-1 test bên trên). Reject case
-   (AC3) dừng lại TRƯỚC khi chạm DB write nên chỉ cần stub `User.findById`. Success case (AC1/AC2)
-   dùng 1 stub đánh dấu ("REACHED_SAVE") trên `Post.prototype.save` để chứng minh execution ĐÃ đi
-   qua được bước validate media (không bị reject 400) và tới đúng bước lưu — không cần dựng lại
-   toàn bộ pipeline `getPostDetail` (aggregate DB thật). ---- */
-
 const buildCreatePostReq = (media: any[]) => ({
   query: {},
-  // Bước 3 (access-control-hardening): `createPost` lấy tác giả từ `req.user` (`protectRoute`),
-  // không còn từ `body.authorId`. `body.authorId` giữ lại ở đây CÓ CHỦ ĐÍCH và phải là một giá trị
-  // KHÁC: nếu controller lỡ quay về đọc payload, `expectedKey` của `validateMediaUrl` sẽ thành
-  // `OTHER_AUTHOR_ID` và test AC1 (URL dựng theo AUTHOR_ID) fail ngay — tức là test này đồng thời
-  // là guard chống hồi quy nguồn danh tính.
   user: { _id: AUTHOR_ID },
   body: {
     authorId: "6a0000000000000000000001",
@@ -282,7 +223,6 @@ test("FR-5 (createPost end-to-end, AC3): item media mới KHÔNG hợp lệ -> 4
     };
 
     try {
-      // Task 011 (FR-10): envelope đổi `res.status(400).json({error})` -> `throw BadRequestError`.
       await assert.rejects(createPost(req, res), /Invalid media URL/);
       assert.equal(saveCalled, false, "reject phải xảy ra TRƯỚC khi lưu post");
     } finally {
@@ -337,9 +277,6 @@ test("FR-5 (createPost end-to-end, AC2): item media GIF ngoài Cloudinary -> qua
   });
 });
 
-/* ---- `updatePost` end-to-end (cùng pattern stub `Post.findById`/`.save()` như FAIL-1 test) ----
-   Đây là logic MỚI hoàn toàn (`updatePost` trước task 011 KHÔNG validate `media` gì cả). */
-
 const buildFakePost = (media: any[]) => ({
   _id: "652f1b2c3d4e5f6071829304",
   authorId: { toString: () => AUTHOR_ID },
@@ -361,7 +298,6 @@ const stubPostFindById = (fakePost: any) => {
 
 test("FR-5 scenario (updatePost, giữ media cũ): URL cũ KHÔNG đúng convention mới vẫn giữ nguyên, không bị reject", async () => {
   await withCloudName(async () => {
-    // Media từ TRƯỚC epic này — không có prefix `post/{authorId}/` — nếu bị validate lại sẽ reject.
     const legacyUrl = "https://res.cloudinary.com/" + CLOUD_NAME + "/image/upload/legacy/old-photo.jpg";
     const fakePost = buildFakePost([{ url: legacyUrl, type: Constants.MEDIA_TYPE.IMAGE }]);
     const restore = stubPostFindById(fakePost);
@@ -439,13 +375,11 @@ test("FR-5 scenario (updatePost, thêm media mới KHÔNG hợp lệ): chỉ ite
     const res = buildRes();
 
     try {
-      // Task 011 (FR-10): envelope đổi `res.status(400).json({error})` -> `throw BadRequestError`.
       await assert.rejects(
         updatePost({ body: parsedBody, params: { id: fakePost._id }, user: { _id: AUTHOR_ID } }, res),
         /Invalid media URL/,
       );
       assert.equal(saveCalled, false, "reject phải xảy ra TRƯỚC khi lưu post");
-      // Item cũ không bị đụng tới — `post.media` chưa từng bị gán lại khi reject giữa chừng.
       assert.deepEqual(fakePost.media, [{ url: legacyUrl, type: Constants.MEDIA_TYPE.IMAGE }]);
     } finally {
       restore();
@@ -500,10 +434,6 @@ test("Task 011 Tests to Write #3: updatePost với item media mới type=gif (UR
     }
   });
 });
-
-/* -------------------------- Task 002 (epic seo-sitemap-schema, FR-1): getSitemapEligiblePosts --
-   KHÔNG dùng `getPostsIdByFilter`/`getPostDetail` (AD-2) -> test trực tiếp controller, stub
-   `Post.find`/`Post.countDocuments`, cùng pattern `Post.findById` đã dùng ở test FAIL-1 phía trên. */
 
 test("FR-1: filter đúng CẢ 3 điều kiện (status=PUBLIC, visibility=PUBLIC, engagementScore>=5); totalCount khớp countDocuments độc lập", async () => {
   const capturedFindFilter: any[] = [];

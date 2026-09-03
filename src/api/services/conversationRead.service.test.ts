@@ -32,14 +32,10 @@ const withStubbedModel = async (
 };
 
 const CONV_ID = "6512f0a1b2c3d4e5f6a7b8c0";
-const USER_A = "6512f0a1b2c3d4e5f6a7b8c1"; // "self" in most tests
-const USER_B = "6512f0a1b2c3d4e5f6a7b8c2"; // "other participant"
+const USER_A = "6512f0a1b2c3d4e5f6a7b8c1";
+const USER_B = "6512f0a1b2c3d4e5f6a7b8c2";
 const DOC_ID = "6512f0a1b2c3d4e5f6a7b8d0";
 
-// Ground-truth filter applied against an in-memory message array — mirrors the
-// exact predicate the service is expected to send to Message.countDocuments,
-// so these tests fail if the service ever stops excluding own-messages or
-// recalled messages, not just if the final number happens to be wrong.
 const applyGroundTruthFilter = (
   messages: Array<{ sender: string; isRetrieve?: boolean; createdAt: Date }>,
   { lastReadAt, userId }: { lastReadAt: Date; userId: string }
@@ -82,7 +78,7 @@ test("recomputeUnreadCount: excludes the user's own messages (own-message exclus
   const lastReadAt = new Date("2026-01-01T00:00:00Z");
   const messages = [
     { sender: USER_B, isRetrieve: false, createdAt: new Date("2026-01-02T00:00:00Z") },
-    { sender: USER_A, isRetrieve: false, createdAt: new Date("2026-01-03T00:00:00Z") }, // own — must be excluded
+    { sender: USER_A, isRetrieve: false, createdAt: new Date("2026-01-03T00:00:00Z") },
   ];
 
   await withStubbedModel(
@@ -93,7 +89,6 @@ test("recomputeUnreadCount: excludes the user's own messages (own-message exclus
         Message,
         "countDocuments",
         async (filter: any) => {
-          // Verify the service actually asks Mongo to exclude the user's own sender id.
           assert.deepEqual(Object.keys(filter.sender), ["$ne"]);
           return applyGroundTruthFilter(messages, { lastReadAt, userId: USER_A });
         },
@@ -110,7 +105,7 @@ test("recomputeUnreadCount: excludes recalled messages (isRetrieve: true)", asyn
   const lastReadAt = new Date("2026-01-01T00:00:00Z");
   const messages = [
     { sender: USER_B, isRetrieve: false, createdAt: new Date("2026-01-02T00:00:00Z") },
-    { sender: USER_B, isRetrieve: true, createdAt: new Date("2026-01-03T00:00:00Z") }, // recalled — must be excluded
+    { sender: USER_B, isRetrieve: true, createdAt: new Date("2026-01-03T00:00:00Z") },
   ];
 
   await withStubbedModel(
@@ -136,10 +131,10 @@ test("recomputeUnreadCount: excludes recalled messages (isRetrieve: true)", asyn
 test("recomputeUnreadCount: counts correctly with valid + own + recalled messages mixed", async () => {
   const lastReadAt = new Date("2026-01-01T00:00:00Z");
   const messages = [
-    { sender: USER_B, isRetrieve: false, createdAt: new Date("2026-01-02T00:00:00Z") }, // valid
-    { sender: USER_B, isRetrieve: false, createdAt: new Date("2026-01-02T01:00:00Z") }, // valid
-    { sender: USER_A, isRetrieve: false, createdAt: new Date("2026-01-02T02:00:00Z") }, // own — excluded
-    { sender: USER_B, isRetrieve: true, createdAt: new Date("2026-01-02T03:00:00Z") }, // recalled — excluded
+    { sender: USER_B, isRetrieve: false, createdAt: new Date("2026-01-02T00:00:00Z") },
+    { sender: USER_B, isRetrieve: false, createdAt: new Date("2026-01-02T01:00:00Z") },
+    { sender: USER_A, isRetrieve: false, createdAt: new Date("2026-01-02T02:00:00Z") },
+    { sender: USER_B, isRetrieve: true, createdAt: new Date("2026-01-02T03:00:00Z") },
   ];
 
   await withStubbedModel(
@@ -205,7 +200,7 @@ test("getGlobalUnreadTotal: sums unreadCount across conversations, returns 0 whe
 
 test("getCachedUnreadCounts: returns cached values, defaults missing conversations to 0, never writes", async () => {
   const convA = "6512f0a1b2c3d4e5f6a7b8e1";
-  const convB = "6512f0a1b2c3d4e5f6a7b8e2"; // no ConversationRead doc yet
+  const convB = "6512f0a1b2c3d4e5f6a7b8e2";
 
   let writeCalled = false;
 
@@ -232,9 +227,6 @@ test("getCachedUnreadCounts: returns cached values, defaults missing conversatio
 });
 
 test("recomputeUnreadCount: concurrent lazy-create for the same (conversation, user) does not throw", async () => {
-  // findOneAndUpdate with upsert:true is atomic at the DB layer — this test verifies the
-  // service always goes through that single atomic call rather than a separate
-  // find-then-create sequence that could race under concurrent load.
   let callCount = 0;
   await withStubbedModel(
     [
@@ -297,29 +289,12 @@ test("NFR-4: lazy-create defaults lastReadAt to the rollout cutover, not the mes
   }
 });
 
-// ---------------------------------------------------------------------------
-// Task 020 — race-condition self-healing (NFR-3). Bởi thiết kế, MỖI lời gọi
-// recomputeUnreadCount/markConversationRead luôn đọc lại lastReadAt HIỆN TẠI trong DB (qua
-// findOneAndUpdate) trước khi đếm — nên dù 1 lần ghi "trúng" đúng lúc race (dùng lastReadAt cũ,
-// ghi đè sau 1 lần ghi khác dùng lastReadAt mới hơn) khiến cache tạm sai, lần gọi KẾ TIẾP BẤT KỲ
-// sẽ luôn tự đọc lại lastReadAt mới nhất và tính đúng lại — test này verify chính tính chất đó,
-// không phải verify race tự nó không bao giờ xảy ra (không thể, và không cần — đó là điểm của
-// recompute-from-truth: chấp nhận có thể lệch tạm thời, nhưng KHÔNG BAO GIỜ lệch vĩnh viễn).
-// ---------------------------------------------------------------------------
 test("NFR-3: a stale write from a race self-heals on the next recompute call", async () => {
-  // Kịch bản: markConversationRead vừa chạy xong, set lastReadAt = T1 (mới), unreadCount = 0
-  // trong DB. Nhưng 1 lời gọi recomputeUnreadCount KHÁC (trigger tin nhắn mới) đã ĐỌC lastReadAt
-  // CŨ = T0 (trước khi mark-read) từ TRƯỚC race, và giờ mới GHI ĐÈ — kết quả: cache tạm thời sai
-  // (unreadCount bị ghi lại thành > 0 dù thực ra user đã đọc hết).
-  const staleLastReadAt = new Date("2026-01-01T00:00:00Z"); // T0 — cũ, đọc trước race
-  const currentLastReadAtInDb = new Date("2026-01-02T00:00:00Z"); // T1 — DB thực tế đã có sau mark-read
+  const staleLastReadAt = new Date("2026-01-01T00:00:00Z");
+  const currentLastReadAtInDb = new Date("2026-01-02T00:00:00Z");
 
-  let dbUnreadCount = 0; // trạng thái DB TRƯỚC lần ghi "trúng race"
+  let dbUnreadCount = 0;
 
-  // Bước 1 — mô phỏng lần ghi "trúng race": recompute dùng T0 (cũ) nhưng ghi SAU markConversationRead
-  // (đã set lastReadAt=T1 trong DB thật — ở đây ta không mô phỏng chính xác thứ tự đọc/ghi thật,
-  // mà mô phỏng TRỰC TIẾP kết quả của việc đó: DB đang ở trạng thái cache sai, "coi như" đã bị
-  // 1 lần ghi race ghi đè thành 1 (dựa trên T0, đáng lẽ phải dựa trên T1).
   dbUnreadCount = await (async () => {
     let result = 0;
     await withStubbedModel(
@@ -343,8 +318,6 @@ test("NFR-3: a stale write from a race self-heals on the next recompute call", a
 
   assert.equal(dbUnreadCount, 1, "the stale write does land a wrong (non-zero) value — that's the race");
 
-  // Bước 2 — "lần ghi kế tiếp" (NFR-3's guarantee): 1 recompute MỚI, lần này đọc đúng lastReadAt
-  // hiện tại trong DB (T1) — phải tự sửa về giá trị đúng, KHÔNG cộng/trừ dựa trên dbUnreadCount cũ.
   let healedCount = -1;
   await withStubbedModel(
     [
@@ -370,10 +343,6 @@ test("NFR-3: a stale write from a race self-heals on the next recompute call", a
   );
 });
 
-// ---------------------------------------------------------------------------
-// Verify Phase A, G-1 — guard against undefined conversationId/userId, closing the
-// ObjectId(undefined) footgun (silently returns a random ObjectId instead of throwing).
-// ---------------------------------------------------------------------------
 test("G-1: recomputeUnreadCount throws on missing conversationId/userId instead of silently using a random id", async () => {
   await assert.rejects(() => recomputeUnreadCount({ conversationId: undefined, userId: USER_A }));
   await assert.rejects(() => recomputeUnreadCount({ conversationId: CONV_ID, userId: undefined }));

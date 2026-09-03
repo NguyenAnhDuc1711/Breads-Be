@@ -34,16 +34,6 @@ import { uploadFileFromBase64 } from "../utils/index.js";
 import { validateMediaUrl } from "../validators/validateMediaUrl.ts";
 import { assertRole } from "../middlewares/requireRole.js";
 
-/**
- * FR-10 / Task 090 fix: một payload "giống repost" (copy nội dung bài khác vào `quote.content`)
- * kích hoạt guard theo CẢ 3 tín hiệu độc lập — thiếu bất kỳ tín hiệu nào cũng để lọt bypass đã
- * từng xảy ra thật (xem GAP-2, epic post-visibility verify report):
- *   - `action=repost` (query param, Fe gửi khi user bấm nút Repost)
- *   - `type=REPOST` (payload field — client tự gọi API có thể gửi field này mà bỏ action)
- *   - `quote?._id` được set thủ công (client tự dựng payload `type=CREATE` + `quote`, không qua
- *     `parentPost`/action nào cả — đây chính là bypass đã bị khai thác live trong task 090)
- * Hàm thuần, không chạm DB — export để unit test riêng, KHÔNG phụ thuộc `createPost`.
- */
 export const isRepostLikePayload = (payload: {
   action?: string;
   type?: string;
@@ -53,12 +43,6 @@ export const isRepostLikePayload = (payload: {
   payload.type === PostConstants.ACTIONS.REPOST ||
   !!payload.quote?._id;
 
-/**
- * FR-10: bài được repost/quote phải tồn tại VÀ có `visibility=PUBLIC` — nếu không, nội dung
- * riêng tư của bài gốc sẽ bị nhân bản nguyên văn vào `quote.content` của bài mới, ra ngoài mọi
- * ràng buộc visibility (010). Nhận thẳng document đã fetch (hoặc `null`) — hàm thuần, không tự
- * query DB — để unit test được mà không cần Mongo.
- */
 export const validateRepostGuard = (
   referencedPostDoc: { visibility?: number } | null | undefined,
 ): { ok: true } | { ok: false; error: string } => {
@@ -71,17 +55,6 @@ export const validateRepostGuard = (
   return { ok: true };
 };
 
-/**
- * FR-2/FR-6/FR-7/FR-8 (Task 012): nhánh rẽ fan-out-on-write theo `FEED_CONFIG.fanoutMode`.
- * `"direct"` gọi `fanoutPostToFollowers` y hệt hành vi cũ 100% — đường rollback duy nhất (US-5)
- * nếu BullMQ có vấn đề sau khi ship. `"queue"` (mặc định), guard bởi `FEED_CONFIG.fanoutEnabled`
- * (kill-switch cũ), enqueue job `fanout-post` vào `dispatchQueue` với `jobId = postId` (chống
- * enqueue trùng). Lỗi enqueue bị `catch` tại chỗ (NFR-2) — không được làm `createPost` trả 5xx.
- *
- * `deps` tiêm được (cùng pattern `processDispatchJob`/`fanout.dispatch.test.ts` trong epic này) để
- * test độc lập cả 4 nhánh mà không cần Mongo/Redis thật — mặc định luôn là hàm/instance thật, nên
- * hành vi production không đổi khi gọi không truyền `deps`.
- */
 export const dispatchFanout = (
   postSaved: { _id: any; authorId: any },
   io: any,
@@ -114,20 +87,6 @@ export const dispatchFanout = (
   }
 };
 
-/**
- * Task 011 (FR-5, epic `presigned-media-upload`): 3-bước check dùng chung cho 1 item media MỚI
- * (không phải toàn bộ batch) — ĐÚNG THỨ TỰ như task 010's `sendMessage` (xem `epic.md` AD-4/AD-5):
- *   (1) `type === GIF` -> bỏ qua validate (carve-out cấp item, post CÓ data GIF thật -
- *       `crawl.ts:54-84`).
- *   (2) Else nếu flag break-glass bật VÀ `url` là `data:` URI -> fallback `uploadFileFromBase64`
- *       cũ (giữ ở trạng thái ngủ, AD-5). Thứ tự (2) trước (3) là bắt buộc, nếu không flag thành
- *       dead code (AD5-1).
- *   (3) Else -> `validateMediaUrl` strict theo `namespace: "post"` + `expectedKey: authorId`.
- * Trả về item đã xử lý (có thể đổi `url` nếu qua fallback base64) nếu hợp lệ, `null` nếu bị reject.
- * Dùng bởi CẢ `createPost` (mọi item) LẪN `updatePost` (chỉ item MỚI, sau khi đã diff) — nhưng
- * control-flow bao quanh (validate toàn bộ vs. diff-rồi-validate-phần-mới) vẫn tách riêng ở 2 hàm,
- * không dùng chung 1 helper gọi giống nhau (đúng Key risk của epic T4).
- */
 export const processNewPostMediaItem = async (
   item: { url: string; type?: string; [key: string]: any },
   authorId: string,
@@ -167,16 +126,7 @@ export const createPost = async (req, res) => {
     links,
     files,
   } = payload;
-  // Bước 3 (access-control-hardening): tác giả lấy từ JWT (`protectRoute` gán `req.user`), KHÔNG
-  // còn từ `payload.authorId` — route này trước đây không có guard nào, nên bất kỳ ai cũng đăng
-  // được bài dưới tên người khác (probe V2a xác nhận 201 + document ghi vào DB với authorId nạn nhân).
-  //
-  // `String(...)` BẮT BUỘC, không được truyền thẳng ObjectId: `validateMediaUrl` so sánh
-  // `parsed.key === options.expectedKey` bằng `===` trên chuỗi (`validateMediaUrl.ts:37`), nên một
-  // ObjectId sẽ KHÔNG BAO GIỜ khớp và mọi media hợp lệ bị từ chối "Invalid media URL".
   const authorId = String(req.user._id);
-  // `User.findById(authorId)` cũ đã bỏ: `protectRoute` vừa nạp chính document đó vào `req.user`,
-  // và một userId đến từ JWT đã xác thực thì không thể "không tồn tại" như khi client tự khai.
   if (
     !content.trim() &&
     !media?.[0]?.url &&
@@ -191,8 +141,6 @@ export const createPost = async (req, res) => {
   if (content.length > maxLength) {
     throw new BadRequestError(`Text must be less than ${maxLength} characters`);
   }
-  // [plan-review] `visibility` do client gửi lên phải nằm trong enum — chặn ở đây thay vì để
-  // Mongoose enum ném ValidationError 500 lúc `.save()`.
   const validVisibilityValues: number[] = Object.values(
     Constants.POST_VISIBILITY,
   );
@@ -202,8 +150,6 @@ export const createPost = async (req, res) => {
   ) {
     throw new BadRequestError("Invalid visibility value");
   }
-  // Task 011: media hoàn toàn mới ở `createPost` -> MỌI item đều qua 3-bước check
-  // (`processNewPostMediaItem`), thay cho `uploadFileFromBase64` relay bytes trực tiếp cũ.
   let newMedia = [];
   if (media.length) {
     for (let fileInfo of media) {
@@ -281,16 +227,7 @@ export const createPost = async (req, res) => {
     categories,
     visibility: payload.visibility ?? Constants.POST_VISIBILITY.PUBLIC,
   };
-  // Chặn theo CẢ `action` (query param) lẫn `type` (payload): client tự gọi API có thể gửi
-  // `type=REPOST` mà bỏ `?action=repost`, vẫn kèm `quote.content` copy từ bài gốc.
-  // Task 090 fix: cũng chặn khi `quote?._id` được set mà KHÔNG đi kèm `type/action=REPOST`
-  // (ví dụ `type=CREATE` + tự set `quote: { _id, content }` thủ công, không có `parentPost`) —
-  // đây vẫn đúng vector rò rỉ FR-10 mô tả (nhân bản nội dung bài non-PUBLIC ra một bài không bị
-  // ràng buộc visibility gì), chỉ khác field kích hoạt so với nhánh REPOST thông thường.
   if (isRepostLikePayload({ action, type, quote })) {
-    // FR-10: repost copy nguyên văn nội dung bài gốc sang bài mới, nên cho repost bài non-PUBLIC
-    // là nhân bản nội dung riêng tư ra ngoài vòng kiểm soát visibility (010). Phải chặn ở Be —
-    // ẩn nút phía Fe không đủ, mọi client/API call trực tiếp đều bypass được UI.
     const referencedPostId = parentPost || quote?._id;
     const parentPostDoc = await Post.findById(referencedPostId, {
       visibility: 1,
@@ -303,19 +240,11 @@ export const createPost = async (req, res) => {
       newPostPayload.parentPost = parentPost;
     }
   }
-  // `parentPost` giờ dùng chung cho REPOST (nhánh trên) VÀ REPLY — trước đây chỉ REPOST ghi field
-  // này, nên 1 reply không có cách nào tự biết nó thuộc post nào ngoài mảng `replies` nhúng ở cha
-  // (đã bỏ, xem post.model.ts). Cùng điều kiện `action === REPLY` với `handleReplyForParentPost`
-  // bên dưới để 2 phía luôn đồng bộ: post con lưu cạnh, post cha lưu counter.
   if (parentPost && action === PostConstants.ACTIONS.REPLY) {
     newPostPayload.parentPost = parentPost;
   }
   const newPost = new Post(newPostPayload);
   const postSaved = await newPost.save();
-  // Fan-out-on-write (FR-5). KHÔNG `await`: NFR-2 cấm fan-out chặn response — một tác giả gần
-  // ngưỡng celebrity (hoặc một job enqueue chậm) sẽ làm response treo hàng giây. `.catch()` là bắt
-  // buộc: rejection không bắt chỉ rơi vào handler `unhandledRejection` toàn cục (001), mất hết
-  // ngữ cảnh. Task 012: nhánh direct/queue theo `FEED_CONFIG.fanoutMode` — xem `dispatchFanout`.
   dispatchFanout(postSaved, req.app.get("socket_io"));
   if (parentPost && action === PostConstants.ACTIONS.REPLY) {
     await handleReplyForParentPost({
@@ -349,9 +278,6 @@ export const getPost = async (req, res) => {
   }).send(res);
 };
 
-// Danh sách reply của 1 post, phân trang — thay cho việc nhúng toàn bộ `replies` không giới hạn
-// vào response `getPost` cũ (rủi ro document-move ở tầng lưu trữ + payload không giới hạn kích
-// thước ở tầng response). Cùng convention page/limit/skip với `getPostActivities` bên dưới.
 export const getPostReplies = async (req, res) => {
   const { id: postId } = req.params;
   const limit = Math.min(Number(req.query.limit) || 20, 50);
@@ -384,9 +310,6 @@ export const getPostReplies = async (req, res) => {
 //delete Post
 export const deletePost = async (req, res) => {
   const postId = req.params.id;
-  // Bước 3: danh tính từ JWT thay cho `req.query.userId`. Phép so sánh cũ đối chiếu
-  // `post.authorId` với một giá trị do CHÍNH kẻ gọi cung cấp — truyền đúng authorId thật của bài
-  // là qua ngay (probe V2c xác nhận xoá được bài người khác mà không cần đăng nhập).
   const userId = String(req.user._id);
   const post = await Post.findById(postId);
   if (!post) {
@@ -395,19 +318,12 @@ export const deletePost = async (req, res) => {
   if (post.authorId.toString() !== userId) {
     throw new AuthFailureError("Unauthorized to delete post");
   }
-  // Cascade xoá con: trước đây đọc `post.replies` (mảng nhúng) rồi `updateMany({_id:{$in:...}})`.
-  // Giờ con tự lưu `parentPost` nên query ngược trực tiếp — vẫn CHỈ nhắm reply (`type: REPLY`),
-  // không đụng repost: repost bị xoá không kéo theo cascade nào ở bài gốc, giữ đúng hành vi cũ
-  // (repost trước đây không hề nằm trong `replies`, `parentPost` của nó không do cơ chế này quản).
   await Post.updateMany(
     { parentPost: postId, type: PostConstants.ACTIONS.REPLY },
     {
       status: Constants.POST_STATUS.DELETED,
     },
   );
-  // Gỡ counter khỏi CHA nếu chính post đang xoá là 1 reply — trước đây phải `updateMany({replies:
-  // postId})` quét toàn collection tìm ai có id này trong mảng; giờ post tự biết cha của nó
-  // (`post.parentPost`) nên update thẳng đúng 1 document theo `_id`, rẻ hơn hẳn.
   if (post.parentPost && post.type === PostConstants.ACTIONS.REPLY) {
     await Post.updateOne(
       { _id: post.parentPost },
@@ -436,8 +352,6 @@ export const deletePost = async (req, res) => {
 //updatePost
 export const updatePost = async (req, res) => {
   const payload = req.body;
-  // Task 011 (D-1/FR-3): route đổi `PUT /posts/update` -> `PUT /posts/:id`, nên id bài viết lấy từ
-  // path param thay vì `payload._id` do client gửi trong body.
   const postId = req.params.id;
   const { media, content, survey, visibility, files } = payload;
   let post = await Post.findById(postId);
@@ -445,7 +359,6 @@ export const updatePost = async (req, res) => {
     throw new NotFoundError("Post not found");
   }
 
-  // Bước 3: cùng lớp lỗi với `deletePost` — `payload.userId` do client tự khai (probe V2b).
   if (post.authorId.toString() !== String(req.user._id)) {
     throw new AuthFailureError("Unauthorized to update this post");
   }
@@ -466,14 +379,6 @@ export const updatePost = async (req, res) => {
       await option.save();
     }
   }
-  // Task 011 (FR-5): `updatePost` trước đây KHÔNG validate `media` gì cả (`post.media = media;` vô
-  // điều kiện) — đây là thêm MỚI, không phải sửa/xoá 1 cơ chế cũ. Diff `media` (payload client gửi)
-  // với `post.media` HIỆN TẠI (đã fetch sẵn ở trên, dòng ~366 - không query lại DB): item nào đã có
-  // trong `post.media` cũ (khớp theo `url`) giữ nguyên, KHÔNG validate lại (tin dữ liệu đã lưu -
-  // media từ TRƯỚC epic này vẫn sửa post được bình thường). Item MỚI (chưa có trong `post.media`
-  // cũ) mới qua `processNewPostMediaItem` (cùng 3-bước check như `createPost`).
-  // `media === undefined` (client không gửi field này, vd. chỉ update `survey`) -> không đụng
-  // `post.media`, giữ nguyên giá trị hiện có.
   if (media !== undefined) {
     const existingUrls = new Set((post.media || []).map((m: any) => m?.url));
     const processedMedia = [];
@@ -556,10 +461,6 @@ export const getPosts = async (req, res) => {
   if (isAdminPage) {
     payload.isAdminPage = true;
   }
-  // Task 009: `getPosts` dùng CHUNG cho mọi feed (for_you/following/saved/user/admin/*) nên không
-  // thể gắn `requireRole` ở route (sẽ chặn luôn feed thường) — role-check chỉ áp dụng khi request
-  // thực sự thuộc nhánh admin. Danh tính lấy từ `req.viewerId` (jwt qua `optionalAuth`), không tin
-  // giá trị client tự khai trong query.
   if (isAdminPage) {
     const viewer = await User.findById(req.viewerId);
     const allowedRoles = [
@@ -570,8 +471,6 @@ export const getPosts = async (req, res) => {
       throw new AuthFailureError("Admin/Moderator only");
     }
   }
-  // [010] Danh tính người xem chỉ lấy từ jwt (`optionalAuth`), luôn ghi đè giá trị client gửi lên:
-  // `userId` trong query là "feed/trang cá nhân của AI", không phải "AI đang hỏi" (NFR-2).
   payload.viewerId = req.viewerId ?? null;
   const data = await getPostsIdByFilter(payload);
   let result = [];
@@ -583,9 +482,6 @@ export const getPosts = async (req, res) => {
       followeeIds: payload.followeeIds ?? null,
     });
   }
-  // Bug fix (phân trang PostsPage/PostsValidationPage): CHỈ 2 trang admin đổi shape response
-  // sang {data, totalCount} — mọi nhánh feed khác (for_you/following/saved/user) giữ NGUYÊN
-  // metadata là mảng thô như trước, không phá contract của Breads-Fe.
   const metadata =
     isAdminPage && payload.totalCount !== undefined
       ? { data: result, totalCount: payload.totalCount }
@@ -596,20 +492,7 @@ export const getPosts = async (req, res) => {
   }).send(res);
 };
 
-// Task 002 (epic seo-sitemap-schema, FR-1/AD-2): danh sách post PUBLIC/PUBLIC đủ điều kiện
-// sitemap, độc lập với `getPosts` (feed cá nhân hoá theo viewerId/followeeIds) — KHÔNG tái dùng
-// `getPostsIdByFilter`/`getPostDetail`, đúng quyết định AD-2 (tránh coupling semantics feed vs
-// SEO). Cursor phân trang bằng `_id` (ổn định, không unique-issue như `engagementScore`).
-//
-// `totalCount` CHỈ tính ở trang đầu (không có `cursor`) để tránh `countDocuments` lặp lại mỗi
-// trang trên tập ~961K record; trang sau trả `totalCount: null` — Task 010 (sitemap) phải cộng dồn
-// `totalCount` từ trang đầu, không đọc lại ở trang sau.
 export const getSitemapEligiblePosts = async (req, res) => {
-  // Cursor mã hoá "score:id" (top-N ưu tiên, fix sau epic seo-sitemap-schema). Sort đổi từ
-  // `{_id:1}` (cũ, không có ý nghĩa ưu tiên) sang `{engagementScore:-1, _id:-1}` (điểm cao trước,
-  // hoà điểm thì mới nhất trước — _id Mongo tự mang timestamp nên không cần field riêng). Dùng
-  // ĐÚNG index có sẵn từ hệ feed ranking (`post.model.ts`, `{engagementScore:-1,_id:-1}`) — không
-  // cần index mới cho post (khác user, xem user.model.ts).
   const { cursor, limit } = req.query as { cursor?: string; limit: number };
   const [cursorScore, cursorId] = cursor
     ? cursor.split(":")
@@ -636,11 +519,6 @@ export const getSitemapEligiblePosts = async (req, res) => {
     .select("_id updatedAt engagementScore")
     .lean();
 
-  // Trần cứng (SITEMAP_MAX_RECORDS): dữ liệu thật cho thấy engagementScore dồn cục quá nặng
-  // (~99.99% post đủ điều kiện hoà cùng 1 điểm) nên KHÔNG thể giảm quy mô bằng cách nâng ngưỡng lọc
-  // — chặn bằng số lượng tuyệt đối thay vì ngưỡng chất lượng. `totalCount` phản ánh đúng những gì
-  // sitemap SẼ chứa (bị trần chặn), không phải tổng số thật trong DB — nếu không, guard đối chiếu
-  // `sum(fetched) === totalCount` phía Fe (FAIL-1) sẽ luôn báo lệch sai (vì Fe cũng dừng ở N).
   const totalCount = cursor
     ? null
     : Math.min(await Post.countDocuments(baseFilter), SITEMAP_MAX_RECORDS);
@@ -663,8 +541,6 @@ export const getSitemapEligiblePosts = async (req, res) => {
 
 export const tickPostSurvey = async (req, res) => {
   const { optionId, isAdd } = req.body;
-  // Bước 3: phiếu ghi cho NGƯỜI ĐANG ĐĂNG NHẬP, không cho `req.body.userId` (probe V5: nhồi phiếu
-  // dưới danh nghĩa người khác mà không cần đăng nhập).
   const userId = ObjectId(String(req.user._id));
   if (isAdd) {
     await SurveyOption.updateOne(
@@ -688,16 +564,11 @@ export const tickPostSurvey = async (req, res) => {
 };
 
 export const updatePostStatus = async (req, res) => {
-  // Task 011 correction (đúng D-1 điểm 4): postId chuyển từ body vào req.params.id — route đã là
-  // PATCH /:id/status từ đầu task 011 nhưng controller quên đổi nguồn đọc, khiến :id trong URL
-  // vô nghĩa (client có thể gửi bất kỳ chuỗi nào ở đó, danh tính thật vẫn qua body). Phát hiện khi
-  // viết lại FE call site (T020).
   const { status } = req.body;
   const { id: postId } = req.params;
   if (!postId) {
     throw new BadRequestError("Empty payload");
   }
-  // Bước 10: quyền xét trên `req.user` thay vì trên document tra theo `userId` client gửi.
   assertRole(
     req.user,
     Constants.USER_ROLE.ADMIN,
@@ -717,10 +588,7 @@ export const updatePostStatus = async (req, res) => {
   }).send(res);
 };
 
-// FR-3: đổi visibility sau khi đăng. Mirror `updatePostStatus` (cùng verb/shape) nhưng KHÔNG
-// đụng tới field `status` — hai field độc lập (SC-8). Quyền: tác giả bài viết, không phải admin.
 export const updatePostVisibility = async (req, res) => {
-  // Task 011 correction — cùng lý do với updatePostStatus ở trên: postId từ req.params.id.
   const { visibility } = req.body;
   const { id: postId } = req.params;
   if (!postId) {
@@ -736,13 +604,6 @@ export const updatePostVisibility = async (req, res) => {
   if (!post) {
     throw new NotFoundError("Post not found");
   }
-  // Route này TRƯỚC ĐÂY tự mâu thuẫn: `requireRole(ADMIN, MODERATOR)` ở tầng route chỉ cho admin/mod
-  // vào, còn controller lại đòi người gọi phải LÀ TÁC GIẢ bài. Hệ quả: user thường bấm đổi quyền
-  // riêng tư bài của chính mình (menu do `Actions.tsx:166` hiện cho `isAuthor`) luôn nhận 403 —
-  // tính năng hỏng, không phải lỗ hổng. Đồng thời `userId` lấy từ body nên admin muốn kiểm duyệt
-  // bài người khác chỉ cần gửi kèm authorId của bài đó: phép so sánh cũ không ràng buộc được gì.
-  //
-  // Chính sách mới, tường minh: CHỦ SỞ HỮU hoặc ADMIN/MODERATOR. Cả hai vế đều xét trên `req.user`.
   const isOwner = post.authorId.toString() === String(req.user._id);
   const isModerator = [
     Constants.USER_ROLE.ADMIN,
@@ -791,9 +652,6 @@ export const getPostActivities = async (req, res) => {
       .populate("userId", "_id username name avatar bio followersCount");
     users = likes.map((l: any) => l.userId).filter(Boolean);
   } else if (type === "comments") {
-    // `parentPost` giờ dùng chung cho reply LẪN repost (trước đây chỉ repost ghi field này, nên
-    // phải `$or` thêm nhánh đọc mảng nhúng `replies` để không bỏ sót reply). 1 điều kiện là đủ,
-    // và giữ đúng union hành vi cũ (tab "comments" gộp cả 2 loại).
     const filterQuery = {
       parentPost: ObjectId(postId),
       status: { $ne: Constants.POST_STATUS.DELETED },

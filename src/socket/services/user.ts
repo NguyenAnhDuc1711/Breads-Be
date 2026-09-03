@@ -41,11 +41,6 @@ export const getFriendsSocketInfo = async (
   return [];
 };
 
-// Nhận cả `string` lẫn `ObjectId`: call site `services/message.ts` truyền
-// `postInfo.authorId` lấy từ driver Mongo thô -> đã là ObjectId, không phải string.
-// Bắt buộc `String(...)` ở CẢ HAI phía, nếu không Set.has() luôn false và push im lặng.
-// Bỏ qua socket chưa emit `user/connect` (`data` rỗng) để input stringify thành
-// "undefined"/"null" không khớp toàn bộ socket chưa đăng ký.
 export const getUserSocketsByUserIds = async (
   userIds: (string | any)[],
   io: Server

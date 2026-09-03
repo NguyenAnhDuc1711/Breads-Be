@@ -27,9 +27,7 @@ import {
 } from "../validators/message.validator.ts";
 
 const router = express.Router();
-// FR-2 (task 010): không route nào nhận media/base64 -> 1mb.
 router.use(express.json({ limit: "1mb" }));
-// FR-5 (task 013): sanitize NoSQL operator + HPP.
 router.use(mongoSanitize());
 router.use(hpp());
 const {
@@ -43,14 +41,6 @@ const {
   FAKE_CONVERSATIONS_MSGS,
 } = MESSAGE_PATH;
 
-// Bước 9 (access-control-hardening): `protectRoute` chỉ trả lời "có phải người dùng hợp lệ không",
-// KHÔNG trả lời "có phải hội thoại của anh ta không". 5 route đọc dữ liệu hội thoại bên dưới trước
-// đây thiếu hẳn vế thứ hai -> ai cũng đọc được tin nhắn/ảnh/file/link và tìm kiếm nội dung trong
-// hội thoại riêng tư của người khác nếu biết `conversationId`. `requireConversationMember` là biên
-// đó, đặt SAU `protectRoute` (cần `req.user`) và TRƯỚC `validate`/controller.
-//
-// `GET_CONVERSATION_BY_USERS_ID` không có `conversationId` để kiểm — nó tra hội thoại theo CẶP
-// user, nên được vá ở tầng controller bằng cách dùng `req.user._id` làm 1 trong 2 participant.
 router.post(
   GET_CONVERSATION_BY_USERS_ID,
   protectRoute,

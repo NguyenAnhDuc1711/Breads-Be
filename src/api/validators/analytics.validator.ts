@@ -1,8 +1,3 @@
-// Schema cho router `analytics` (FR-8, task 015).
-//
-// `analytics.route.ts` có 2 route, chỉ CREATE cần schema. `getEvents` không đọc field nào từ
-// `req.body` (body-destructure đang comment out, `analytics.controller.ts:47`) nên không export
-// schema cho route đó — tránh validate suông cho field controller không dùng.
 import { z } from "zod";
 import { objectIdSchema } from "./common.ts";
 

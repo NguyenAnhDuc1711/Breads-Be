@@ -1,11 +1,3 @@
-// Run with Node's built-in test runner: `npm test`. Cùng quy ước với `feed/scoring.test.ts`
-// (không thêm dependency mới, Node tự strip type của `.ts`).
-//
-// Phạm vi: quy tắc quan hệ AD-2 dùng chung ở cả 5 read-path (FR-4..FR-7). Repo chưa có harness
-// Mongo cho integration test, nên ở đây kiểm chứng phần THUẦN của quy tắc:
-//   - `canViewPost`: hàm thuần, không chạm DB — phủ đủ FR-4..FR-7.
-//   - `buildVisibilityQuery`: truyền sẵn `followeeIds` để hàm không query `Follow` -> vẫn thuần.
-// Nhánh còn lại (áp query vào từng read-path) phải verify bằng tay/E2E, xem handoff.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Constants } from "../../Breads-Shared/Constants/index.js";
@@ -89,7 +81,6 @@ test("buildVisibilityQuery: có viewer + followee -> 3 nhánh (PUBLIC / tự mì
   assert.equal(String(query.$or[1].authorId), VIEWER);
   assert.equal(query.$or[2].visibility, ONLY_FOLLOWERS);
   assert.deepEqual(query.$or[2].authorId.$in, [AUTHOR]);
-  // KHÔNG có nhánh nào cho ONLY_ME của người khác.
   assert.equal(
     query.$or.some((clause: any) => clause.visibility === ONLY_ME),
     false,
@@ -111,20 +102,11 @@ test("buildVisibilityQuery KHÔNG loại PRE_ACCEPT (AD-5)", async () => {
   assert.equal(JSON.stringify(query).includes(`"$nin"`), false);
 });
 
-// Task 090 fix / GAP-1 (epic-verify Phase A): bản gốc nhúng `replies` của mỗi post qua
-// `getPostDetail({getFullInfo:true})` và chỉ lọc visibility ở top-level, không lọc lại từng reply
-// theo visibility CỦA CHÍNH REPLY ĐÓ (reply có thể tự đổi visibility riêng sau khi tạo, khác bài
-// gốc). Hậu quả live-tested: 1 reply ONLY_ME lộ nguyên văn qua GET /posts/:id cho viewer bất kỳ.
-// `getFullInfo`/nhúng-sẵn đã bỏ (thay bằng `getReplyPage`, lọc NGAY TRONG QUERY qua
-// `buildVisibilityQuery` — xem post.ts) nhưng bài học vẫn đúng: `filterViewablePosts` phải luôn
-// xét visibility theo tác giả của TỪNG post trong danh sách, không suy luận từ post cha. Test này
-// giữ lại làm regression cho chính bất biến đó ở tầng hàm thuần — không dùng ONLY_FOLLOWERS nên
-// không chạm `Follow.find`/DB, giữ đúng tinh thần "hàm thuần" của file này.
 test("Task 090 regression: filterViewablePosts lọc đúng reply ONLY_ME của người khác trong 1 danh sách reply", async () => {
   const replies = [
     { _id: "r1", authorId: AUTHOR, visibility: V_PUBLIC },
-    { _id: "r2", authorId: AUTHOR, visibility: ONLY_ME }, // reply riêng tư của người khác -> phải bị lọc
-    { _id: "r3", authorId: VIEWER, visibility: ONLY_ME }, // reply ONLY_ME của chính viewer -> phải giữ
+    { _id: "r2", authorId: AUTHOR, visibility: ONLY_ME },
+    { _id: "r3", authorId: VIEWER, visibility: ONLY_ME },
   ];
   const result = await filterViewablePosts(replies, VIEWER);
   assert.deepEqual(

@@ -74,19 +74,16 @@ export class SocketRateLimiter {
   }
 }
 
-// 1. Message send limiter: max 5 messages per 1 second per user
 export const messageSendLimiter = new SocketRateLimiter("message_send", {
   windowMs: 1000,
   max: 5,
 });
 
-// 2. Action limiter (react, retrieve, change setting, seen): max 15 actions per 1 second
 export const messageActionLimiter = new SocketRateLimiter("message_action", {
   windowMs: 1000,
   max: 15,
 });
 
-// 3. Query limiter (getConversations, getMessages, search): max 25 queries per 1 second
 export const messageQueryLimiter = new SocketRateLimiter("message_query", {
   windowMs: 1000,
   max: 25,

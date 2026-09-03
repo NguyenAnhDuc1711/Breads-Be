@@ -11,38 +11,11 @@ export type SuggestionCandidate = {
   categoryOverlapCount: number;
 };
 
-/**
- * computeSuggestionsForUser — 2-hop mutual-friend traversal trên `Follow` collection (task 001,
- * FR-1/FR-2, AD-3/AD-5 trong epic.md).
- *
- * Traversal seed từ `User` (chính user A), KHÔNG seed từ một document `Follow` đã $match trước.
- * Lý do: `$graphLookup.startWith` được tính trên INPUT DOCUMENT của stage, và ta cần
- * "depth 0 = bạn trực tiếp của A" / "depth 1 = bạn-của-bạn" (đúng đặc tả 001.md). Seed từ chính A
- * (`startWith: "$_id"`) cho: depth 0 = Follow doc có `followerId = A` (bạn trực tiếp), depth 1 =
- * Follow doc có `followerId` = bạn trực tiếp đó (bạn-của-bạn) — khớp chính xác. Seed từ
- * `$followeeId` của một Follow doc đã lọc `followerId = A` sẽ lệch 1 hop (depth 0 đã là
- * bạn-của-bạn), không khớp đặc tả và làm hub-cap ở dưới sai lệch theo.
- *
- * restrictSearchWithMatch loại document có `followerId` là celebrity
- * (`followersCount > FEED_CONFIG.celebrityThreshold`) khỏi kết quả VÀ khỏi việc tiếp tục đệ quy
- * (đúng semantics thật của `$graphLookup`: match áp dụng ở MỌI bước, tài liệu không khớp bị loại
- * khỏi output lẫn khỏi việc dùng làm điểm mở rộng tiếp theo). Vì "vai trò cầu nối" của một node X
- * chỉ phát sinh khi ta tìm document có `followerId = X` (X tự follow người khác) để đi tiếp, filter
- * trên field `followerId` của DOCUMENT TÌM THẤY chặn đúng bước đó — trong khi document "A→X"
- * (followerId=A, X là followee) không bị chặn, nên X vẫn có thể xuất hiện như một candidate hợp lệ
- * qua nhánh khác (celebrity KHÔNG bị loại khỏi kết quả cuối, chỉ khỏi vai trò cầu nối — AD-3).
- *
- * KHÔNG loại các candidate mà A đã follow trực tiếp — việc đó thuộc read-path (task 011, epic
- * Technical Approach #6), computeSuggestionsForUser chỉ sinh tín hiệu graph thô.
- */
 export const computeSuggestionsForUser = async (
   userId: string | mongoose.Types.ObjectId,
 ): Promise<SuggestionCandidate[]> => {
   const userObjectId = ObjectId(userId);
 
-  // Denormalize trước khi traverse (thay vì $lookup User bên trong $graphLookup — restrictSearchWithMatch
-  // chỉ match field trên chính collection đang search, không hỗ trợ $lookup). Query này dùng index
-  // `{status:1, followersCount:-1, _id:-1}` sẵn có trên User (`user.model.ts`).
   const celebrities = await User.find(
     { followersCount: { $gt: FEED_CONFIG.celebrityThreshold } },
     { _id: 1 },

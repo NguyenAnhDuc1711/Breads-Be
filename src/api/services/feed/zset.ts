@@ -1,9 +1,6 @@
 import { getRedisInstance } from "../../../dbs/redis.ts";
 import { FEED_CONFIG } from "./config.ts";
 
-/** Kích thước 1 pipeline ZSET write. Export để dispatch worker (010) chia follower list theo ĐÚNG
- * cùng hằng số — batch job ≤ `BATCH_SIZE` follower thì `zAddPostForUsers` bên trong chỉ chạy đúng
- * 1 `pipeline.exec()`, không chunk lại lần nữa. */
 export const BATCH_SIZE = 2000;
 
 const client = (op: string) => {
@@ -15,12 +12,6 @@ const client = (op: string) => {
   return r;
 };
 
-// ioredis's pipeline.exec() resolves with a [error, result][] tuple array —
-// it does NOT reject the whole pipeline just because some commands failed
-// (only a connection-level failure to send does, which enableOfflineQueue:
-// false already turns into a rejection our try/catch handles). Without this
-// check, individual command errors inside an otherwise-resolved pipeline
-// were being silently swallowed.
 const logPipelineErrors = (
   op: string,
   results: [Error | null, unknown][] | null
@@ -95,14 +86,6 @@ export const zAddPostForUsers = async (
   }
 };
 
-/**
- * Biến thể throw của `zAddPostForUsers` — logic pipeline giống hệt (dùng chung `chunk`/`client`)
- * nhưng KHÔNG nuốt lỗi: mọi command lỗi trong pipeline (hoặc lỗi gửi pipeline) đều re-throw. Dùng
- * riêng cho batch worker (task 011/AD-3) để BullMQ thấy job thật sự lỗi và retry (FR-6) — gọi
- * thẳng `zAddPostForUsers` gốc ở đây sẽ luôn ra job `completed` giả kể cả khi ghi Redis thất bại.
- * `zAddPostForUsers` gốc giữ nguyên không đổi, vẫn dùng cho nhánh `direct`/mọi caller khác cần hợp
- * đồng "không bao giờ throw".
- */
 export const zAddPostForUsersOrThrow = async (
   userIds: string[],
   postId: string,
@@ -156,9 +139,6 @@ export const zReplaceUserFeed = async (
   }
 };
 
-/** ZADD nhiều bài vào ZSET đã có sẵn của MỘT user, không `DEL` trước — dùng khi backfill bài của
- * một followee mới vào feed đang có bài của các followee khác (khác `zReplaceUserFeed`, hàm đó
- * thay thế toàn bộ key). */
 export const zAddPostsForUser = async (
   userId: string,
   entries: { postId: string; scoreMs: number }[]
@@ -181,8 +161,6 @@ export const zAddPostsForUser = async (
   }
 };
 
-/** ZREM chọn lọc — gỡ đúng các `postId` khỏi ZSET của MỘT user, không đụng bài của followee khác
- * trong cùng key. Dùng khi unfollow. */
 export const zRemovePostsForUser = async (
   userId: string,
   postIds: string[]

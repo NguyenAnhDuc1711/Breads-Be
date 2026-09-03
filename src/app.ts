@@ -15,21 +15,15 @@ import { API_PREFIX } from "./Breads-Shared/APIConfig.js";
 import ALLOWED_ORIGINS from "./utils/allowedOrigins.ts";
 import { ErrorResponse } from "./core/error.response.ts";
 import logger from "./core/logger.ts";
-// Connect to MongoDB
 
 instanceMongoDB.connect();
 initRedis();
 const app = express();
 
-// Dev: chỉ cần thấy log lỗi (đã có ở error handler bên dưới) — tắt auto-log của pino-http cho
-// từng request thành công để log terminal đỡ nhiễu. Prod: giữ nguyên, log mọi request cho traffic/latency observability.
 const isDevEnv = process.env.NODE_ENV === "dev";
 app.use(pinoHttp({ logger, autoLogging: !isDevEnv }));
 
-// FR-2 (security-hardening, task 010): KHÔNG mount `express.json` global ở đây nữa. `body-parser`
-// có hành vi parse-once (`req._body`) nên global 50mb sẽ làm mọi override nhỏ hơn phía sau thành
-// no-op. Mỗi router tự mount `express.json({limit})` theo nhu cầu thật của mình.
-app.use(express.urlencoded({ extended: false })); // to prase from data in the req.body
+app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(helmet());
 const corOption = {
@@ -44,9 +38,6 @@ app.use(cors(corOption));
 app.use(metricsMiddleware);
 app.get("/metrics", metricsHandler);
 
-// FR-1 (security-hardening, task 012): global-tier rate-limit (100 req/phút/IP) cho toàn bộ /api.
-// Route auth-tier (SIGN_UP/LOGIN/CRAWL_POST/CRAWL_USER/forgot-password) có thêm authTierLimiter
-// riêng ngay trên route đó (5 req/phút) — 2 lớp độc lập, lớp nghiêm ngặt hơn trigger trước.
 app.use(API_PREFIX, globalTierLimiter, router);
 
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -55,9 +46,6 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next(error as any);
 });
 
-// FR-2 (security-hardening, task 002): multer ném MulterError khi upload vượt limit cấu hình ở
-// `middlewares/upload.ts` (fileSize/files) — message rõ ràng theo err.code, KHÔNG rơi vào nhánh
-// generic 500 phía dưới.
 const MULTER_ERROR_MESSAGES: Record<string, string> = {
   LIMIT_FILE_SIZE: "File quá lớn",
   LIMIT_FILE_COUNT: "Quá nhiều file trong 1 request",
@@ -65,17 +53,10 @@ const MULTER_ERROR_MESSAGES: Record<string, string> = {
 
 app.use((err, req, res, next) => {
   const isDevEnv = process.env.NODE_ENV === "dev";
-  // MulterError (FR-2, task 002) luôn trả 413, CHÈN TRƯỚC khi tính statusCode/message generic của
-  // T001 — không sửa lại nhánh T001 phía dưới.
   const isMulterError = err instanceof multer.MulterError;
   const statusCode = isMulterError ? 413 : err.statusCode || err.status || 500;
-  // Log server luôn ghi đầy đủ err/stack/message gốc, bất kể env — chỉ response ra client bị giới hạn.
   (req.log || logger).error({ err, statusCode }, err.message || "Unhandled request error");
 
-  // "Lỗi nghiệp vụ đã biết" (BadRequestError, validate() middleware, ...) đều extend `ErrorResponse`
-  // và tự soạn sẵn message an toàn để hiển thị — luôn giữ nguyên message của chúng.
-  // Lỗi KHÔNG thuộc nhóm này (Mongoose, runtime khác) ở env != "dev" bị thay bằng message generic
-  // theo statusCode (vd 404 -> "Not Found", 500 -> "Internal Server Error") để không lộ chi tiết nội bộ.
   const isKnownBusinessError = err instanceof ErrorResponse;
   const message = isMulterError
     ? MULTER_ERROR_MESSAGES[err.code] || err.message || "Lỗi upload file"

@@ -1,11 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Task 001 (epic follow-suggestions) — `computeSuggestionsForUser` chạy `$graphLookup` +
-// `restrictSearchWithMatch` thật trên Mongo. Stub tầng model (pattern
-// `post.controller.test.ts`) không chứng minh được gì ở đây — cái cần verify CHÍNH LÀ hành vi của
-// aggregation engine (depth traversal, hub-node cap qua restrictSearchWithMatch), không phải code
-// gọi nó. Theo pattern `message.controller.sendnext.test.ts`: spawn MỘT `mongod` tạm cho cả file,
-// seed dữ liệu thật, gọi thẳng hàm — không mock.
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -24,9 +16,6 @@ const DB_NAME = "breads_followsuggestion_test";
 let mongod: ChildProcess | null = null;
 let dbPath = "";
 
-// FEED_CONFIG.celebrityThreshold mặc định = 50000 (feed/config.ts, env sạch trong test process) —
-// dùng followersCount vượt hẳn ngưỡng đó để đánh dấu celebrity, không cần override env (module đã
-// parse config lúc import, không cache-bust được giữa các test — SKL đã ghi ở feed/config.test.ts).
 const CELEBRITY_FOLLOWERS = 100_000;
 
 let seq = 0;
@@ -91,7 +80,6 @@ after(async () => {
   if (dbPath) rmSync(dbPath, { recursive: true, force: true });
 });
 
-// --- Test 1: 2-hop cơ bản (Tests to Write bullet 1 + FR-1) -------------------------------------
 test("computeSuggestionsForUser: A->B->C (2-hop) -> C xuất hiện với mutualFriendCount đúng", async () => {
   const a = await seedUser("t1-a");
   const b = await seedUser("t1-b");
@@ -106,51 +94,41 @@ test("computeSuggestionsForUser: A->B->C (2-hop) -> C xuất hiện với mutual
   assert.equal(candidate!.mutualFriendCount, 1);
 });
 
-// --- Test 2: hub-node cap (Tests to Write bullet 2 + AC hub-node cap, AD-3) ---------------------
 test("computeSuggestionsForUser: celebrity KHÔNG được dùng làm cầu nối, nhưng vẫn có thể tự là candidate", async () => {
   const a = await seedUser("t2-a");
-  const bridge = await seedUser("t2-bridge"); // bạn thường của A, không phải celebrity
+  const bridge = await seedUser("t2-bridge");
   const celeb = await seedUser("t2-celeb", { followersCount: CELEBRITY_FOLLOWERS });
   const decoy1 = await seedUser("t2-decoy1");
   const decoy2 = await seedUser("t2-decoy2");
   const decoy3 = await seedUser("t2-decoy3");
 
-  // A follow thẳng celebrity (để celeb có mặt ở depth 0 — không phải candidate) và follow bridge
-  // (bạn thường).
   await follow(a._id, celeb._id);
   await follow(a._id, bridge._id);
-  // celeb tự follow 100 (rút gọn còn 3) người khác — đây là nhánh PHẢI bị chặn (X làm cầu nối).
   await follow(celeb._id, decoy1._id);
   await follow(celeb._id, decoy2._id);
   await follow(celeb._id, decoy3._id);
-  // bridge (không phải celebrity) cũng follow celeb — đường hợp lệ để celeb vẫn có thể là candidate
-  // qua tín hiệu khác (không đi qua vai trò cầu nối của chính celeb).
   await follow(bridge._id, celeb._id);
 
   const result = await computeSuggestionsForUser(a._id);
   const resultIds = result.map((r) => String(r.userId));
 
-  // 100 người celeb follow KHÔNG được lọt vào chỉ vì đi qua celeb.
   assert.equal(resultIds.includes(String(decoy1._id)), false);
   assert.equal(resultIds.includes(String(decoy2._id)), false);
   assert.equal(resultIds.includes(String(decoy3._id)), false);
 
-  // Nhưng celeb vẫn có thể là candidate hợp lệ (qua bridge, không phải qua vai trò cầu nối của
-  // chính nó) — AD-3: celebrity KHÔNG bị loại khỏi kết quả cuối.
   const celebCandidate = result.find((r) => String(r.userId) === String(celeb._id));
   assert.ok(celebCandidate, "celebrity vẫn phải xuất hiện như candidate qua bridge hợp lệ");
   assert.equal(celebCandidate!.mutualFriendCount, 1);
 });
 
-// --- Test 3: công thức scoring (Tests to Write bullet 3 + FR-2) --------------------------------
 test("computeSuggestionsForUser: score tính đúng theo FOLLOW_SUGGESTION_CONFIG (đọc từ config, không hard-code)", async () => {
   const a = await seedUser("t3-a");
   const bridgeP1 = await seedUser("t3-bridge-p1");
   const bridgeP2 = await seedUser("t3-bridge-p2");
   const bridgeP3 = await seedUser("t3-bridge-p3");
   const bridgeQ = await seedUser("t3-bridge-q");
-  const p = await seedUser("t3-p"); // mutualFriendCount = 3
-  const q = await seedUser("t3-q"); // mutualFriendCount = 1
+  const p = await seedUser("t3-p");
+  const q = await seedUser("t3-q");
 
   await follow(a._id, bridgeP1._id);
   await follow(a._id, bridgeP2._id);

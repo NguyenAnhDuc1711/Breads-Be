@@ -11,11 +11,6 @@ import Model from "../../utils/ModelName.js";
 import { sendToSpecificUser } from "../services/message.js";
 import { Server, Socket } from "socket.io";
 
-// Tách khỏi `likePost` vì `likePost` gọi `getCollection(Model.POST)` (`src/utils/index.ts`), hàm
-// này throw khi không có Mongo connection thật -> `likePost` không chạy được end-to-end trong test
-// suite (không có harness Mongo, NFR-2 cấm thêm dependency). Đây là điều kiện cần để có test
-// coverage cho fix FR-4 (A12b), cùng pattern `dispatchFanout` đã tách khỏi `createPost`
-// (xem `src/api/controllers/post.controller.dispatch.test.ts`).
 export const deleteLikeNotification = async ({
   fromUserId,
   toUserId,

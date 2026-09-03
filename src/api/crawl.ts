@@ -11,8 +11,6 @@ import { destructObjectId, ObjectId } from "../utils/index.js";
 import Conversation from "./models/conversation.model.js";
 import Message from "./models/message.model.js";
 
-// Neo theo vị trí file này, không phải `process.cwd()` — script chạy từ thư mục khác vẫn tìm
-// đúng data/ ở root repo.
 const DATA_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../data",
@@ -95,7 +93,7 @@ const crawlPostsWithImg = async () => {
     const getImgsByTag = async (tag, numberNeed) => {
       try {
         const totalImgs = [];
-        const numberQuery = Math.ceil(numberNeed / 10); // Each query gets 10 images
+        const numberQuery = Math.ceil(numberNeed / 10);
         const arr = Array.from({ length: numberQuery }, (_, i) => i);
         for (const page of arr) {
           const imageUrls = await getImgUnsplash({

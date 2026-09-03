@@ -1,12 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 001 (security-hardening, FR-4) — error handler cuối `src/app.ts` ẩn `err.message`
-// gốc cho lỗi KHÔNG thuộc nhóm "đã biết an toàn" khi `NODE_ENV !== "dev"`.
-//
-// KHÔNG import `src/app.ts` trực tiếp — file đó connect Mongo/Redis thật ngay lúc import (AD-7,
-// xem `validate.test.ts`/`post.route.test.ts`). Thay vào đó: mirror ĐÚNG logic error handler thật
-// (cùng import `ErrorResponse`/`STATUS_CODES`) lên 1 `express()` mới để test hành vi HTTP thật, và
-// thêm 1 test đọc source `src/app.ts` để xác nhận app.ts thật giữ đúng logic đã mirror (chống drift).
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { test } from "node:test";
@@ -31,9 +22,6 @@ const silenceWarn = async (fn: () => unknown | Promise<unknown>) => {
   }
 };
 
-/** Mirror ĐÚNG logic error handler cuối `src/app.ts` (dòng ~50-75). `isDevEnv` nhận qua tham số
- * thay vì đọc `process.env.NODE_ENV` trực tiếp — cho phép test nhiều env trong cùng 1 lần chạy mà
- * không phải mutate biến process global giữa các test song song. */
 const makeErrorHandler = (isDevEnv: boolean) => (err, _req, res, _next) => {
   const statusCode = err.statusCode || err.status || 500;
   const isKnownBusinessError = err instanceof ErrorResponse;
@@ -59,8 +47,6 @@ const withServer = async (app, fn: (base: string) => Promise<void>) => {
     await once(server, "close");
   }
 };
-
-/* --------------------------------------------------------------- mock next() (nhanh) */
 
 test("FR-4: lỗi KHÔNG thuộc ErrorResponse + isDevEnv=false -> message generic theo statusCode", () => {
   const handler = makeErrorHandler(false);
@@ -145,8 +131,6 @@ test("FR-4: isDevEnv=true -> luôn giữ message gốc + có stack, bất kể l
   assert.equal(captured.body.stack, err.stack);
 });
 
-/* --------------------------------------------------------------------- HTTP thật */
-
 test("FR-4 (HTTP thật): NODE_ENV != dev, lỗi generic throw trong handler -> response message KHÔNG chứa chuỗi gốc", async () => {
   const app = express();
   app.get("/boom", () => {
@@ -223,8 +207,6 @@ test("FR-4 (HTTP thật): NotFoundError (ErrorResponse) không thuộc dev env -
     assert.equal(body.message, "Post không tồn tại");
   });
 });
-
-/* ---------------------------------------------------- source assertion (chống drift, AD-7) */
 
 test("src/app.ts (source thật) giữ đúng logic FR-4: instanceof ErrorResponse + STATUS_CODES[statusCode] fallback", async () => {
   const src = await import("node:fs/promises").then((fs) =>

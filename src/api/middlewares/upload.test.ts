@@ -1,14 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 002 (security-hardening, FR-2) — giới hạn dung lượng/file và số file/request cho
-// `multer` (`upload.ts`), và nhánh `MulterError` mới trong error handler cuối `src/app.ts`.
-//
-// KHÔNG import `src/app.ts` trực tiếp (connect Mongo/Redis thật ngay lúc import, AD-7 — xem
-// `errorHandler.test.ts`/`util.route.test.ts`). Thay vào đó: mirror ĐÚNG logic error handler thật
-// (bao gồm nhánh MulterError mới) lên 1 `express()` mới, mount `upload` THẬT (từ `upload.ts`, cùng
-// limits thật) để test hành vi HTTP thật qua multer thật — đây là rủi ro hồi quy cao nhất của task
-// này (limit sai hoặc thứ tự nhánh sai trong error handler). Cuối file có 1 test đọc source
-// `src/app.ts` để xác nhận app.ts thật giữ đúng logic đã mirror (chống drift).
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
@@ -31,8 +20,6 @@ const MULTER_ERROR_MESSAGES: Record<string, string> = {
   LIMIT_FILE_COUNT: "Quá nhiều file trong 1 request",
 };
 
-/** Mirror ĐÚNG logic error handler cuối `src/app.ts` (dòng ~59-77), bao gồm nhánh MulterError mới
- * (task 002) CHÈN TRƯỚC nhánh generic của task 001. */
 const makeErrorHandler = (isDevEnv: boolean) => (err, _req, res, _next) => {
   const isMulterError = err instanceof multer.MulterError;
   const statusCode = isMulterError ? 413 : err.statusCode || err.status || 500;
@@ -62,14 +49,10 @@ const UPLOAD_TEST_DIR = `./uploads/${USER_ID}`;
 
 const cleanupUploadDir = () => fsp.rm(UPLOAD_TEST_DIR, { recursive: true, force: true });
 
-/* --------------------------------------------------------- limits config (upload.ts) */
-
 test("upload.ts: MAX_FILE_SIZE_BYTES mặc định 10MB, MAX_FILES_PER_REQUEST mặc định 10 (không set env override)", () => {
   assert.equal(MAX_FILE_SIZE_BYTES, 10 * 1024 * 1024);
   assert.equal(MAX_FILES_PER_REQUEST, 10);
 });
-
-/* --------------------------------------------------------- FR-2 HTTP integration (multer THẬT) */
 
 test("FR-2: upload 1 file vượt fileSize cấu hình -> 413, message riêng LIMIT_FILE_SIZE (không phải 500/generic)", async () => {
   const app = express();
@@ -161,8 +144,6 @@ test("FR-2 (regression): upload file/số lượng hợp lệ trong giới hạn
   }
 });
 
-/* --------------------------------------------------------- S2: sanitize userId + fileFilter */
-
 test("S2: userId không phải ObjectId hợp lệ (path traversal) -> 400, không tạo thư mục/ghi file nào", async () => {
   const app = express();
   app.post(
@@ -246,9 +227,6 @@ test("FR-2 (ordering): nhánh MulterError chạy TRƯỚC nhánh generic — mes
   app.post("/t", upload.array("files"), (_req, res) => {
     res.json({ ok: true });
   });
-  // isDevEnv=false, err KHÔNG phải ErrorResponse -> nếu nhánh MulterError không chạy TRƯỚC, nhánh
-  // generic của T001 sẽ set message = STATUS_CODES[413] ("Payload Too Large"), không phải message
-  // riêng cho LIMIT_FILE_SIZE.
   app.use(makeErrorHandler(false));
 
   try {
@@ -271,8 +249,6 @@ test("FR-2 (ordering): nhánh MulterError chạy TRƯỚC nhánh generic — mes
     await cleanupUploadDir();
   }
 });
-
-/* ------------------------------------------------- source assertion (chống drift, AD-7) */
 
 test("src/app.ts (source thật) giữ đúng logic FR-2: nhánh MulterError chèn TRƯỚC isKnownBusinessError, statusCode 413", async () => {
   const src = await fsp.readFile("src/app.ts", "utf8");

@@ -56,7 +56,6 @@ export default class MessageController {
         return;
       }
 
-      // 1. Rate limiting check (max 5 msgs/sec)
       const rateCheck = messageSendLimiter.check(authUserId);
       if (!rateCheck.allowed) {
         cb?.({
@@ -68,7 +67,6 @@ export default class MessageController {
         return;
       }
 
-      // 2. Payload size check (max 25MB)
       if (!checkPayloadSize(payload, 25 * 1024 * 1024)) {
         cb?.({
           status: "error",
@@ -79,10 +77,8 @@ export default class MessageController {
         return;
       }
 
-      // 3. Sanitize NoSQL operators
       const cleanPayload = sanitizeNoSqlPayload(payload);
 
-      // 4. Schema validation
       const validation = sendMessageSchema.safeParse(cleanPayload);
       if (!validation.success) {
         cb?.({
@@ -111,7 +107,6 @@ export default class MessageController {
       const listMsgId: any[] = [];
       const listMsg: any[] = [];
       const { files, media, respondTo } = message;
-      // Sanitize text content (remove dangerous script tags / control chars)
       const content = sanitizeText(message.content);
 
       const numberNewMsg =
@@ -122,12 +117,6 @@ export default class MessageController {
         return;
       }
 
-      // FR-4 (cutover): media phải là URL Cloudinary hợp lệ, không còn nhận base64 mặc định.
-      // Chạy TRƯỚC khi tạo/cập nhật conversation để 1 item không hợp lệ không để lại
-      // `lastMsgId` trỏ tới message không bao giờ được insert.
-      // Thứ tự check per-ITEM BẮT BUỘC (epic.md AD-4/AD-5): (1) GIF → bỏ qua validate;
-      // (2) flag break-glass + `data:` → fallback base64 cũ; (3) else → validate strict.
-      // Đảo (2) và (3) khiến flag thành dead code (bug AD5-1).
       let processedMedia: any[] = media ?? [];
       if (media?.length) {
         const sortedPairId = [String(senderId), String(recipientId)].sort().join("_");
@@ -135,8 +124,6 @@ export default class MessageController {
           media.map(async (m: any) => {
             const url = typeof m?.url === "string" ? m.url : "";
 
-            // (1) Carve-out GIF ở cấp ITEM (AD-4) — GIF từ provider ngoài Cloudinary là hợp lệ,
-            // bất kể batch có bao nhiêu item khác.
             if (
               typeof m?.type === "string" &&
               m.type.toLowerCase() === Constants.MEDIA_TYPE.GIF
@@ -144,7 +131,6 @@ export default class MessageController {
               return { valid: true, item: m };
             }
 
-            // (2) Lối thoát khẩn cấp khi Be/Fe lệch deploy (AD-5), mặc định TẮT.
             if (isMediaLegacyFallbackEnabled() && url.startsWith("data:")) {
               const imgUrl = await uploadFileFromBase64({ base64: url });
               return {
@@ -153,7 +139,6 @@ export default class MessageController {
               };
             }
 
-            // (3) Đường mặc định sau cutover.
             const valid = validateMediaUrl(url, {
               namespace: "message",
               expectedKey: sortedPairId,
@@ -349,8 +334,6 @@ export default class MessageController {
         },
       });
 
-      // Unread-count bookkeeping (PRD unread-message-count, FR-2/FR-3). Cô lập lỗi ở
-      // try/catch RIÊNG — không được để lỗi ở đây làm fail response gửi tin cho sender.
       try {
         const otherParticipants = (conversation.participants || []).filter(
           (p: any) => destructObjectId(p) !== senderId
@@ -395,7 +378,6 @@ export default class MessageController {
         return;
       }
 
-      // Rate limiting check
       const rateCheck = messageQueryLimiter.check(authUserId);
       if (!rateCheck.allowed) {
         cb?.({ status: "error", message: "Too many requests", code: "RATE_LIMIT_EXCEEDED", data: [] });
@@ -469,7 +451,6 @@ export default class MessageController {
         {
           $match: {
             "participant.username": {
-              // A5: `searchValue` là input người dùng -> phải escape trước khi vào `$regex`.
               $regex: escapeRegex(searchValue),
               $options: "i",
             },
@@ -498,12 +479,6 @@ export default class MessageController {
         return conversation;
       });
 
-      // Unread-count read (FR-6/FR-7, AD-5/AD-8) — path đọc gọi thường xuyên nhất (mỗi lần mở
-      // app). CHỈ dùng hàm chỉ-đọc (getCachedUnreadCounts/getGlobalUnreadTotal) — TUYỆT ĐỐI
-      // không gọi recomputeUnreadCount ở đây (sẽ biến path đọc thành N+1 + ghi-khi-đọc, đi
-      // ngược nguyên lý cache-để-đọc-rẻ — plan-review CRIT-2). Additive-only: giữ nguyên `data`
-      // là mảng, chỉ thêm field `unreadCount` vào từng item + `globalTotal` ở cấp ngoài response,
-      // không đổi shape cũ (backward-compat cho client hiện tại). Degrade gracefully nếu lỗi.
       let globalTotal = 0;
       try {
         const conversationIds = result.map((c: any) => c._id);
@@ -534,7 +509,6 @@ export default class MessageController {
         return;
       }
 
-      // Rate limiting check
       const rateCheck = messageQueryLimiter.check(authUserId);
       if (!rateCheck.allowed) {
         cb?.({ status: "error", message: "Too many requests", code: "RATE_LIMIT_EXCEEDED", data: [] });
@@ -684,7 +658,6 @@ export default class MessageController {
         return;
       }
 
-      // Rate limit check
       const rateCheck = messageActionLimiter.check(authUserId);
       if (!rateCheck.allowed) {
         cb?.({ status: "error", message: "Too many actions", code: "RATE_LIMIT_EXCEEDED", data: null });
@@ -816,7 +789,6 @@ export default class MessageController {
         return;
       }
 
-      // Rate limit check
       const rateCheck = messageActionLimiter.check(authUserId);
       if (!rateCheck.allowed) {
         cb?.({ status: "error", message: "Too many actions", code: "RATE_LIMIT_EXCEEDED", data: null });
@@ -905,7 +877,6 @@ export default class MessageController {
         return;
       }
 
-      // Rate limit check
       const rateCheck = messageActionLimiter.check(authUserId);
       if (!rateCheck.allowed) {
         cb?.({ status: "error", message: "Too many actions", code: "RATE_LIMIT_EXCEEDED", data: null });
@@ -968,9 +939,6 @@ export default class MessageController {
           payload: result,
         });
 
-        // Unread-count bookkeeping (FR-2 trigger b / FR-3) — try/catch RIÊNG cho từng participant,
-        // tách khỏi push báo-thu-hồi ở trên: 1 lỗi tính unread không được chặn báo-thu-hồi của
-        // participant đó hay của những participant khác trong cùng vòng lặp.
         try {
           const unreadCount = await recomputeUnreadCount({
             conversationId: msgInfo.conversationId,
@@ -1006,7 +974,6 @@ export default class MessageController {
         return;
       }
 
-      // Rate limit check
       const rateCheck = messageActionLimiter.check(authUserId);
       if (!rateCheck.allowed) {
         cb?.({ status: "error", message: "Too many actions", code: "RATE_LIMIT_EXCEEDED", data: null });
@@ -1075,9 +1042,6 @@ export default class MessageController {
         });
       }
 
-      // Unread-count bookkeeping (FR-4/FR-5) — đồng bộ CHÍNH authUserId (đa thiết bị), tách biệt
-      // hoàn toàn khỏi vòng push otherParticipants ở trên (mục đích khác: báo "tin đã được xem"
-      // cho người gửi). Cô lập lỗi riêng — không được làm fail response usersSeen đã hoạt động.
       try {
         const unreadCount = await markConversationRead({
           conversationId,
@@ -1110,7 +1074,6 @@ export default class MessageController {
         return;
       }
 
-      // Rate limit check
       const rateCheck = messageSendLimiter.check(authUserId);
       if (!rateCheck.allowed) {
         cb?.({ status: "error", message: "Too many messages forwarded. Please slow down.", code: "RATE_LIMIT_EXCEEDED", data: null });
@@ -1126,10 +1089,6 @@ export default class MessageController {
 
       const { msgInfo, conversationsInfo } = validation.data;
 
-      // FR-4 / AD-2 (revised): KHÔNG tin `msgInfo.media` do client gửi. `msgInfo._id` chính là
-      // `_id` của message GỐC đang forward (xác nhận qua `parentMsg: msgInfo._id` bên dưới), nên
-      // tra thẳng DB và dùng media đã lưu — vừa chặn client inject media tuỳ ý, vừa không reject
-      // media cũ (có từ trước epic này, không theo convention public_id mới).
       if (!msgInfo?._id || !mongoose.isValidObjectId(msgInfo._id)) {
         cb?.({ status: "error", message: "Invalid forward payload", data: null });
         return;
@@ -1141,9 +1100,6 @@ export default class MessageController {
         return;
       }
 
-      // Fix IDOR (SEC-1/AD2-1): `_id` tồn tại là chưa đủ — client có thể gửi `_id` của message
-      // thuộc conversation họ không tham gia để copy media riêng tư của người khác. Bắt buộc
-      // kiểm tra quyền sở hữu, reject TOÀN BỘ batch nếu không phải participant.
       const originalConv = await Conversation.findOne({
         _id: ObjectId(originalMsg.conversationId),
         participants: ObjectId(authUserId),
@@ -1175,9 +1131,6 @@ export default class MessageController {
 
       await Message.insertMany(listMsg, { ordered: false });
 
-      // participants[i] được lấy lại từ chính findOneAndUpdate bên dưới (không thêm query
-      // riêng) — dùng cho vòng lặp unread-bookkeeping ở dưới (AD-6: forward có thể vào 1
-      // conversation nhiều thành viên, không chỉ đúng 1 recipientId tường minh).
       const conversationParticipants: any[][] = [];
       for (let i = 0; i < conversationsInfo.length; i++) {
         const recipientId = conversationsInfo[i].recipientId;
@@ -1227,7 +1180,6 @@ export default class MessageController {
           },
         });
 
-        // Unread-count bookkeeping (FR-2/FR-3) — cô lập lỗi riêng, không chặn forward.
         try {
           const otherParticipants = (conversationParticipants[index] || []).filter(
             (p: any) => destructObjectId(p) !== authUserId

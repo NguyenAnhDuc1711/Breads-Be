@@ -1,30 +1,5 @@
 #!/usr/bin/env node
 
-/**
- * Seed test users for k6 message stress testing.
- *
- * This script creates 2 test users via direct MongoDB insertion (bypasses
- * the signup flow which requires email verification + Redis), then calls
- * the login API to obtain valid JWT access tokens.
- *
- * Prerequisites:
- *   - MongoDB running at MONGO_URI (default: mongodb://127.0.0.1:27017/Breads)
- *   - Breads-Be server running at BASE_URL (default: http://localhost:8080)
- *
- * Usage:
- *   node test/scripts/seed-test-users.js
- *
- * Environment variables:
- *   MONGO_URI  - MongoDB connection string (default: mongodb://127.0.0.1:27017/Breads)
- *   BASE_URL   - Breads-Be server URL (default: http://localhost:8080)
- *
- * Output (JSON to stdout):
- *   {
- *     "sender":    { "userId": "...", "accessToken": "..." },
- *     "recipient": { "userId": "...", "accessToken": "..." }
- *   }
- */
-
 import { MongoClient } from "mongodb";
 import bcrypt from "bcryptjs";
 
@@ -60,7 +35,6 @@ async function main() {
     const result = {};
 
     for (const testUser of TEST_USERS) {
-      // Check if a user with this username already exists
       const existing = await usersCol.findOne({ username: testUser.username });
       let userId;
 
@@ -92,7 +66,6 @@ async function main() {
         console.error(`[seed] Created user "${testUser.username}": ${userId}`);
       }
 
-      // Login to get access token
       const loginRes = await fetch(`${BASE_URL}/api/users/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -125,7 +98,6 @@ async function main() {
       console.error(`[seed] Got token for "${testUser.role}"`);
     }
 
-    // Output JSON to stdout for piping into k6 env vars
     console.log(JSON.stringify(result, null, 2));
   } finally {
     await client.close();

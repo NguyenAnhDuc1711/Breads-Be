@@ -303,9 +303,6 @@ test("sendMessage: authenticated user emits to room user:recipientId and saves m
   assert.equal(cbResult?.status, "success");
   assert.equal(updateOneCalled, true);
   assert.equal(insertManyCalled, true);
-  // Regression (plan-review CRIT-1): hành vi GỐC — đúng 1 emit GET_MESSAGE tới recipient — phải
-  // còn nguyên, cộng thêm 1 emit UNREAD_UPDATE mới (FR-2/FR-3) cho cùng recipient (là participant
-  // duy nhất khác sender trong conversation 1-1 này).
   assert.equal(io.emits.length, 2);
   const getMessageEmit = io.emits.find((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.GET_MESSAGE);
   assert.equal(getMessageEmit?.target, `user:${USER_B}`);
@@ -323,9 +320,6 @@ test("sendMessage: with 3+ participants, unread is pushed to EVERY participant e
   const socket = fakeSocket(USER_A);
   const io = fakeIo() as any;
 
-  // `sendMessage` chỉ biết 1 `recipientId` tường minh (USER_B), nhưng conversation thực tế có
-  // 3 participant (USER_A, USER_B, USER_C) — vòng lặp unread-bookkeeping (AD-6) phải tự lấy
-  // TOÀN BỘ participants từ `conversation`, không chỉ dựa vào biến `recipientId`.
   const mockConvQuery: any = {
     _id: CONV_ID,
     participants: [USER_A, USER_B, USER_C],
@@ -387,8 +381,6 @@ test("sendMessage: with 3+ participants, unread is pushed to EVERY participant e
   );
 
   assert.equal(cbResult?.status, "success");
-  // 2 participant khác sender (USER_B, USER_C) — cả 2 phải được recompute VÀ nhận UNREAD_UPDATE,
-  // không chỉ đúng 1 người theo `recipientId` cũ.
   assert.deepEqual(recomputedFor.sort(), [USER_B, USER_C].sort());
   const unreadEmits = io.emits.filter((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.UNREAD_UPDATE);
   assert.equal(unreadEmits.length, 2);
@@ -467,16 +459,9 @@ test("sendMessage: unread bookkeeping failure does not break the send response (
   messageSendLimiter.reset(USER_A);
 });
 
-// ---------------------------------------------------------------------------
-// FR-4 / Phần A — `sendMessage` media cutover (epic presigned-media-upload, task 010).
-// Thứ tự check per-item BẮT BUỘC: (1) GIF skip → (2) flag + `data:` fallback → (3) validate strict.
-// ---------------------------------------------------------------------------
-
 const TEST_CLOUD_NAME = "test-cloud";
-// `sortedPairId` = [senderId, recipientId].sort().join("_") — cùng công thức với task 001.
 const SORTED_PAIR_AB = [USER_A, USER_B].sort().join("_");
 const VALID_MEDIA_URL = `https://res.cloudinary.com/${TEST_CLOUD_NAME}/image/upload/v1700000000/message/${SORTED_PAIR_AB}/6512f0a1b2c3d4e5f6a7b8ff.png`;
-// Đúng domain + đúng namespace nhưng SAI cặp hội thoại (key của cặp A-C).
 const WRONG_PAIR_MEDIA_URL = `https://res.cloudinary.com/${TEST_CLOUD_NAME}/image/upload/v1700000000/message/${[
   USER_A,
   USER_C,
@@ -487,14 +472,6 @@ const EXTERNAL_GIF_URL = "https://media.giphy.com/media/abc123/giphy.gif";
 const DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
 const LEGACY_UPLOADED_URL = `https://res.cloudinary.com/${TEST_CLOUD_NAME}/image/upload/v1/legacy-fallback.png`;
 
-/**
- * Chạy `sendMessage` với toàn bộ tầng DB được stub, trả về:
- *  - `res`: giá trị cb nhận được
- *  - `inserted`: mảng message thực sự được đưa vào `Message.insertMany` ([] nếu không gọi)
- *  - `uploadCalls`: các lần `uploadFileFromBase64` thực sự chạy — SPY thật, bắt qua `axios.post`
- *    tới endpoint upload của Cloudinary (đây là side-effect duy nhất của hàm đó). Dùng để chứng
- *    minh nhánh (2) có chạy hay không, không chỉ suy ra từ kết quả cuối.
- */
 const runSendMessageWithMedia = async (
   media: any[],
   { legacyFallback }: { legacyFallback: boolean }
@@ -624,8 +601,6 @@ test("sendMessage: mixed GIF + image batch (2 items) — both accepted (item-lev
 
   assert.equal(res?.status, "success");
   assert.equal(inserted.length, 1);
-  // Cả 2 item cùng sống sót — GIF ngoài Cloudinary KHÔNG bị strict-validate loại bỏ dù
-  // batch có nhiều hơn 1 phần tử (bug SCOPE-3 của flag `isAddGif` cấp batch cũ).
   assert.equal(inserted[0].media.length, 2);
   assert.equal(inserted[0].media[0].url, EXTERNAL_GIF_URL);
   assert.equal(inserted[0].media[1].url, VALID_MEDIA_URL);
@@ -641,7 +616,6 @@ test("sendMessage: `data:` URI is rejected explicitly when the legacy flag is OF
   assert.equal(res?.code, "INVALID_MEDIA_URL");
   assert.match(res?.message, /invalid media url/i);
   assert.equal(inserted.length, 0);
-  // Flag tắt ⇒ nhánh (2) bị bỏ qua, không có upload base64 nào chạy.
   assert.equal(uploadCalls.length, 0);
 });
 
@@ -658,8 +632,6 @@ test("sendMessage: `data:` URI goes through the legacy base64 upload when the fl
 });
 
 test("sendMessage: check ORDER — flag+`data:` branch fires BEFORE validateMediaUrl (AD5-1)", async () => {
-  // Cùng 1 input, chỉ khác giá trị flag. `uploadCalls` là spy trên side-effect DUY NHẤT của
-  // `uploadFileFromBase64` (POST tới Cloudinary), nên nó chứng minh nhánh nào đã thực sự chạy.
   const flagOn = await runSendMessageWithMedia([{ url: DATA_URI, type: "image" }], {
     legacyFallback: true,
   });
@@ -667,21 +639,14 @@ test("sendMessage: check ORDER — flag+`data:` branch fires BEFORE validateMedi
     legacyFallback: false,
   });
 
-  // Flag BẬT: nhánh (2) chặn trước ⇒ upload chạy, `validateMediaUrl` không bao giờ được tới
-  // (nếu nó chạy trước thì `data:` URI đã bị reject và không có POST nào cả).
   assert.equal(flagOn.uploadCalls.length, 1);
   assert.match(flagOn.uploadCalls[0], /api\.cloudinary\.com\/v1_1\/.+\/auto\/upload$/);
   assert.equal(flagOn.res?.status, "success");
 
-  // Flag TẮT: nhánh (2) bị bỏ qua ⇒ rơi xuống (3) và bị reject, không upload gì.
   assert.equal(flagOff.uploadCalls.length, 0);
   assert.equal(flagOff.res?.status, "error");
   assert.equal(flagOff.res?.code, "INVALID_MEDIA_URL");
 });
-
-// ---------------------------------------------------------------------------
-// getConversations — chưa có coverage trước epic unread-message-count (task 013).
-// ---------------------------------------------------------------------------
 
 const CONV_ID_2 = "6512f0a1b2c3d4e5f6a7b8c4";
 
@@ -742,18 +707,14 @@ test("getConversations: returns unreadCount per item + globalTotal, preserving o
   );
 
   assert.equal(cbResult?.status, "success");
-  // Backward-compat: `data` vẫn là MẢNG, field cũ còn nguyên.
   assert.ok(Array.isArray(cbResult.data));
   assert.equal(cbResult.data.length, 2);
   assert.equal(cbResult.data[0].theme, "default");
   assert.equal(cbResult.data[0].emoji, ":thumbsup:");
   assert.equal(cbResult.data[0].participant.username, "userB");
   assert.equal(cbResult.data[0].lastMsg._id, MSG_ID);
-  // Field mới: unreadCount đúng cho conversation có cache (CONV_ID) và mặc định 0 cho
-  // conversation chưa từng có ConversationRead (CONV_ID_2).
   assert.equal(cbResult.data[0].unreadCount, 3);
   assert.equal(cbResult.data[1].unreadCount, 0);
-  // globalTotal ở CẤP NGOÀI response, không lồng vào từng item.
   assert.equal(cbResult.globalTotal, 3);
 });
 
@@ -775,8 +736,6 @@ test("getConversations: NEVER calls recomputeUnreadCount from the read path (pla
         ConversationRead,
         "findOneAndUpdate",
         async () => {
-          // Đây là entry point DUY NHẤT của recomputeUnreadCount/markConversationRead — nếu
-          // getConversations gọi tới đây tức là đã vi phạm CRIT-2 (đọc kèm ghi/recompute).
           recomputeEntryPointCalled = true;
           return { _id: "doc-1", lastReadAt: new Date(0) };
         },
@@ -864,12 +823,6 @@ test("getMessages: non-participant socket gets access denied", async () => {
   assert.match(cbResult?.message, /access denied/i);
 });
 
-// ---------------------------------------------------------------------------
-// updateLastSeen — chưa có coverage trước epic unread-message-count (task 011).
-// Baseline hành vi GỐC (usersSeen update, push otherParticipants) + hành vi MỚI (FR-4/FR-5)
-// được viết cùng lúc để có 1 điểm quy chiếu regression rõ ràng cho các thay đổi sau này.
-// ---------------------------------------------------------------------------
-
 const mockUpdateLastSeenConversation = () => ({
   _id: CONV_ID,
   participants: [USER_A, USER_B],
@@ -940,7 +893,6 @@ test("updateLastSeen: marks messages as seen and notifies otherParticipants (ori
     }
   );
 
-  // Hành vi GỐC không đổi:
   assert.equal(cbResult?.status, "success");
   assert.equal(cbResult?.data?._id, MSG_ID);
   assert.equal(String(updateManyFilter.usersSeen.$nin[0]), USER_A);
@@ -985,8 +937,6 @@ test("updateLastSeen: syncs unreadCount=0 to the CALLER's own room, separate fro
   assert.equal(cbResult?.status, "success");
   assert.equal(String(markReadArgs.userId), USER_A, "markConversationRead must target the caller (authUserId), not otherParticipants");
 
-  // 2 emit tách biệt: 1 tới otherParticipants (UPDATE_MSG, giữ nguyên), 1 tới CHÍNH authUserId
-  // (UNREAD_UPDATE, mới) — không được nhầm path/recipient giữa 2 vòng.
   assert.equal(io.emits.length, 2);
   const updateMsgEmit = io.emits.find((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG);
   assert.equal(updateMsgEmit.target, `user:${USER_B}`);
@@ -1099,8 +1049,6 @@ test("retrieveMsg: sender can retrieve and emits update to room", async () => {
 
   assert.equal(cbResult?.status, "success");
   assert.equal(updateOneCalled, true);
-  // Regression (plan-review CRIT-1): push báo-thu-hồi GỐC (UPDATE_MSG) phải còn nguyên, cộng
-  // thêm push UNREAD_UPDATE mới (FR-2 trigger b / FR-3) cho cùng participant.
   assert.equal(io.emits.length, 2);
   const updateMsgEmit = io.emits.find((e: any) => e.p === Route.MESSAGE + MESSAGE_PATH.UPDATE_MSG);
   assert.equal(updateMsgEmit?.target, `user:${USER_B}`);
@@ -1186,10 +1134,6 @@ test("retrieveMsg: unread bookkeeping failure does not break the existing recall
   assert.equal(updateMsgEmit.target, `user:${USER_B}`);
 });
 
-// ---------------------------------------------------------------------------
-// Task 021 — SC-4 (NFR-1) và SC-7 across-the-board check.
-// ---------------------------------------------------------------------------
-
 const MESSAGE_CONTROLLER_SRC_PATH = "src/socket/controllers/message.controller.ts";
 
 test("SC-4: unread-message-count code never calls fetchSockets()/getUserSocketsByUserIds() (NFR-1)", async () => {
@@ -1203,18 +1147,12 @@ test("SC-4: unread-message-count code never calls fetchSockets()/getUserSocketsB
 });
 
 test("SC-7: every UNREAD_UPDATE call site in the source sends all 3 payload fields", async () => {
-  // Kiểm tra tĩnh (static), bổ sung cho assertion runtime đã có riêng ở từng handler (task
-  // 010/011/012): mỗi khối gọi `sendToSpecificUser` với path `UNREAD_UPDATE` trong nguồn phải có
-  // đủ literal `conversationId`, `unreadCount`, `globalTotal` trong payload — bắt được regression
-  // dạng "thêm 1 call site mới nhưng quên 1 field" mà runtime test riêng lẻ có thể bỏ sót.
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(MESSAGE_CONTROLLER_SRC_PATH, "utf8");
 
   const callSites = src.split("MESSAGE_PATH.UNREAD_UPDATE").length - 1;
   assert.ok(callSites >= 3, `expected at least 3 UNREAD_UPDATE call sites (sendMessage/sendNext, updateLastSeen, retrieveMsg), found ${callSites}`);
 
-  // Mỗi khối payload theo path UNREAD_UPDATE (tìm bằng khoảng cách gần trong source) đều có đủ
-  // 3 field — kiểm tra bằng cách quét từng đoạn 300 ký tự SAU mỗi lần xuất hiện MESSAGE_PATH.UNREAD_UPDATE.
   let idx = src.indexOf("MESSAGE_PATH.UNREAD_UPDATE");
   let checked = 0;
   while (idx !== -1) {

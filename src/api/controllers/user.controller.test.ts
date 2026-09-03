@@ -1,15 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Task 011 (epic follow-suggestions, FR-3/FR-4): `getUserToFollows` read-path fix. Stubs
-// model-layer methods (pattern already established in `post.controller.test.ts`) instead of
-// spinning a real `mongod` — what needs verifying here is CONTROL FLOW (which branch runs, does the
-// exclude-followed filter apply), not aggregation-engine semantics, so a stub is sufficient and much
-// faster than the real-Mongo pattern used in `followSuggestion.test.ts`.
-//
-// The kill-switch scenario (`FOLLOW_SUGGESTION_ENABLED=false`) lives in a SEPARATE file
-// (`user.controller.followSuggestion.enabled-false.test.ts`) because `FOLLOW_SUGGESTION_CONFIG`
-// parses `process.env` once at import time and freezes — same constraint documented in
-// `post.controller.dispatch.enabled-false.test.ts`.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { getUserToFollows } from "./user.controller.ts";
@@ -18,8 +6,8 @@ import FollowSuggestion from "../models/followSuggestion.model.ts";
 import User from "../models/user.model.ts";
 
 const USER_A = "652f1b2c3d4e5f6071829301";
-const USER_B = "652f1b2c3d4e5f6071829302"; // already followed by A
-const USER_C = "652f1b2c3d4e5f6071829303"; // not followed by A
+const USER_B = "652f1b2c3d4e5f6071829302";
+const USER_C = "652f1b2c3d4e5f6071829303";
 
 const buildRes = () =>
   ({
@@ -64,8 +52,6 @@ const stubUserFindHydrate = (docsById: Record<string, any>) => {
   };
 };
 
-/* ------------------------------- Test 1: exclude-followed (FR-3) ------------------------------- */
-
 test("Task 011, FR-3 scenario: cache-hit — candidate đã follow (B) bị loại, chỉ còn C", async () => {
   const restoreUserFindOne = stubUserFindOneForRequester();
   const restoreFollowFind = stubFollowFindDistinct([USER_B]);
@@ -99,8 +85,6 @@ test("Task 011, FR-3 scenario: cache-hit — candidate đã follow (B) bị lo�
     restoreUserFind();
   }
 });
-
-/* --------------------------- Test 2: fallback-on-empty cache (FR-4) ----------------------------- */
 
 test("Task 011, FR-4 scenario: FollowSuggestion không có candidate -> dùng fallback aggregation, không rỗng", async () => {
   const restoreUserFindOne = stubUserFindOneForRequester();
@@ -136,8 +120,6 @@ test("Task 011, FR-4 scenario: FollowSuggestion không có candidate -> dùng fa
     restoreFollowFind();
   }
 });
-
-/* ------------------ Test 3: fallback-on-error (plan-review FAIL-2, part 2) ----------------------- */
 
 test("Task 011, FR-4 scenario (FAIL-2): FollowSuggestion.findOne throw -> vẫn 200 với dữ liệu fallback, không phải 500", async () => {
   const restoreUserFindOne = stubUserFindOneForRequester();

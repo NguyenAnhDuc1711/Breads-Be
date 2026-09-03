@@ -1,20 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 012 (`dispatchFanout`) — FR-2/scenario 2: `FEED_FANOUT_ENABLED=false` (mode vẫn
-// mặc định "queue", KHÔNG set `FEED_FANOUT_MODE`) -> không job nào được enqueue VÀ
-// `fanoutPostToFollowers` cũng không được gọi (chỉ nhánh `mode==="direct"` mới gọi hàm đó, nhánh
-// này không phải "direct").
-//
-// `FEED_CONFIG` đọc `process.env` đúng 1 lần lúc `config.ts` được import rồi `Object.freeze` —
-// phải set env TRƯỚC bất kỳ import chạm tới `config.ts` (qua `post.controller.ts` ->
-// `queue.ts`/`fanout.ts`). `node --test` chạy mỗi file test trong 1 process riêng nên set ở đây
-// không rò sang file test khác (cùng lý do đã áp dụng ở `fanout.dispatch.test.ts`).
-//
-// QUAN TRỌNG: import TĨNH bị hoist lên TRƯỚC dòng `process.env...` phía dưới, bất kể thứ tự viết
-// trong file — nên MỌI import chạm tới `config.ts` (kể cả gián tiếp qua `queue.ts` để lấy
-// `closeFanoutQueues`) phải là `await import(...)` động bên trong test/hook, không được là import
-// tĩnh ở đầu file. Đây chính là bẫy mà bản đầu tiên của file này mắc phải (import tĩnh
-// `closeFanoutQueues` khiến `config.ts` nạp với env mặc định trước khi override kịp áp dụng).
 process.env.FEED_FANOUT_ENABLED = "false";
 
 import assert from "node:assert/strict";

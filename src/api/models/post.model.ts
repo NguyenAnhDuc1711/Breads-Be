@@ -23,19 +23,10 @@ const postSchema = new mongoose.Schema(
       type: Array,
       required: false,
     },
-    // Quan hệ reply KHÔNG còn nhúng dạng mảng ObjectId ở đây (rủi ro document move/16MB khi 1 bài
-    // viral có hàng trăm nghìn reply — mỗi reply mới từng phải rewrite lại document CHA). Reply tự
-    // lưu `parentPost` trỏ ngược (như REPOST vốn đã làm từ trước), và cha chỉ giữ counter
-    // `repliesCount` — ghi rẻ (O(1) vào đúng 1 document), đọc "reply của post X" qua query
-    // `{parentPost, type: REPLY}` trên index bên dưới thay vì đọc thẳng mảng.
-    // Migration một-lần: `src/api/migrations/migrateReplyReferences.ts` (chạy TRƯỚC khi field
-    // `replies` cũ bị bỏ khỏi schema này, backfill parentPost/repliesCount từ dữ liệu cũ).
     repliesCount: {
       type: Number,
       default: 0,
     },
-    // Dùng chung cho CẢ repost lẫn reply (trước đây chỉ repost ghi field này) — phân biệt bằng
-    // `type` ở nơi query, không tách field riêng.
     parentPost: {
       type: ObjectId,
       ref: "Post",
@@ -110,9 +101,6 @@ const postSchema = new mongoose.Schema(
 );
 
 postSchema.index({ createdAt: -1 });
-// `sparse` vẫn đúng: đa số post (CREATE/EDIT) không có `parentPost`. Compound + `createdAt` phục vụ
-// trực tiếp query phân trang "reply/repost của post X" (`{parentPost, type}` sort `createdAt`) —
-// trước đây chỉ `{parentPost:1}` đơn vì field này gần như không có tải đọc thật (chỉ repost dùng).
 postSchema.index(
   { parentPost: 1, createdAt: -1 },
   {
@@ -138,20 +126,8 @@ postSchema.index(
   { partialFilterExpression: { type: { $in: [CREATE, EDIT, REPOST] } } },
 );
 postSchema.index({ engagementScore: -1, _id: -1 });
-// ESR (Equality-Sort-Range): phục vụ query lọc `status`/`visibility` (equality) trước range trên
-// `engagementScore` (vd. sitemap FR-3 `{status:PUBLIC, visibility:PUBLIC, engagementScore:$gte}`).
-// Index đơn `engagementScore_-1__id_-1` ở trên KHÔNG dùng được cho shape này (không có prefix
-// equality) nên vẫn giữ nguyên, không thay thế.
 postSchema.index({ status: 1, visibility: 1, engagementScore: 1 });
-// USER/FRIEND page (post.ts getPostsIdByFilter): lọc authorId + sort createdAt, với `type`
-// $nin (mặc định) hoặc = "reply" — cả hai đều không khớp partialFilterExpression của
-// `type_1_authorId_1_createdAt_-1` (chỉ CREATE/EDIT/REPOST) nên trước đây Mongo fallback về
-// scan toàn bộ index `createdAt_-1` (~6M doc mới trả 9 kết quả, ~20s). Index này không có
-// partial filter nên áp dụng được với mọi giá trị `type`.
 postSchema.index({ authorId: 1, createdAt: -1 });
-// ESR: Posts Validation queue luôn lọc `{status: PRE_ACCEPT}` (equality) rồi sort `createdAt` (FIFO)
-// — trước đây chỉ có index đơn `createdAt_-1`, phải fetch+lọc status trong bộ nhớ cho từng doc quét
-// qua, chi phí tăng theo độ sâu trang.
 postSchema.index({ status: 1, createdAt: 1 });
 
 const Post = mongoose.model("Post", postSchema);

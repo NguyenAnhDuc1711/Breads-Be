@@ -1,15 +1,3 @@
-// Creates a real Moderator-role test account for manual/local testing of
-// Breads-Admin's role-gated routes (see epic social-media-management).
-// Not a fake/faker-generated account like generateUsers.ts — this is meant
-// to be a real, usable login (password is properly bcrypt-hashed, same as
-// the real signup flow), just seeded directly instead of through the API.
-//
-// Usage:
-//   npx tsx src/api/seed/createModerator.ts --email=mod1@example.test [--username=mod1] [--name="Moderator One"] [--password=Secret123!]
-//   npm run seed:moderator -- --email=mod1@example.test
-//
-// Flags default to a random suffix when omitted so you can run this
-// repeatedly without colliding with a previous account.
 import "dotenv/config.js";
 import bcrypt from "bcryptjs";
 import { faker } from "@faker-js/faker";

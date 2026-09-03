@@ -1,19 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Task 011 (epic follow-suggestions, AD-6 kill-switch): `FOLLOW_SUGGESTION_ENABLED=false` ->
-// `getUserToFollows` must ALWAYS use the fallback aggregation, bypassing `FollowSuggestion` entirely
-// — even when the cache holds perfectly valid data.
-//
-// `FOLLOW_SUGGESTION_CONFIG` reads `process.env` exactly once at import time then `Object.freeze`s
-// (`services/followSuggestion/config.ts`) — env must be set BEFORE anything imports that module
-// (directly or transitively via `user.controller.ts`). `node --test` runs each test file in its own
-// process, so setting it here doesn't leak into other test files (same pattern as
-// `post.controller.dispatch.enabled-false.test.ts`).
-//
-// IMPORTANT: static imports are hoisted above the `process.env...` line below regardless of where
-// it's written in the file — so every import touching `config.ts` (even indirectly through
-// `user.controller.ts`) must be a dynamic `await import(...)` inside the test, not a static import
-// at the top of the file. Same trap already documented in `post.controller.dispatch.enabled-false.test.ts`.
 process.env.FOLLOW_SUGGESTION_ENABLED = "false";
 
 import assert from "node:assert/strict";
@@ -57,8 +41,6 @@ test("AD-6 kill-switch: FOLLOW_SUGGESTION_ENABLED=false -> luôn dùng fallback,
   const originalFollowSuggestionFindOne = (FollowSuggestion as any).findOne;
   (FollowSuggestion as any).findOne = () => {
     cacheReadCalls++;
-    // Cache "có dữ liệu tốt" — nếu kill-switch KHÔNG hoạt động đúng, test sẽ thấy candidate này
-    // trong response thay vì fallbackDocs bên dưới.
     return {
       lean: async () => ({
         candidates: [{ userId: USER_B, score: 999, mutualFriendCount: 5, categoryOverlapCount: 5 }],

@@ -1,24 +1,3 @@
-/**
- * Bước 0 (epic access-control-hardening) — PROBE, không phải test.
- *
- * Mục đích: chứng minh bằng SỐ LIỆU rằng 9 lỗ hổng access control được nêu trong phân tích là
- * CÓ THẬT trên hệ thống đang chạy, trước khi sửa bất kỳ dòng nào — và dùng chính script này để
- * chứng minh đã vá sau đó. Không có bản "trước" thì không chứng minh được bản "sau".
- *
- * Vì sao KHÔNG viết bằng `node --test` như phần còn lại của repo: `npm test` chạy trên code đã
- * import trực tiếp (unit), còn probe này phải đi qua HTTP/WebSocket thật của một server ĐANG CHẠY
- * để phản ánh đúng chuỗi middleware thật (rate-limit, cors, body-parser, guard). Một unit test
- * import controller sẽ bỏ qua đúng tầng đang thủng.
- *
- * Chạy:
- *   1. Terminal A: npm run dev
- *   2. Terminal B: npm run security:probe
- *
- * Env:
- *   PROBE_BASE_URL     mặc định http://localhost:8080
- *   PROBE_ALLOW_REMOTE 1 = cho phép chạy khi MONGO_URI không phải localhost (MẶC ĐỊNH TỪ CHỐI)
- *   PROBE_ALLOW_MAIL   1 = chạy cả probe V7 (gửi mail THẬT qua SMTP của hệ thống)
- */
 import "dotenv/config";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
@@ -35,10 +14,6 @@ const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017";
 const RUN_ID = Date.now();
 const TAG = `probe-${RUN_ID}`;
 
-/* ------------------------------------------------------------------ an toàn */
-
-// Probe GHI dữ liệu thật (tạo user, đổi mật khẩu, xoá post). Chạy nhầm vào DB production là mất
-// dữ liệu thật — chặn mặc định, phải cố ý mở bằng env mới đi tiếp.
 const isLocalMongo = /localhost|127\.0\.0\.1/.test(MONGO_URI);
 if (!isLocalMongo && process.env.PROBE_ALLOW_REMOTE !== "1") {
   console.error(
@@ -48,8 +23,6 @@ if (!isLocalMongo && process.env.PROBE_ALLOW_REMOTE !== "1") {
   );
   process.exit(1);
 }
-
-/* ------------------------------------------------------------------ http */
 
 type Res = { status: number; body: any; raw: string; setCookie: string[] };
 
@@ -84,13 +57,6 @@ const http = async (
   };
 };
 
-/* ------------------------------------------------------------- socket.io */
-
-/**
- * Engine.IO v4 long-polling thuần fetch — repo KHÔNG có `socket.io-client` (chỉ có server), và
- * probe không được phép thêm dependency chỉ để đo. Đủ để phát 1 event có ack và đọc phản hồi.
- * Frame polling ngăn cách bằng `\x1e` (record separator).
- */
 const socketEmitWithAck = async (
   event: string,
   payload: any,
@@ -103,11 +69,9 @@ const socketEmitWithAck = async (
     const hsText = await hs.text();
     const sid = JSON.parse(hsText.slice(hsText.indexOf("{"), hsText.indexOf("}") + 1)).sid;
 
-    // `40` = CONNECT tới namespace mặc định; phần JSON đi kèm chính là `socket.handshake.auth`
-    // mà middleware trong `socket.ts` đọc. Không truyền token -> socket ẨN DANH (đúng kịch bản V6).
     const connectFrame = opts.token ? `40${JSON.stringify({ token: opts.token })}` : "40";
     await fetch(url(`sid=${sid}&t=${Date.now()}`), { method: "POST", body: connectFrame });
-    await fetch(url(`sid=${sid}&t=${Date.now()}`)); // nuốt frame `40{"sid":...}`
+    await fetch(url(`sid=${sid}&t=${Date.now()}`));
 
     const ackId = 7;
     await fetch(url(`sid=${sid}&t=${Date.now()}`), {
@@ -130,8 +94,6 @@ const socketEmitWithAck = async (
     return { ok: false, data: null, note: `lỗi transport: ${err?.message}` };
   }
 };
-
-/* ------------------------------------------------------------- fixtures */
 
 const oid = () => new mongoose.Types.ObjectId();
 
@@ -195,8 +157,6 @@ const seed = async () => {
       createdAt: now, updatedAt: now,
     },
     {
-      // MODERATOR không bao giờ bị mutate — dùng cho R20 (nhánh role trên route KHÔNG có
-      // `requireRole`, nơi `req.user.role` là thứ duy nhất quyết định).
       _id: F.moderatorId, name: "Probe Moderator", username: `${TAG}-moderator`,
       email: F.moderatorEmail, password: await hash(F.moderatorPassword),
       role: Constants.USER_ROLE.MODERATOR, status: Constants.USER_STATUS.ACTIVE,
@@ -204,9 +164,6 @@ const seed = async () => {
       createdAt: now, updatedAt: now,
     },
     {
-      // Tài khoản CHỈ dùng cho regression R15/R16. Cố ý tách riêng: `victim` bị R3 đổi mật khẩu,
-      // `bystander` bị V9 cấm, `attacker` bị R12 cấm — dùng lại bất kỳ ai trong số đó sẽ làm phép
-      // đo hỏng vì lý do KHÔNG liên quan tới thứ đang đo.
       _id: F.chatMemberId, name: "Probe ChatMember", username: `${TAG}-chatmember`,
       email: F.chatMemberEmail, password: await hash(F.chatMemberPassword),
       role: Constants.USER_ROLE.USER, status: Constants.USER_STATUS.ACTIVE,
@@ -214,8 +171,6 @@ const seed = async () => {
       createdAt: now, updatedAt: now,
     },
     {
-      // INACTIVE = "Offline" (nhãn của Breads-Admin), KHÔNG phải trạng thái kiểm duyệt — user này
-      // tồn tại để chứng minh bản vá không khoá nhầm mọi tài khoản đang offline.
       _id: F.offlineId, name: "Probe Offline", username: `${TAG}-offline`,
       email: F.offlineEmail, password: await hash(F.offlinePassword),
       role: Constants.USER_ROLE.USER, status: Constants.USER_STATUS.INACTIVE,
@@ -241,8 +196,6 @@ const seed = async () => {
       createdAt: now, updatedAt: now,
     },
     {
-      // Bài của victim để MODERATOR kiểm duyệt trong R20 — tách khỏi `victimPostId` để R20 không
-      // đụng vào dữ liệu mà R7/R18 đang quan sát.
       _id: F.moderatedPostId, authorId: F.victimId, content: `${TAG} bài bị kiểm duyệt`,
       media: [], type: PostConstants.ACTIONS.CREATE,
       status: Constants.POST_STATUS.PUBLIC, visibility: Constants.POST_VISIBILITY.PUBLIC,
@@ -260,8 +213,6 @@ const seed = async () => {
     },
   ] as any);
 
-  // Hội thoại riêng tư giữa victim và bystander — attacker KHÔNG phải thành viên. Đây là dữ liệu
-  // mà probe V15-V17 kiểm xem có rò rỉ ra ngoài không.
   await db().collection("conversations").insertOne({
     _id: F.privateConversationId,
     participants: [F.chatMemberId, F.bystanderId],
@@ -315,43 +266,23 @@ const cleanup = async () => {
   await db().collection("followsuggestions").deleteMany({ userId: { $in: userIds } } as any);
 };
 
-/* ---------------------------------------------------------------- probes */
-
 type Outcome = {
   id: string;
   severity: "CRITICAL" | "HIGH" | "MEDIUM";
   title: string;
   target: string;
   status: number | string;
-  vulnerable: boolean | null; // null = bỏ qua
+  vulnerable: boolean | null;
   detail: string;
 };
 
 const login = async (email: string, password: string) =>
   http("POST", `${API}/users/sessions`, { body: { email, password } });
 
-/**
- * Đếm số phản hồi 429 trong cả lượt chạy.
- *
- * Vì sao cần: một lượt probe đầy đủ phát >100 request HTTP, sát trần `globalTierLimiter`
- * (100 req/phút/IP, in-memory nên KHÔNG dọn được từ ngoài process như auth-tier store trong Redis).
- * Chạy 2 lượt trong cùng một phút là chắc chắn bị throttle — và khi đó regression báo
- * "không login được X", một thông điệp khiến người đọc tưởng có bug bảo mật.
- *
- * Bộ đếm này biến "phép đo hỏng" thành thứ NHÌN THẤY ĐƯỢC thay vì một kết quả sai im lặng.
- */
 let throttledResponses = 0;
 
-/**
- * Đăng nhập MỘT lần cho mỗi tài khoản rồi tái dùng token.
- *
- * Trước đây mỗi regression tự `login()` lại từ đầu -> ~20 request auth-tier thừa mỗi lượt chạy,
- * đủ để tự gây throttle. Các probe KIỂM CHÍNH việc đăng nhập (V1, V9, R2/R3/R4, R12, R13) vẫn phải
- * gọi thẳng `login()` — không được dùng cache ở đó, vì cache sẽ che mất đúng thứ chúng đang đo.
- */
 const tokenCache = new Map<string, string>();
 
-/** Phân biệt "đăng nhập hỏng" với "phép đo bị rate-limit" — 2 nguyên nhân, 2 hành động khác nhau. */
 const loginFailNote = (who: string) =>
   throttledResponses > 0
     ? `KHÔNG kết luận được: bị rate-limit (${throttledResponses} phản hồi 429). Đợi 60s rồi chạy lại.`
@@ -389,20 +320,12 @@ const probes: { id: string; severity: Outcome["severity"]; title: string; target
     title: "Chiếm tài khoản: đổi mật khẩu người khác KHÔNG cần đăng nhập",
     target: "PUT /users/:id/password",
     run: async () => {
-      // `currentPW: ""` BẮT BUỘC, không được bỏ trống field: `user.controller.ts:376` gọi
-      // `bcrypt.compare(currentPW, hash)` TRƯỚC khi xét `forgotPW`, và bcrypt ném
-      // "Illegal arguments: undefined, string" cho `undefined` -> request rơi vào nhánh 500 và
-      // che mất lỗ hổng thật. Chuỗi rỗng đi lọt `if ((!currentPW || !newPW) && !forgotPW)`
-      // (vì `!forgotPW` là false), rồi `bcrypt.compare("", hash)` trả false không ném — đúng
-      // đường đi mà `forgotPW: true` bỏ qua toàn bộ kiểm tra mật khẩu cũ.
       const r = await http("PUT", `${API}/users/${F.victimId}/password`, {
         body: { currentPW: "", newPW: F.newPasswordSetByAttacker, forgotPW: true },
       });
       if (r.status !== 200) {
         return { status: r.status, vulnerable: false, detail: `bị chặn — ${r.body?.message ?? r.raw.slice(0, 120)}` };
       }
-      // Xác nhận HẬU QUẢ THẬT, không dừng ở "endpoint trả 200": đăng nhập được bằng mật khẩu
-      // do kẻ tấn công đặt mới là bằng chứng chiếm tài khoản.
       const takeover = await login(F.victimEmail, F.newPasswordSetByAttacker);
       return {
         status: r.status,
@@ -576,9 +499,6 @@ const probes: { id: string; severity: Outcome["severity"]; title: string; target
       const r = await socketEmitWithAck("/analytics/get-user-active-in-date-range", {
         dateRange: [from.toISOString().slice(0, 10), to.toISOString().slice(0, 10)],
       });
-      // Sau bước 5, socket ẩn danh VẪN nhận được ack — nhưng là `{error: "Forbidden"}`. Nếu chỉ
-      // kiểm `r.ok` thì probe sẽ báo còn thủng dù đã vá; điều kiện đúng là "có nhận được DỮ LIỆU
-      // báo cáo hay không".
       const leaked = r.ok && r.data?.[0] && !r.data[0].error;
       return {
         status: r.ok ? "ack" : "no-ack",
@@ -595,8 +515,6 @@ const probes: { id: string; severity: Outcome["severity"]; title: string; target
     title: "Xoá bài của người khác (không đăng nhập)",
     target: "DELETE /posts/:id",
     run: async () => {
-      // Chạy CUỐI trong nhóm post: xoá bài là thao tác huỷ, các probe V2b/V5 phía trên cần bài
-      // này còn sống.
       const r = await http("DELETE", `${API}/posts/${F.victimPostId}?userId=${F.victimId}`);
       const post = await db().collection("posts").findOne({ _id: F.victimPostId } as any);
       return {
@@ -693,9 +611,6 @@ const probes: { id: string; severity: Outcome["severity"]; title: string; target
     title: "Mail relay: gửi mail tuỳ ý qua SMTP hệ thống",
     target: "POST /util/send-forgot-pw-mail",
     run: async () => {
-      // KHÔNG cần `PROBE_ALLOW_MAIL` nữa: endpoint đã bị xoá ở bước 2, nên probe chỉ còn xác nhận
-      // nó thực sự không tồn tại — không có nguy cơ gửi mail thật. Giữ nguyên probe (thay vì xoá)
-      // để lần chạy sau vẫn bắt được nếu ai đó khôi phục nhầm endpoint.
       const r = await http("POST", `${API}/util/send-forgot-pw-mail`, {
         body: {
           from: "security@probe.invalid", to: F.victimEmail,
@@ -714,16 +629,6 @@ const probes: { id: string; severity: Outcome["severity"]; title: string; target
   },
 ];
 
-/* ------------------------------------------ regression: luồng mới có chạy không */
-
-/**
- * Vá lỗ hổng mà làm gãy tính năng thì không phải là vá. 4 kiểm tra dưới đây chứng minh luồng quên
- * mật khẩu server-side hoạt động ĐÚNG, và mã OTP giờ thực sự là điều kiện bắt buộc.
- *
- * Không gọi `POST /password-reset/requests` cho user có thật (bước đó GỬI MAIL): ghi thẳng entry
- * vào Redis đúng shape mà `requestPasswordReset` ghi, rồi kiểm tra 2 bước còn lại — đây mới là
- * phần mang tính bảo mật.
- */
 type Regression = { id: string; title: string; run: () => Promise<{ pass: boolean; detail: string }> };
 
 const RESET_CODE = "A1b2C3";
@@ -739,15 +644,6 @@ const seedResetCode = async (userId: string, code: string) => {
   await redis.quit();
 };
 
-/**
- * Xoá quota auth-tier của IP đang chạy probe.
- *
- * BẮT BUỘC giữa các nhóm probe: `authTierLimiter` cho 5 request/phút/IP, còn probe bắn liên tiếp
- * login + password-reset nhiều hơn thế -> 429 làm HỎNG phép đo (lần chạy đầu R3 fail vì 429 chứ
- * không phải vì lỗ hổng). Đây là dọn dẹp môi trường đo, KHÔNG phải nới lỏng bảo mật: giới hạn thật
- * vẫn nguyên vẹn với mọi client khác, và chính probe R-limit riêng (`rate-limit-auth-benchmark.js`)
- * mới là nơi kiểm chứng ngưỡng này.
- */
 const resetAuthTierQuota = async () => {
   const Redis = (await import("ioredis")).default;
   const redis = new Redis({
@@ -831,7 +727,7 @@ const regressions: Regression[] = [
         token,
         body: {
           _id: String(F.attackerOwnPostId),
-          authorId: String(F.victimId), // bịa: server phải bỏ qua
+          authorId: String(F.victimId),
           content: `${TAG} bài hợp lệ của attacker`,
           media: [], survey: [], usersTag: [], links: [], files: [],
           type: PostConstants.ACTIONS.CREATE,
@@ -934,12 +830,9 @@ const regressions: Regression[] = [
       const token = await loginOnce(F.attackerEmail, F.attackerPassword);
       if (!token) return { pass: false, detail: loginFailNote("attacker") };
 
-      // Followee phải KHÁC probe V4 (V4 đã tạo quan hệ attacker->bystander): `toggleFollow` là
-      // toggle, gọi lại đúng cặp đó sẽ HUỶ follow và làm phép đếm ra 0 — hỏng phép đo chứ không
-      // phải hỏng tính năng. Ở đây dùng cặp attacker->victim, chưa từng đụng tới.
       const r = await http("PUT", `${API}/users/follow`, {
         token,
-        body: { userId: String(F.bystanderId), userFlId: String(F.victimId) }, // userId bịa
+        body: { userId: String(F.bystanderId), userFlId: String(F.victimId) },
       });
       const correct = await db().collection("follows").countDocuments({
         followerId: F.attackerId, followeeId: F.victimId,
@@ -1003,11 +896,6 @@ const regressions: Regression[] = [
     id: "R19",
     title: "assertRole: đọc được role qua protectRoute THẬT (không chỉ qua req.user stub)",
     run: async () => {
-      // Mọi unit test của `assertRole` đều stub `req.user` -> chúng vẫn xanh kể cả khi
-      // `req.user.role` không tồn tại trong production. Probe này là chỗ DUY NHẤT đi qua
-      // `protectRoute` thật: token chỉ chứa `{userId}`, `role` phải đến từ document DB mà
-      // protectRoute nạp. ADMIN nhận 200 nghĩa là `assertRole` đọc được role — nếu `undefined`,
-      // nó đã fail-closed và trả 403 ngay cả với admin.
       const token = await loginOnce(F.adminEmail, F.adminPassword);
       if (!token) return { pass: false, detail: loginFailNote("admin") };
       const r = await http("GET", `${API}/users/with-status?page=1&limit=1`, { token });
@@ -1021,9 +909,6 @@ const regressions: Regression[] = [
     id: "R20",
     title: "role trên route KHÔNG có requireRole: MODERATOR kiểm duyệt được, USER thường thì không",
     run: async () => {
-      // `PATCH /posts/:id/visibility` cố ý KHÔNG có `requireRole` (#13) — nhánh moderator phụ
-      // thuộc HOÀN TOÀN vào `req.user.role`. Đây là phép cô lập thật sự: ở R19, USER bị chặn bởi
-      // `requireRole` ở tầng route nên chưa chứng minh được gì về `assertRole`.
       const modToken = await loginOnce(F.moderatorEmail, F.moderatorPassword);
       const userToken = await loginOnce(F.chatMemberEmail, F.chatMemberPassword);
       if (!modToken || !userToken) return { pass: false, detail: loginFailNote("mod/user") };
@@ -1057,8 +942,6 @@ const regressions: Regression[] = [
 
       const before = await http("GET", `${API}/users/me`, { token });
 
-      // Cấm SAU khi token đã được cấp — đây chính là kịch bản mà "chặn ở loginUser" một mình bỏ
-      // lọt: access token sống 30 phút, refresh token 7 ngày.
       await db().collection("users").updateOne(
         { _id: F.attackerId } as any,
         { $set: { status: Constants.USER_STATUS.BANNED, statusReason: TAG } }
@@ -1092,8 +975,6 @@ const regressions: Regression[] = [
       const token = await loginOnce(F.adminEmail, F.adminPassword);
       if (!token) return { pass: false, detail: loginFailNote("admin") };
 
-      // Cấm SAU khi đã có token hợp lệ -> handshake tiếp theo phải bỏ qua danh tính, nên guard
-      // role của `admin.listener` thấy socket ẩn danh và từ chối.
       await db().collection("users").updateOne(
         { _id: F.adminId } as any,
         { $set: { status: Constants.USER_STATUS.BANNED, statusReason: TAG } }
@@ -1135,8 +1016,6 @@ const regressions: Regression[] = [
         body: { value: "BÍ MẬT", conversationId: String(F.privateConversationId), page: 1, limit: 10 },
       });
       const found = JSON.stringify(search.body ?? "").includes("BÍ MẬT RIÊNG TƯ");
-      // `lookup-by-users` giờ tự lấy participant thứ nhất từ JWT — victim tra hội thoại với
-      // bystander phải ra đúng hội thoại đó.
       const lookup = await http("POST", `${API}/messages/conversations/lookup-by-users`, {
         token,
         body: { anotherId: String(F.bystanderId) },
@@ -1158,7 +1037,7 @@ const regressions: Regression[] = [
 
       const r = await http("POST", `${API}/reports`, {
         token,
-        body: { userId: String(F.victimId), content: `${TAG} nội dung report` }, // userId bịa
+        body: { userId: String(F.victimId), content: `${TAG} nội dung report` },
       });
       const mine = await db().collection("reports").countDocuments({ userId: F.chatMemberId } as any);
       const forged = await db().collection("reports").countDocuments({ userId: F.victimId } as any);
@@ -1175,7 +1054,6 @@ const regressions: Regression[] = [
       const token = await loginOnce(F.chatMemberEmail, F.chatMemberPassword);
       if (!token) return { pass: false, detail: loginFailNote("chatMember") };
 
-      // Bài do chính chatMember tạo qua API (đi đúng đường createPost đã vá ở bước 3).
       const ownPostId = new mongoose.Types.ObjectId();
       const created = await http("POST", `${API}/posts?action=create`, {
         token,
@@ -1223,7 +1101,6 @@ const regressions: Regression[] = [
     id: "R4",
     title: "confirm: mã dùng một lần — tái sử dụng bị từ chối",
     run: async () => {
-      // R3 vừa tiêu thụ mã; dùng lại chính mã đó phải hỏng.
       const r = await http("POST", `${API}/users/password-reset/confirm`, {
         body: { userId: String(F.victimId), code: RESET_CODE, newPW: `Replay-${RUN_ID}` },
       });
@@ -1235,8 +1112,6 @@ const regressions: Regression[] = [
     },
   },
 ];
-
-/* ------------------------------------------------------------------ main */
 
 const main = async () => {
   console.log(`\n  Access-control probe — run ${RUN_ID}`);
@@ -1331,8 +1206,6 @@ const main = async () => {
   );
   console.log(`  → ${path.relative(process.cwd(), outFile)}\n`);
 
-  // Exit code 1 khi còn khai thác được HOẶC luồng mới hỏng — để bước 7 (guard-matrix trong CI)
-  // tái dùng được script này như một cổng chặn thật, không chỉ là báo cáo đọc bằng mắt.
   process.exit(vulnerable.length || regressionFailed.length ? 1 : 0);
 };
 

@@ -14,7 +14,6 @@ const httpRequestDuration = new client.Histogram({
   registers: [register],
 });
 
-// FR-9: queue depth cho 2 queue fan-out (thay thế nhu cầu dựng Bull Board — xem 013.md).
 const feedFanoutQueueWaiting = new client.Gauge({
   name: "feed_fanout_queue_waiting",
   help: "Số job đang waiting trong queue fan-out",
@@ -51,8 +50,6 @@ export const metricsHandler = async (_req: Request, res: Response) => {
     feedFanoutQueueFailed.set({ queue: "dispatch" }, dispatchCounts.failed ?? 0);
     feedFanoutQueueFailed.set({ queue: "batch" }, batchCounts.failed ?? 0);
   } catch (err) {
-    // Redis down lúc scrape — không để lỗi getJobCounts() làm hỏng phần response /metrics còn lại
-    // (HTTP metrics vẫn phải trả được, NFR-3-style fail-safe).
     logger.error({ err }, "[metrics] getJobCounts thất bại, bỏ qua gauge queue");
   }
   res.set("Content-Type", register.contentType);

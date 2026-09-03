@@ -1,25 +1,9 @@
-// One-off seed: give a fixed list of "celebrity" users a large, deliberately
-// *uneven* follower base (mega star down to minor celebrity), to have real
-// data for testing the fan-out celebrity problem (push-on-write doesn't
-// scale to millions of followers, and not all celebrities are equally big).
-//
-// Strategy: single pass over the users collection; for each user and each
-// celebrity, an independent Bernoulli trial (probability = target/totalUsers)
-// decides whether that user follows that celebrity. Followers are only ever
-// drawn from the live `users` collection cursor, so every followerId is
-// guaranteed to reference a real, existing user. No duplicate
-// (followerId, followeeId) pairs are possible since each pair is only ever
-// considered once.
-//
-// Usage: npx tsx src/api/seed/seedCelebrityFollows.ts
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import Follow from "../models/follow.model.js";
 
 dotenv.config();
 
-// Deliberately spread across tiers (50k minor celebrity -> 2M mega star)
-// instead of one flat number for everyone.
 const CELEBRITY_TARGETS = {
   "66fa65b4775c617545634c99": 2000000,
   "671ee34db863a9a7301732af": 50000,

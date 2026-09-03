@@ -1,21 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 012 (FR-4/A12b) — `deleteLikeNotification`, tách khỏi `likePost` trong
-// `post.controller.ts`.
-//
-// `likePost` gọi `getCollection(Model.POST)` (`src/utils/index.ts`), hàm này throw khi
-// `mongoose.connection.db` rỗng -> `likePost` KHÔNG thể chạy end-to-end trong test suite (không có
-// harness Mongo, NFR-2 cấm thêm dependency). Vì vậy file này gọi THẲNG `deleteLikeNotification`,
-// không bao giờ gọi `likePost` — cùng lý do `post.controller.dispatch.test.ts` tách test khỏi
-// `createPost` để chạm `dispatchFanout` trực tiếp.
-//
-// ⚠️ TEST-2/TEST-7: việc tách hàm sinh một seam mới giữa `likePost` và `deleteLikeNotification` —
-// R-11 phát tác đúng ở seam này (nếu call site truyền nhầm biến, `deleteLikeNotification` vẫn xanh
-// 100% khi test trực tiếp, trong khi unlike ngoài đời xoá 0 document). Test đọc source bên dưới
-// assert DANH TÍNH giá trị truyền vào (`postInfo.authorId`, cho phép bọc `ObjectId(...)`), KHÔNG
-// cấm cách viết `ObjectId(...)`/`String(...)` — Mongoose cast filter theo schema nên hai cách viết
-// cho cùng kết quả (pattern đọc source: `notification.route.test.ts:116-120`,
-// `bodyLimit.route.test.ts:263-277`).
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { test } from "node:test";
@@ -143,8 +125,6 @@ test('FR-4: A12b - filter chứa action "like" -> notification FOLLOW cùng cặ
   assert.equal(capturedFilter.action, "like");
   assert.notEqual(capturedFilter.action, Constants.NOTIFICATION_ACTION.FOLLOW);
 
-  // Một notification FOLLOW cùng cặp (from, to) không khớp filter vì action khác — mô phỏng bằng
-  // cách kiểm tra document FOLLOW giả không thoả điều kiện `action` của filter.
   const followNotification = {
     fromUser: FROM_USER,
     toUsers: [TO_USER],

@@ -1,16 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 015 — schema cho `analytics.route.ts` (FR-8).
-//
-// Pattern (task 001, AD-7): mount schema + `validate()` THẬT trên 1 `express()` mới, không import
-// `analytics.route.ts` thật (route thật cần Mongo cho `AnalyticsModel`). `GET` (route `getEvents`)
-// cố ý không có schema — handler không đọc field nào từ `req.body` nên không có gì để validate.
-//
-// Issue #1: `getEvents` từng có try/catch rỗng, không gọi `res.send`/`res.json` -> request treo vô
-// thời hạn. Đã fix bằng cách luôn trả response ngay (chưa implement đọc/aggregate, xem
-// `.ccpm/prds/.rethink-analytics-tracking-strategy.md` open question #2). Test wiring bên dưới xác
-// nhận bằng source-check (không import controller thật, cùng lý do AD-7 ở trên: import kéo theo
-// `AnalyticsModel` -> `mongoose.createConnection` lúc import).
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
@@ -47,8 +34,6 @@ const withServer = async (app, fn: (base: string) => Promise<void>) => {
     await once(server, "close");
   }
 };
-
-/* --------------------------------------------- createEventSchema */
 
 test("createEventSchema: thiếu event -> 400", async () => {
   const app = express();
@@ -95,8 +80,6 @@ test("createEventSchema: payload là object bất kỳ -> 200 (z.any())", async 
     assert.deepEqual(await res.json(), { body: payload });
   });
 });
-
-/* ------------------------------------------------- wiring (đọc source, không import) */
 
 test("wiring: analytics.route.ts có đúng 1 validate(), chỉ trên route CREATE", async () => {
   const src = await fsp.readFile("src/api/routers/analytics.route.ts", "utf8");

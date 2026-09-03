@@ -1,6 +1,3 @@
-// One-off migration: copy the legacy embedded User.following/followed and
-// Post.usersLike arrays into the new Follow/Like collections, then strip the
-// old fields from the source documents. Safe to run multiple times (upserts).
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import Follow from "../models/follow.model.js";

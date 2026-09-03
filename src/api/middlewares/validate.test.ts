@@ -1,14 +1,3 @@
-// Run with Node's built-in test runner: `npm test`.
-//
-// Phạm vi: Task 001 — `validate()` middleware, primitive dùng chung (`common.ts`), và fix bug
-// `app.ts:50` (`err.status` -> `err.statusCode || err.status`).
-//
-// 2 tầng test, CỐ Ý không thay thế nhau được:
-//  - Tầng mock (`next` giả): kiểm hành vi nội bộ của middleware — nhanh, không mở socket.
-//  - Tầng HTTP (mount router TRẦN trên 1 `express()` mới, không import `app.ts`, không cần
-//    Mongo/Redis): kiểm mã lỗi THẬT trả về client. Bắt buộc phải có tầng này — đúng loại bug
-//    `app.ts:50` (BadRequestError trả 500 thay vì 400) KHÔNG thể phát hiện bằng test mock `next`,
-//    đó chính là lý do nó lọt suốt từ trước tới nay. Pattern này (AD-7) các task Phase 2/3 tái dùng.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
@@ -21,7 +10,6 @@ import logger from "../../core/logger.ts";
 
 const VALID_OBJECT_ID = "652f1b2c3d4e5f6071829304";
 
-// `validate()` log `logger.warn` mỗi lần payload sai — im lặng hoá để output test sạch.
 const silenceWarn = async (fn: () => unknown | Promise<unknown>) => {
   const original = logger.warn;
   (logger as any).warn = () => {};
@@ -40,7 +28,6 @@ const mockReq = (over: any = {}) => ({
   ...over,
 });
 
-// Global error handler dùng ĐÚNG logic đã fix ở `src/app.ts:50`.
 const errorHandler = (err, _req, res, _next) => {
   const statusCode = err.statusCode || err.status || 500;
   res.status(statusCode).json({ message: err.message });
@@ -56,8 +43,6 @@ const withServer = async (app, fn: (base: string) => Promise<void>) => {
     await once(server, "close");
   }
 };
-
-/* ---------------------------------------------------------------- tầng mock */
 
 test("FR-1: body hợp lệ -> next() không tham số, req.body là kết quả đã parse", () => {
   const req = mockReq({ body: { x: "hello" } });
@@ -131,13 +116,9 @@ test("lỗi KHÔNG phải ZodError -> next(err) nguyên vẹn, không bị nuố
   assert.equal(calls[0][0], boom);
 });
 
-/* ---------------------------------------------------------------- tầng HTTP */
-
 test("FR-2 + NFR-3 (HTTP thật): payload sai -> 400 với message generic, response KHÔNG lộ chi tiết zod", async () => {
   const app = express();
   app.use(express.json());
-  // Body dạng block (không phải arrow trả thẳng `res.json(...)`): `@types/express` v5 yêu cầu
-  // handler trả `void`, arrow rút gọn sẽ trả `Response` và fail `tsc --noEmit`.
   app.post("/t", validate({ body: z.object({ x: z.string() }) }), (_req, res) => {
     res.json({ ok: true });
   });
@@ -217,8 +198,6 @@ test("fix app.ts:50 (HTTP thật): BadRequestType ném từ controller -> 400, K
 });
 
 test("fix app.ts:50: source thật của src/app.ts đọc err.statusCode trước err.status", async () => {
-  // Đọc source thay vì `import app` — `app.ts` connect Mongo/Redis THẬT ngay lúc import (AD-7).
-  // Đường dẫn theo cwd: `npm test` luôn chạy từ thư mục gốc repo.
   const src = await import("node:fs/promises").then((fs) =>
     fs.readFile("src/app.ts", "utf8")
   );
@@ -228,8 +207,6 @@ test("fix app.ts:50: source thật của src/app.ts đọc err.statusCode trư�
     "src/app.ts phải giữ fix `err.statusCode || err.status || 500` (err.status vẫn cần cho handler 404)"
   );
 });
-
-/* --------------------------------------------------------- primitive chung */
 
 test("FR-9: objectIdSchema nhận chuỗi ObjectId 24 ký tự hex hợp lệ", () => {
   assert.equal(objectIdSchema.parse(VALID_OBJECT_ID), VALID_OBJECT_ID);
