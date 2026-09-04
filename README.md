@@ -1,4 +1,7 @@
-# DATN-Be
+# Breads-Be
+
+> 🍞 Part of **[Breads](https://github.com/NguyenAnhDuc1711/Breads)** — start there for the architecture
+> overview, screenshots and the other three repositories.
 
 Backend API server for **Breads**, a social networking application — REST API and real-time (Socket.IO) backend covering posts, messaging, notifications, collections, categories, and analytics.
 
