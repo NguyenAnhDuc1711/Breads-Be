@@ -5,9 +5,11 @@ import { genRandomCode } from "../../Breads-Shared/util/index.js";
 import {
   AuthFailureError,
   BadRequestError,
+  ErrorResponse,
   ForbiddenError,
   NotFoundError,
 } from "../../core/error.response.js";
+import HTTPStatus from "../../utils/httpStatus.ts";
 import { CREATED, OK } from "../../core/success.response.js";
 import { deleteCache, getCache, getRedisInstance, setCache } from "../../dbs/redis.ts";
 import { ObjectId } from "../../utils/index.js";
@@ -54,18 +56,23 @@ export const signupUser = async (req, res) => {
     html: validateEmailForm(code, expireTime),
   });
 
-  if (result) {
-    const keyCache = `mail_validation_${email}`;
-    await setCache(
-      keyCache,
-      JSON.stringify({ name, email, username, password, code }),
-      expireTime * 60,
+  if (!result) {
+    throw new ErrorResponse(
+      "Không gửi được mail xác thực, vui lòng thử lại sau",
+      HTTPStatus.SERVER_ERR,
     );
-    new OK({
-      message: "Mail was sent",
-      metadata: {},
-    }).send(res);
   }
+
+  const keyCache = `mail_validation_${email}`;
+  await setCache(
+    keyCache,
+    JSON.stringify({ name, email, username, password, code }),
+    expireTime * 60,
+  );
+  new OK({
+    message: "Mail was sent",
+    metadata: {},
+  }).send(res);
 };
 
 export const validateEmailByCode = async (req, res) => {
