@@ -21,6 +21,12 @@ export const loginUserSchema = {
   }),
 };
 
+export const googleLoginSchema = {
+  body: z.object({
+    idToken: z.string().min(1),
+  }),
+};
+
 export const followUserSchema = {
   body: z.object({
     userFlId: objectIdSchema,

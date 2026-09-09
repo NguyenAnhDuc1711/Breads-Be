@@ -11,6 +11,7 @@ import {
   getUserToFollows,
   handleCrawlFakeUsers,
   loginUser,
+  googleLogin,
   logoutUser,
   signupUser,
   updateUser,
@@ -37,6 +38,7 @@ import {
   getUserProfileSchema,
   signupUserSchema,
   loginUserSchema,
+  googleLoginSchema,
   followUserSchema,
   updateUserSchema,
   changePasswordSchema,
@@ -63,6 +65,7 @@ const {
   USERS_TO_FOLLOW,
   SIGN_UP,
   LOGIN,
+  GOOGLE_SESSION,
   LOGOUT,
   FOLLOW,
   UPDATE,
@@ -150,6 +153,15 @@ router.post(
   authTierLimiter,
   validate(loginUserSchema),
   asyncHandler(loginUser),
+);
+router.post(
+  GOOGLE_SESSION,
+  express.json({ limit: "100kb" }),
+  mongoSanitize(),
+  hpp(),
+  authTierLimiter,
+  validate(googleLoginSchema),
+  asyncHandler(googleLogin),
 );
 router.post(LOGOUT, asyncHandler(logoutUser));
 router.post(REFRESH_TOKEN, asyncHandler(refreshTokenHandler));
