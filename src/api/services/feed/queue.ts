@@ -1,7 +1,11 @@
 import { Queue, Worker } from "bullmq";
 import Redis from "ioredis";
 import { FEED_CONFIG } from "./config.ts";
-import { processBatchJob, processDispatchJob } from "./fanout.ts";
+import {
+  processBatchJob,
+  processDispatchJob,
+  processReverseDispatchJob,
+} from "./fanout.ts";
 
 const connection = new Redis({
   host: process.env.REDIS_HOST || "localhost",
@@ -17,7 +21,10 @@ const workers: Worker[] = [];
 export const registerDispatchWorker = (io: any, conn: Redis): Worker => {
   const worker = new Worker(
     "feed-fanout",
-    async (job) => processDispatchJob(job.data, io),
+    async (job) =>
+      job.name === "reverse-fanout"
+        ? processReverseDispatchJob(job.data)
+        : processDispatchJob(job.data, io),
     { connection: conn, concurrency: FEED_CONFIG.fanoutQueueConcurrency },
   );
   workers.push(worker);

@@ -10,6 +10,9 @@ export const sendMailService = async ({ from, to, subject, html }) => {
         user: defaultSender,
         pass: process.env.SEND_MAIL_PASS || "",
       },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 15_000,
     });
     const options = {
       from: from || defaultSender,
