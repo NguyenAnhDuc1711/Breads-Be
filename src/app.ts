@@ -9,7 +9,10 @@ import router from "./api/routers/index.js";
 import { updateUsersCatesCron } from "./cronjob/index.js";
 import instanceMongoDB from "./dbs/mongodb.ts";
 import initRedis from "./dbs/redis.ts";
-import { metricsHandler, metricsMiddleware } from "./api/middlewares/metrics.ts";
+import {
+  metricsHandler,
+  metricsMiddleware,
+} from "./api/middlewares/metrics.ts";
 import { globalTierLimiter } from "./api/middlewares/rateLimiter.ts";
 import { API_PREFIX } from "./Breads-Shared/APIConfig.js";
 import ALLOWED_ORIGINS from "./utils/allowedOrigins.ts";
@@ -37,7 +40,6 @@ app.use(cors(corOption));
 
 app.use(metricsMiddleware);
 app.get("/metrics", metricsHandler);
-
 app.use(API_PREFIX, globalTierLimiter, router);
 
 app.use((req: Request, res: Response, next: NextFunction) => {
@@ -55,7 +57,10 @@ app.use((err, req, res, next) => {
   const isDevEnv = process.env.NODE_ENV === "dev";
   const isMulterError = err instanceof multer.MulterError;
   const statusCode = isMulterError ? 413 : err.statusCode || err.status || 500;
-  (req.log || logger).error({ err, statusCode }, err.message || "Unhandled request error");
+  (req.log || logger).error(
+    { err, statusCode },
+    err.message || "Unhandled request error",
+  );
 
   const isKnownBusinessError = err instanceof ErrorResponse;
   const message = isMulterError

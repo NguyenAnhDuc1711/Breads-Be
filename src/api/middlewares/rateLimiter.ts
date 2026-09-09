@@ -42,7 +42,7 @@ const SITEMAP_ELIGIBLE_PATHS = new Set([
 
 export const globalTierLimiter = createRateLimiter({
   windowMs: 60_000,
-  max: 100,
+  max: 200,
   skip: (req) => SITEMAP_ELIGIBLE_PATHS.has(req.path),
 });
 
