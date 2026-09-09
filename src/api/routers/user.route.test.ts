@@ -497,7 +497,7 @@ test("NFR-4 (positive, params): GET /users/:userId với ObjectId hợp lệ ch�
 });
 
 
-test("FR-2 (D-1): user.route.ts wiring khớp đúng 22 (method, path) mới, đúng thứ tự chống shadow route động", () => {
+test("FR-2 (D-1): user.route.ts wiring khớp đúng 23 (method, path) mới, đúng thứ tự chống shadow route động", () => {
   const routes = userRouter.stack
     .filter((layer: any) => layer.route)
     .map((layer: any) => ({
@@ -517,6 +517,7 @@ test("FR-2 (D-1): user.route.ts wiring khớp đúng 22 (method, path) mới, đ
     { method: "post", path: "/pending-post-lookup" },
     { method: "post", path: "/" },
     { method: "post", path: "/sessions" },
+    { method: "post", path: "/sessions/google" },
     { method: "post", path: "/sessions/logout" },
     { method: "post", path: "/sessions/refresh" },
     { method: "put", path: "/follow" },
@@ -530,7 +531,7 @@ test("FR-2 (D-1): user.route.ts wiring khớp đúng 22 (method, path) mới, đ
     { method: "post", path: "/email-validations" },
   ];
 
-  assert.equal(routes.length, 22, "phải có đúng 22 route đăng ký trên router");
+  assert.equal(routes.length, 23, "phải có đúng 23 route đăng ký trên router");
   assert.deepEqual(
     routes,
     expected,

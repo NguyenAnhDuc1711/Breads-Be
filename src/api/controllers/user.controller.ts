@@ -5,9 +5,11 @@ import { genRandomCode } from "../../Breads-Shared/util/index.js";
 import {
   AuthFailureError,
   BadRequestError,
+  ErrorResponse,
   ForbiddenError,
   NotFoundError,
 } from "../../core/error.response.js";
+import HTTPStatus from "../../utils/httpStatus.ts";
 import { CREATED, OK } from "../../core/success.response.js";
 import { deleteCache, getCache, getRedisInstance, setCache } from "../../dbs/redis.ts";
 import { ObjectId } from "../../utils/index.js";
@@ -16,7 +18,18 @@ import Follow from "../models/follow.model.js";
 import FollowSuggestion from "../models/followSuggestion.model.js";
 import Post from "../models/post.model.js";
 import User from "../models/user.model.js";
-import { getUserInfo, getUsersByPage, toggleFollow } from "../services/user.js";
+import {
+  generateUsernameFromEmail,
+  getUserInfo,
+  getUsersByPage,
+  toggleFollow,
+  writeWithUsernameRetry,
+} from "../services/user.js";
+import {
+  verifyGoogleIdToken,
+  type GoogleProfile,
+} from "../services/googleAuth.ts";
+import { resolveGoogleIdentity } from "../services/googleIdentity.ts";
 import { FOLLOW_SUGGESTION_CONFIG } from "../services/followSuggestion/config.ts";
 import { enqueueOnDemandSuggestion } from "../services/followSuggestion/queue.ts";
 import { sendMailService } from "../services/util.js";
@@ -54,18 +67,23 @@ export const signupUser = async (req, res) => {
     html: validateEmailForm(code, expireTime),
   });
 
-  if (result) {
-    const keyCache = `mail_validation_${email}`;
-    await setCache(
-      keyCache,
-      JSON.stringify({ name, email, username, password, code }),
-      expireTime * 60,
+  if (!result) {
+    throw new ErrorResponse(
+      "Không gửi được mail xác thực, vui lòng thử lại sau",
+      HTTPStatus.SERVER_ERR,
     );
-    new OK({
-      message: "Mail was sent",
-      metadata: {},
-    }).send(res);
   }
+
+  const keyCache = `mail_validation_${email}`;
+  await setCache(
+    keyCache,
+    JSON.stringify({ name, email, username, password, code }),
+    expireTime * 60,
+  );
+  new OK({
+    message: "Mail was sent",
+    metadata: {},
+  }).send(res);
 };
 
 export const validateEmailByCode = async (req, res) => {
@@ -150,6 +168,142 @@ export const loginUser = async (req, res) => {
     metadata: { ...result, accessToken },
   }).send(res);
 };
+
+// --- Đăng nhập bằng Google ---
+
+const GOOGLE_EMAIL_NOT_VERIFIED =
+  "Email Google chưa được xác thực, không thể đăng nhập";
+const GOOGLE_EMAIL_LINKED_TO_OTHER =
+  "Email này đã được liên kết với một tài khoản Google khác";
+
+const isDuplicateKeyError = (err) => err?.code === 11000;
+
+/**
+ * Tạo tài khoản từ hồ sơ Google. Không đặt `password` (schema đã cho phép vắng mặt),
+ * không đặt `avatar` khi Google không trả `picture` để schema dùng ảnh mặc định.
+ * `writeWithUsernameRetry` lo E11000 trên `username`; E11000 trên `email`/`googleId`
+ * (race giữa hai request cùng lúc) được ném ra để chỗ gọi xử lý.
+ */
+const createGoogleUser = async (profile: GoogleProfile) => {
+  const baseUsername = generateUsernameFromEmail(profile.email);
+  return await writeWithUsernameRetry(baseUsername, (username) =>
+    User.create({
+      name: profile.name?.trim() || username,
+      username,
+      email: profile.email,
+      googleId: profile.sub,
+      ...(profile.picture ? { avatar: profile.picture } : {}),
+      role: Constants.USER_ROLE.USER,
+      status: Constants.USER_STATUS.ACTIVE,
+    }),
+  );
+};
+
+/** Gộp: chỉ gắn `googleId`. Không đụng `password`, `username`, `avatar`, `bio`, `email`. */
+const linkGoogleId = async (user, sub: string) => {
+  await User.updateOne({ _id: user._id }, { $set: { googleId: sub } });
+  user.googleId = sub;
+  return user;
+};
+
+/**
+ * RISK-2: hai request cùng email/googleId chạy song song, cả hai cùng phân giải ra "create",
+ * request thua cuộc nhận E11000. Phân giải lại một lần nữa — lúc này bản ghi của request kia
+ * đã tồn tại — thay vì để lọt 500 thô ra ngoài.
+ */
+const recoverFromDuplicateOnCreate = async (
+  profile: GoogleProfile,
+  originalErr,
+) => {
+  const retry = await resolveGoogleIdentity({
+    sub: profile.sub,
+    email: profile.email,
+  });
+  switch (retry.action) {
+    case "login":
+      return retry.user;
+    case "link":
+      return await linkGoogleId(retry.user, profile.sub);
+    case "reject":
+      throw new AuthFailureError(GOOGLE_EMAIL_LINKED_TO_OTHER);
+    default:
+      throw originalErr;
+  }
+};
+
+type GoogleLoginDeps = {
+  verifyIdToken: (idToken: string) => Promise<GoogleProfile>;
+};
+
+/**
+ * Thân của `googleLogin`, tách riêng để test tiêm được hàm xác thực token: một id_token
+ * Google hợp lệ không thể ký lại ngoại tuyến. Không nhận deps qua tham số thứ 3 của
+ * `googleLogin` vì express truyền `next` vào đúng vị trí đó.
+ */
+export const googleLoginWith = async (
+  req,
+  res,
+  { verifyIdToken }: GoogleLoginDeps,
+) => {
+  // CHỈ lấy idToken. Mọi trường khác client gửi kèm (email, name, avatar...) bị bỏ qua (FR-2.5).
+  const { idToken } = req.body ?? {};
+  const profile = await verifyIdToken(idToken);
+
+  // Chặn trước khi chạm database: không tạo, không gộp, không cấp session (FR-3).
+  if (profile.emailVerified !== true) {
+    throw new AuthFailureError(GOOGLE_EMAIL_NOT_VERIFIED);
+  }
+
+  const outcome = await resolveGoogleIdentity({
+    sub: profile.sub,
+    email: profile.email,
+  });
+
+  let user;
+  switch (outcome.action) {
+    case "reject":
+      // Tổ hợp 4 — không ghi gì vào database (FR-11).
+      throw new AuthFailureError(GOOGLE_EMAIL_LINKED_TO_OTHER);
+    case "create":
+      try {
+        user = await createGoogleUser(profile);
+      } catch (err) {
+        if (!isDuplicateKeyError(err)) throw err;
+        user = await recoverFromDuplicateOnCreate(profile, err);
+      }
+      break;
+    case "link":
+      user = await linkGoogleId(outcome.user, profile.sub);
+      break;
+    case "login":
+      user = outcome.user;
+      break;
+  }
+
+  // Cùng chốt chặn với loginUser — không được có đường vòng qua cửa Google (FR-8).
+  if (isAccountRestricted(user.status)) {
+    logger.warn(
+      { userId: String(user._id), status: user.status },
+      "google login bị từ chối — tài khoản đang bị khoá/cấm",
+    );
+    throw new ForbiddenError(
+      user.statusReason
+        ? `Tài khoản đang bị hạn chế: ${user.statusReason}`
+        : "Tài khoản đang bị hạn chế",
+    );
+  }
+
+  const result = await getUserInfo(user._id);
+  const { accessToken } = await generateTokens(user._id.toString(), res);
+
+  new OK({
+    message: "Login successfully",
+    metadata: { ...result, accessToken },
+  }).send(res);
+};
+
+export const googleLogin = async (req, res) =>
+  await googleLoginWith(req, res, { verifyIdToken: verifyGoogleIdToken });
 
 // logout
 export const logoutUser = async (req, res) => {

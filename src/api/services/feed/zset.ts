@@ -161,6 +161,28 @@ export const zAddPostsForUser = async (
   }
 };
 
+export const zRemovePostForUsers = async (
+  userIds: string[],
+  postId: string
+): Promise<void> => {
+  const r = client("zRemovePostForUsers");
+  if (!r) throw new Error("[feed-zset] zRemovePostForUsers: redis instance null");
+
+  for (const batch of chunk(userIds, BATCH_SIZE)) {
+    const pipeline = r.pipeline();
+    for (const userId of batch) {
+      pipeline.zrem(feedKey(userId), postId);
+    }
+    const results = await pipeline.exec();
+    const errors = (results ?? []).filter(([err]) => err);
+    if (errors.length > 0) {
+      throw new Error(
+        `[feed-zset] zRemovePostForUsers: ${errors.length}/${results!.length} command(s) failed`
+      );
+    }
+  }
+};
+
 export const zRemovePostsForUser = async (
   userId: string,
   postIds: string[]

@@ -152,7 +152,7 @@ test("FR-5: KHÔNG mount mongoSanitize/hpp ở app.ts cấp global (phải nằm
   assert.ok(!src.includes("import hpp"), "app.ts không được import/mount hpp");
 });
 
-test("FR-5: 9 route có .body trong user.route.ts đều có mongoSanitize()/hpp() riêng SAU express.json của chính route đó", async () => {
+test("FR-5: 12 route có .body trong user.route.ts đều có mongoSanitize()/hpp() riêng SAU express.json của chính route đó", async () => {
   const src = await readSrc("src/api/routers/user.route.ts");
   const code = src.replace(/^\s*\/\/.*$/gm, "");
   const re = /router\.(get|post|put)\(/g;
@@ -180,7 +180,7 @@ test("FR-5: 9 route có .body trong user.route.ts đều có mongoSanitize()/hpp
     bodyRoutesChecked.push(chain.slice(0, 30));
   }
 
-  assert.equal(bodyRoutesChecked.length, 9, "phải kiểm tra đủ 9 route có .body");
+  assert.equal(bodyRoutesChecked.length, 12, "phải kiểm tra đủ 12 route có .body");
 });
 
 test("FR-5: ở 7 router thuần, mongoSanitize/hpp mount SAU express.json (để req.body đã parse)", async () => {

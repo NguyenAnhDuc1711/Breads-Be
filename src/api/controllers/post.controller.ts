@@ -87,6 +87,33 @@ export const dispatchFanout = (
   }
 };
 
+export const dispatchReverseFanout = (
+  postId: any,
+  authorId: any,
+  deps: {
+    enqueue?: (name: string, data: any, opts: any) => Promise<any>;
+  } = {},
+): void => {
+  if (!FEED_CONFIG.fanoutEnabled) return;
+  const enqueue = deps.enqueue ?? dispatchQueue.add.bind(dispatchQueue);
+
+  enqueue(
+    "reverse-fanout",
+    { postId: String(postId), authorId: String(authorId) },
+    {
+      jobId: `reverse:${String(postId)}`,
+      delay: 5000,
+      priority: 10,
+      attempts: 3,
+      backoff: { type: "exponential", delay: 5000 },
+      removeOnComplete: { count: 1000 },
+      removeOnFail: { count: 5000 },
+    },
+  ).catch((e) =>
+    logger.error({ err: e }, "[feed-reverse-fanout] enqueue failed"),
+  );
+};
+
 export const processNewPostMediaItem = async (
   item: { url: string; type?: string; [key: string]: any },
   authorId: string,
@@ -344,6 +371,7 @@ export const deletePost = async (req, res) => {
       status: Constants.POST_STATUS.DELETED,
     },
   );
+  dispatchReverseFanout(postId, post.authorId);
   new OK({
     message: "Post deleted successfully!",
     metadata: {},

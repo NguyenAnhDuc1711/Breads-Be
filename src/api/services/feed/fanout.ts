@@ -16,6 +16,7 @@ import {
   zAddPostForUsersOrThrow,
   zAddPostsForUser,
   zExists,
+  zRemovePostForUsers,
   zRemovePostsForUser,
   zReplaceUserFeed,
 } from "./zset.ts";
@@ -263,19 +264,109 @@ export const processDispatchJob = async (
   });
 };
 
-export type BatchJobData = {
-  postId: string;
-  followerIds: string[];
-  scoreMs: number;
+export type BatchJobData =
+  | { postId: string; followerIds: string[]; scoreMs: number; action?: "add" }
+  | { postId: string; followerIds: string[]; action: "remove" };
+
+export const processBatchJob = async (data: BatchJobData): Promise<void> => {
+  const { postId, followerIds } = data;
+  if (data.action === "remove") {
+    await zRemovePostForUsers(followerIds, postId);
+    console.log("[feed-fanout-batch]", {
+      postId,
+      action: "remove",
+      zrems: followerIds.length,
+      completedAt: Date.now(),
+    });
+    return;
+  }
+  await zAddPostForUsersOrThrow(followerIds, postId, data.scoreMs);
+  console.log("[feed-fanout-batch]", { postId, completedAt: Date.now() });
 };
 
-export const processBatchJob = async ({
-  postId,
-  followerIds,
-  scoreMs,
-}: BatchJobData): Promise<void> => {
-  await zAddPostForUsersOrThrow(followerIds, postId, scoreMs);
-  console.log("[feed-fanout-batch]", { postId, completedAt: Date.now() });
+export type ReverseDispatchJobData = { postId: string; authorId?: string };
+
+export const processReverseDispatchJob = async (
+  data: ReverseDispatchJobData,
+  deps: DispatchDeps = {},
+): Promise<void> => {
+  const t0 = Date.now();
+  const postId = String(data.postId);
+  const done = (extra: Record<string, unknown>) =>
+    console.log("[feed-reverse-fanout]", {
+      postId,
+      batches: 0,
+      durationMs: Date.now() - t0,
+      ...extra,
+    });
+
+  const loadPost =
+    deps.loadPost ??
+    ((id: string) =>
+      Post.findOne(
+        { _id: id },
+        { authorId: 1, type: 1, status: 1, visibility: 1 },
+      ).lean());
+  const loadAuthor =
+    deps.loadAuthor ??
+    ((authorId: any) =>
+      User.findOne({ _id: authorId }, { followersCount: 1 }).lean());
+  const getFollowerIds = deps.getFollowerIds ?? getActiveFollowerIds;
+  const enqueueBatches = deps.enqueueBatches ?? defaultEnqueueBatches;
+
+  const post: any = await loadPost(postId);
+
+  if (
+    post &&
+    post.status !== Constants.POST_STATUS.DELETED &&
+    post.visibility !== Constants.POST_VISIBILITY.ONLY_ME
+  ) {
+    done({ undone: true });
+    return;
+  }
+
+  const { CREATE, EDIT, REPOST } = PostConstants.ACTIONS;
+  if (post && ![CREATE, EDIT, REPOST].includes(post.type)) {
+    done({ notFannedOut: true });
+    return;
+  }
+
+  const authorId = post?.authorId ?? data.authorId;
+  if (!authorId) {
+    done({ missingAuthor: true });
+    return;
+  }
+
+  const author: any = await loadAuthor(authorId);
+  if ((author?.followersCount ?? 0) > FEED_CONFIG.celebrityThreshold) {
+    done({ celebrity: true, followers: author?.followersCount ?? 0 });
+    return;
+  }
+
+  const followerIds = await getFollowerIds(authorId);
+  const chunks = chunk(followerIds, BATCH_SIZE);
+  if (chunks.length) {
+    await enqueueBatches(
+      chunks.map((c, i) => ({
+        name: "reverse-batch",
+        data: { postId, followerIds: c, action: "remove" },
+        opts: {
+          jobId: `${postId}:rbatch:${i}`,
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5000 },
+          removeOnComplete: { count: 5000 },
+          removeOnFail: { count: 5000 },
+        },
+      })),
+    );
+  }
+
+  console.log("[feed-reverse-fanout]", {
+    postId,
+    followers: followerIds.length,
+    batches: chunks.length,
+    durationMs: Date.now() - t0,
+  });
 };
 
 export const rebuildUserFeedZset = async (userId: any): Promise<number> => {
